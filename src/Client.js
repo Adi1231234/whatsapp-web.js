@@ -203,6 +203,7 @@ class Client extends EventEmitter {
                     const advSecretKey = await window.AuthStore.RegistrationUtils.getADVSecretKey();
                     const platform = window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
                     const getQR = (ref) => ref + ',' + staticKeyB64 + ',' + identityKeyB64 + ',' + advSecretKey + ',' + platform;
+                    window.getQR = getQR;
 
                     const onRefChange = (_, ref) => {
                         if (ref == null) return;
@@ -476,6 +477,10 @@ class Client extends EventEmitter {
      * @returns {Promise<string>} - Returns a pairing code in format "ABCDEFGH"
      */
     async requestPairingCode(phoneNumber, showNotification = true, intervalMs = 180000) {
+        await exposeFunctionIfAbsent(this.pupPage, 'onCodeReceivedEvent', async (code) => {
+            this.emit(Events.CODE_RECEIVED, code);
+            return code;
+        });
         return await this.pupPage.evaluate(async (phoneNumber, showNotification, intervalMs) => {
             const getCode = async () => {
                 while (!window.AuthStore.PairingCodeLinkUtils) {
@@ -497,6 +502,20 @@ class Client extends EventEmitter {
             }, intervalMs);
             return window.onCodeReceivedEvent(await getCode());
         }, phoneNumber, showNotification, intervalMs);
+    }
+
+    /**
+     * Cancels an active pairing code session and returns to QR code mode
+     */
+    async cancelPairingCode() {
+        await this.pupPage.evaluate(() => {
+            if (window.codeInterval) {
+                clearInterval(window.codeInterval);
+                window.codeInterval = undefined;
+            }
+            window.AuthStore.PairingCodeLinkUtils.initializeQRLinking();
+            window.onQRChangedEvent(window.getQR(window.AuthStore.Conn.ref));
+        });
     }
 
     /**
