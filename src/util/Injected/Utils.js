@@ -647,10 +647,22 @@ exports.LoadUtils = () => {
             const chatWid = window.Store.WidFactory.createWid(chat.id._serialized);
             const groupMetadata = window.Store.GroupMetadata || window.Store.WAWebGroupMetadataCollection;
             await groupMetadata.update(chatWid);
-            chat.groupMetadata.participants._models
-                .filter(x => x.id?._serialized?.endsWith('@lid'))
-                .forEach(x => x.contact?.phoneNumber && (x.id = x.contact.phoneNumber));
-            model.groupMetadata = chat.groupMetadata.serialize();
+            // Serialize first, then patch LID→phone on the SERIALIZED copy.
+            // Do NOT mutate the live store models (x.id = ...) — they are shared
+            // Backbone references; overwriting corrupts WhatsApp Web's internal state.
+            const serializedMetadata = chat.groupMetadata.serialize();
+            if (serializedMetadata.participants) {
+                for (const p of serializedMetadata.participants) {
+                    if (p.id?._serialized?.endsWith('@lid')) {
+                        const liveModel = chat.groupMetadata.participants._models
+                            .find(m => m.id?._serialized === p.id._serialized);
+                        if (liveModel?.contact?.phoneNumber) {
+                            p.id = liveModel.contact.phoneNumber;
+                        }
+                    }
+                }
+            }
+            model.groupMetadata = serializedMetadata;
             model.isReadOnly = chat.groupMetadata.announce;
         }
 
@@ -704,13 +716,39 @@ exports.LoadUtils = () => {
 
     window.WWebJS.getContact = async contactId => {
         const wid = window.Store.WidFactory.createWid(contactId);
-        let contact = await window.Store.Contact.find(wid);
-        if (contact.id._serialized.endsWith('@lid')) {
-            contact.id = contact.phoneNumber;
+        const contact = await window.Store.Contact.find(wid);
+
+        if (!contact || !contact.id) {
+            throw new Error(
+                `Contact not found or has no id for ${contactId}`
+            );
         }
-        const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
-        bizProfile.profileOptions && (contact.businessProfile = bizProfile);
-        return window.WWebJS.getContactModel(contact);
+
+        // Resolve LID → phone number for the RETURN VALUE only.
+        // CRITICAL: Do NOT mutate contact.id on the store model — it's a live
+        // Backbone reference shared across all of WhatsApp Web. Overwriting it
+        // permanently corrupts the Contact store and causes cascading failures
+        // on all subsequent lookups for this contact.
+        let resolvedId = contact.id;
+        if (resolvedId._serialized && resolvedId._serialized.endsWith('@lid')) {
+            if (contact.phoneNumber) {
+                resolvedId = contact.phoneNumber;
+            }
+            // If phoneNumber is missing, keep the LID — better than undefined
+        }
+
+        try {
+            const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
+            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+        } catch (_) {
+            // Business profile lookup can fail for non-business contacts
+            // or during transient WhatsApp backend errors — safe to ignore.
+        }
+
+        const model = window.WWebJS.getContactModel(contact);
+        // Apply the resolved ID to the serialized model (not the store model)
+        model.id = resolvedId;
+        return model;
     };
 
     window.WWebJS.getContacts = () => {
