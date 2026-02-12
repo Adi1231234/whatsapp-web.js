@@ -705,11 +705,19 @@ exports.LoadUtils = () => {
     window.WWebJS.getContact = async contactId => {
         const wid = window.Store.WidFactory.createWid(contactId);
         let contact = await window.Store.Contact.find(wid);
-        if (contact.id._serialized.endsWith('@lid')) {
-            contact.id = contact.phoneNumber;
+        if (!contact) {
+            throw new Error(`Contact not found for id: ${contactId}`);
         }
-        const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
-        bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+        if (contact.id && contact.id._serialized && contact.id._serialized.endsWith('@lid')) {
+            contact.id = contact.phoneNumber || contact.id;
+        }
+        try {
+            const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
+            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+        } catch (_) {
+            // Business profile fetch can fail for non-business contacts or during
+            // transient WhatsApp internal errors — this is non-critical data.
+        }
         return window.WWebJS.getContactModel(contact);
     };
 
