@@ -1239,6 +1239,10 @@ class Client extends EventEmitter {
             return window.WWebJS.getContact(contactId);
         }, contactId);
 
+        if (!contact) {
+            throw new Error(`Contact not found for ID: ${contactId}`);
+        }
+
         return ContactFactory.create(this, contact);
     }
 
