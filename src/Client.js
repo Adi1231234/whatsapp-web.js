@@ -376,14 +376,37 @@ class Client extends EventEmitter {
         await this.inject();
 
         this.pupPage.on('framenavigated', async (frame) => {
+            // Only handle main frame navigations — child iframe navigations
+            // (ads, analytics, service workers) should not trigger re-injection.
+            if (frame !== this.pupPage.mainFrame()) return;
+
             if(frame.url().includes('post_logout=1') || this.lastLoggedOut) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
                 await this.authStrategy.logout();
                 await this.authStrategy.beforeBrowserInitialized();
                 await this.authStrategy.afterBrowserInitialized();
                 this.lastLoggedOut = false;
+                // After logout, the page is being torn down — do NOT re-inject.
+                return;
             }
-            await this.inject();
+
+            // Skip injection if the client is shutting down.
+            if (this.isDestroying || this.isDestroyed) return;
+
+            // Guard against concurrent inject() calls from rapid frame navigations.
+            // inject() makes 12+ sequential evaluate calls; overlapping runs cause
+            // race conditions and stale-context errors.
+            if (this._injecting) return;
+            this._injecting = true;
+            try {
+                await this.inject();
+            } catch (err) {
+                // Swallow errors during re-injection — the page may be navigating,
+                // reloading, or in a transitional state. The next successful
+                // framenavigated will retry.
+            } finally {
+                this._injecting = false;
+            }
         });
     }
 
