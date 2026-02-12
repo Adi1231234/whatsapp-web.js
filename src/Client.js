@@ -1235,9 +1235,27 @@ class Client extends EventEmitter {
      * @returns {Promise<Contact>}
      */
     async getContactById(contactId) {
-        let contact = await this.pupPage.evaluate(contactId => {
-            return window.WWebJS.getContact(contactId);
-        }, contactId);
+        let contact;
+        try {
+            contact = await this.pupPage.evaluate(contactId => {
+                return window.WWebJS.getContact(contactId);
+            }, contactId);
+        } catch (err) {
+            // If the evaluate fails (page navigating, context destroyed, internal WA error),
+            // return a minimal contact object instead of crashing the caller.
+            const fallbackData = {
+                id: { _serialized: contactId, server: contactId.includes('@') ? contactId.split('@')[1] : 'c.us', user: contactId.split('@')[0] },
+                name: '',
+                pushname: '',
+                isMe: false,
+                isUser: true,
+                isGroup: false,
+                isWAContact: false,
+                isMyContact: false,
+                isBlocked: false,
+            };
+            return ContactFactory.create(this, fallbackData);
+        }
 
         return ContactFactory.create(this, contact);
     }
