@@ -704,12 +704,23 @@ exports.LoadUtils = () => {
 
     window.WWebJS.getContact = async contactId => {
         const wid = window.Store.WidFactory.createWid(contactId);
-        let contact = await window.Store.Contact.find(wid);
-        if (contact.id._serialized.endsWith('@lid')) {
+        const contact = await window.Store.Contact.find(wid);
+
+        if (!contact) return null;
+
+        if (contact.id && contact.id._serialized && contact.id._serialized.endsWith('@lid')) {
             contact.id = contact.phoneNumber;
         }
-        const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
-        bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+
+        try {
+            const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
+            if (bizProfile && bizProfile.profileOptions) {
+                contact.businessProfile = bizProfile;
+            }
+        } catch (_) {
+            // fetchBizProfile can fail due to server errors (e.g. 400) — non-fatal
+        }
+
         return window.WWebJS.getContactModel(contact);
     };
 

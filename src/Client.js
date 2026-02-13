@@ -1239,6 +1239,8 @@ class Client extends EventEmitter {
             return window.WWebJS.getContact(contactId);
         }, contactId);
 
+        if (!contact) return null;
+
         return ContactFactory.create(this, contact);
     }
 
