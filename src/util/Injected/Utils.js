@@ -704,12 +704,17 @@ exports.LoadUtils = () => {
 
     window.WWebJS.getContact = async contactId => {
         const wid = window.Store.WidFactory.createWid(contactId);
-        let contact = await window.Store.Contact.find(wid);
+        const contact = await window.Store.Contact.find(wid);
         if (contact.id._serialized.endsWith('@lid')) {
             contact.id = contact.phoneNumber;
         }
-        const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
-        bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+        try {
+            const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
+            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+        } catch {
+            // fetchBizProfile can throw on transient server errors (e.g. HTTP 400).
+            // Business profile is non-essential — proceed without it.
+        }
         return window.WWebJS.getContactModel(contact);
     };
 
