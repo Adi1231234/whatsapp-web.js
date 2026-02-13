@@ -53,7 +53,11 @@ exports.ExposeStore = () => {
     window.Store.MediaPrep = window.require('WAWebPrepRawMedia');
     window.Store.MediaObject = window.require('WAWebMediaStorage');
     window.Store.MediaTypes = window.require('WAWebMmsMediaTypes');
-    window.Store.MediaUpload = window.require('WAWebMediaMmsV4Upload');
+    window.Store.MediaUpload = {
+        ...window.require('WAWebMediaMmsV4Upload'),
+        ...window.require('WAWebStartMediaUploadQpl')
+    };
+    window.Store.MediaUpdate = window.require('WAWebMediaUpdateMsg');
     window.Store.MsgKey = window.require('WAWebMsgKey');
     window.Store.OpaqueData = window.require('WAWebMediaOpaqueData');
     window.Store.QueryProduct = window.require('WAWebBizProductCatalogBridge');
@@ -62,9 +66,14 @@ exports.ExposeStore = () => {
     window.Store.SendDelete = window.require('WAWebDeleteChatAction');
     window.Store.SendMessage = window.require('WAWebSendMsgChatAction');
     window.Store.EditMessage = window.require('WAWebSendMessageEditAction');
+    window.Store.MediaDataUtils = window.require('WAWebMediaDataUtils');
+    window.Store.BlobCache = window.require('WAWebMediaInMemoryBlobCache');
     window.Store.SendSeen = window.require('WAWebUpdateUnreadChatAction');
     window.Store.User = window.require('WAWebUserPrefsMeUser');
-    window.Store.ContactMethods = window.require('WAWebContactGetters');
+    window.Store.ContactMethods = {
+        ...window.require('WAWebContactGetters'),
+        ...window.require('WAWebFrontendContactGetters')
+    };
     window.Store.UserConstructor = window.require('WAWebWid');
     window.Store.Validators = window.require('WALinkify');
     window.Store.WidFactory = window.require('WAWebWidFactory');
@@ -72,7 +81,6 @@ exports.ExposeStore = () => {
     window.Store.PresenceUtils = window.require('WAWebPresenceChatAction');
     window.Store.ChatState = window.require('WAWebChatStateBridge');
     window.Store.findCommonGroups = window.require('WAWebFindCommonGroupsContactAction').findCommonGroups;
-    window.Store.StatusUtils = window.require('WAWebContactStatusBridge');
     window.Store.ConversationMsgs = window.require('WAWebChatLoadMessages');
     window.Store.sendReactionToMsg = window.require('WAWebSendReactionMsgAction').sendReactionToMsg;
     window.Store.createOrUpdateReactionsModule = window.require('WAWebDBCreateOrUpdateReactions');
@@ -103,8 +111,9 @@ exports.ExposeStore = () => {
     window.Store.FindOrCreateChat = window.require('WAWebFindChatAction');
     window.Store.CustomerNoteUtils = window.require('WAWebNoteAction');
     window.Store.BusinessGatingUtils = window.require('WAWebBizGatingUtils');
-    window.Store.PollsVotesSchema = require('WAWebPollsVotesSchema');
-    
+    window.Store.PollsVotesSchema = window.require('WAWebPollsVotesSchema');
+    window.Store.PollsSendVote = window.require('WAWebPollsSendVoteMsgAction');
+
     window.Store.Settings = {
         ...window.require('WAWebUserPrefsGeneral'),
         ...window.require('WAWebUserPrefsNotifications'),
@@ -112,7 +121,8 @@ exports.ExposeStore = () => {
     };
     window.Store.NumberInfo = {
         ...window.require('WAPhoneUtils'),
-        ...window.require('WAPhoneFindCC')
+        ...window.require('WAPhoneFindCC'),
+        ...window.require('WAWebPhoneUtils')
     };
     window.Store.ForwardUtils = {
         ...window.require('WAWebChatForwardMessage')
@@ -168,7 +178,6 @@ exports.ExposeStore = () => {
         ...window.require('WAWebNewsletterSubscribeAction'),
         ...window.require('WAWebNewsletterUnsubscribeAction'),
         ...window.require('WAWebNewsletterDirectorySearchAction'),
-        ...window.require('WAWebNewsletterToggleMuteStateJob'),
         ...window.require('WAWebNewsletterGatingUtils'),
         ...window.require('WAWebNewsletterModelUtils'),
         ...window.require('WAWebMexAcceptNewsletterAdminInviteJob'),
@@ -193,6 +202,12 @@ exports.ExposeStore = () => {
     window.Store.AddressbookContactUtils = {
         ...window.require('WAWebSaveContactAction'),
         ...window.require('WAWebDeleteContactAction')
+    };
+    window.Store.StatusUtils = {
+        ...window.require('WAWebContactStatusBridge'),
+        ...window.require('WAWebSendStatusMsgAction'),
+        ...window.require('WAWebRevokeStatusAction'),
+        ...window.require('WAWebStatusGatingUtils')
     };
 
     if (!window.Store.Chat._find || !window.Store.Chat.findImpl) {
