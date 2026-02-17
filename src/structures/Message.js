@@ -9,6 +9,7 @@ const Reaction = require('./Reaction');
 const Contact = require('./Contact');
 const ScheduledEvent = require('./ScheduledEvent'); // eslint-disable-line no-unused-vars
 const { MessageTypes } = require('../util/Constants');
+const { evaluateWithProtocolTimeout } = require('../util/Puppeteer');
 
 /**
  * Represents a Message on WhatsApp
@@ -452,7 +453,7 @@ class Message extends Base {
      * Downloads and returns the attatched message media
      * @returns {Promise<MessageMedia>}
      */
-    async downloadMedia() {
+    async downloadMedia({ timeout } = {}) {
         if (!this.hasMedia) {
             // [L12] Log when downloadMedia called but hasMedia=false
             this.client?.emit?.('diag', 'warn', 'downloadMedia: hasMedia=false', JSON.stringify({
@@ -462,7 +463,11 @@ class Message extends Base {
             return undefined;
         }
 
-        const result = await this.client.pupPage.evaluate(async (msgId) => {
+        const evaluate = timeout
+            ? (fn, ...args) => evaluateWithProtocolTimeout(this.client.pupPage, timeout, fn, ...args)
+            : (fn, ...args) => this.client.pupPage.evaluate(fn, ...args);
+
+        const result = await evaluate(async (msgId) => {
             const msg = window.Store.Msg.get(msgId) || (await window.Store.Msg.getMessagesById([msgId]))?.messages?.[0];
 
             // REUPLOADING mediaStage means the media is expired and the download button is spinning, cannot be downloaded now
