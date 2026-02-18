@@ -383,6 +383,21 @@ class Client extends EventEmitter {
                 await this.authStrategy.afterBrowserInitialized();
                 this.lastLoggedOut = false;
             }
+
+            if (frame !== this.pupPage.mainFrame()) return;
+
+            // [C1] Log framenavigated events with store availability (after critical checks)
+            let storeAvailable = false;
+            try {
+                storeAvailable = await this.pupPage.evaluate(() => {
+                    return typeof window.Store !== 'undefined' && typeof window.Store?.Msg !== 'undefined';
+                });
+            } catch (e) { /* page may not be ready */ }
+            this.emit('diag', 'info', 'framenavigated', JSON.stringify({
+                url: frame.url(),
+                storeAvailable
+            }));
+
             await this.inject();
         });
     }
@@ -424,7 +439,28 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        // [diag] Expose a diagnostic logging function so browser-side logs reach Node.js
+        await exposeFunctionIfAbsent(this.pupPage, 'onDiagLog', (level, tag, data) => {
+            /**
+             * Emitted when a diagnostic log is generated from browser-side code.
+             * @event Client#diag
+             * @param {string} level - 'info', 'warn', or 'error'
+             * @param {string} tag - Log tag (e.g., 'CIPHERTEXT_TIMEOUT')
+             * @param {string} data - JSON string with log data
+             */
+            this.emit('diag', level, tag, data);
+        });
+
         await exposeFunctionIfAbsent(this.pupPage, 'onAddMessageEvent', msg => {
+            // [L4] Log every onAddMessageEvent call before gp2 filter
+            this.emit('diag', 'debug', 'onAddMessageEvent', JSON.stringify({
+                traceId: msg.id?._serialized || msg.id?.id,
+                type: msg.type,
+                from: typeof msg.from === 'object' ? msg.from?._serialized : msg.from,
+                to: typeof msg.to === 'object' ? msg.to?._serialized : msg.to,
+                hasMedia: !!msg.directPath
+            }));
+
             if (msg.type === 'gp2') {
                 const notification = new GroupNotification(this, msg);
                 if (['add', 'invite', 'linked_group_join'].includes(msg.subtype)) {
@@ -479,6 +515,11 @@ class Client extends EventEmitter {
                  */
             this.emit(Events.MESSAGE_CREATE, message);
 
+            // [L5] Log fromMe gate decision
+            this.emit('diag', 'debug', 'fromMe gate', JSON.stringify({
+                traceId: msg.id?._serialized || msg.id?.id,
+                fromMe: msg.id.fromMe
+            }));
             if (msg.id.fromMe) return;
 
             /**
@@ -751,8 +792,46 @@ class Client extends EventEmitter {
         });
 
         await this.pupPage.evaluate(() => {
+            // Helper: check if message type indicates a file/image/media attachment
+            // All diag logs use debug level — actual errors are logged by the app's parseIncomingMessage
+
+            // Helper: resolve WID → phone number. Returns phone string or the original serialized WID.
+            window._resolvePhone = (wid) => {
+                try {
+                    const serialized = wid?._serialized || String(wid || '');
+                    if (!serialized) return '';
+                    if (!serialized.endsWith('@lid')) return serialized;
+                    const contact = window.Store.Contact.get(wid);
+                    const phone = contact?.phoneNumber?._serialized;
+                    return phone || serialized;
+                } catch (e) {
+                    return wid?._serialized || String(wid || '');
+                }
+            };
+            // Helper: build common trace fields for a message { traceId, from, to }
+            window._diagTrace = (msg) => {
+                try {
+                    const traceId = msg.id?._serialized || '';
+                    // from = actual sender (author for groups, from for DMs)
+                    const senderWid = msg.author || msg.from;
+                    const from = window._resolvePhone(senderWid);
+                    // to = recipient (the connected account)
+                    const to = window._resolvePhone(msg.to);
+                    return { traceId, from, to };
+                } catch (e) {
+                    return { traceId: msg.id?._serialized || '', from: msg.from?._serialized || '', to: msg.to?._serialized || '' };
+                }
+            };
+
             window.Store.Msg.on('change', (msg) => { window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg)); });
-            window.Store.Msg.on('change:type', (msg) => { window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg)); });
+            // [L10] Log all change:type events on messages
+            window.Store.Msg.on('change:type', (msg) => {
+                window.onDiagLog('debug', 'change:type', JSON.stringify({
+                    ...window._diagTrace(msg),
+                    newType: msg.type
+                }));
+                window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
+            });
             window.Store.Msg.on('change:ack', (msg, ack) => { window.onMessageAckEvent(window.WWebJS.getMessageModel(msg), ack); });
             window.Store.Msg.on('change:isUnsentMedia', (msg, unsent) => { if (msg.id.fromMe && !unsent) window.onMessageMediaUploadedEvent(window.WWebJS.getMessageModel(msg)); });
             window.Store.Msg.on('remove', (msg) => { if (msg.isNewMsg) window.onRemoveMessageEvent(window.WWebJS.getMessageModel(msg)); });
@@ -765,11 +844,13 @@ class Client extends EventEmitter {
             }
             window.Store.Chat.on('remove', async (chat) => { window.onRemoveChatEvent(await window.WWebJS.getChatModel(chat)); });
             window.Store.Chat.on('change:archive', async (chat, currState, prevState) => { window.onArchiveChatEvent(await window.WWebJS.getChatModel(chat), currState, prevState); });
-            window.Store.Msg.on('add', (msg) => { 
+            window.Store.Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
                     if(msg.type === 'ciphertext') {
-                        // defer message event until ciphertext is resolved (type changed)
-                        msg.once('change:type', (_msg) => window.onAddMessageEvent(window.WWebJS.getMessageModel(_msg)));
+                        // Defer message event until ciphertext is resolved (type changed)
+                        msg.once('change:type', (_msg) => {
+                            window.onAddMessageEvent(window.WWebJS.getMessageModel(_msg));
+                        });
                         window.onAddMessageCiphertextEvent(window.WWebJS.getMessageModel(msg));
                     } else {
                         window.onAddMessageEvent(window.WWebJS.getMessageModel(msg)); 
@@ -843,6 +924,14 @@ class Client extends EventEmitter {
                 }).bind(module);
             }
         });
+
+        // [L7] Verify Store.Msg listener registration succeeded
+        const listenerCount = await this.pupPage.evaluate(() => {
+            const addListeners = window.Store.Msg.listeners?.('add')?.length ?? -1;
+            const changeTypeListeners = window.Store.Msg.listeners?.('change:type')?.length ?? -1;
+            return { add: addListeners, changeType: changeTypeListeners };
+        });
+        this.emit('diag', 'info', 'Store.Msg listener count', JSON.stringify(listenerCount));
     }    
 
     async initWebVersionCache() {
