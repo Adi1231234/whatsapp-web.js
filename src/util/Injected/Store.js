@@ -265,20 +265,22 @@ exports.ExposeStore = () => {
     window.injectToFunction({ module: 'WAWebE2EProtoUtils', function: 'typeAttributeFromProtobuf' }, (func, ...args) => { const [proto] = args; return proto.locationMessage || proto.groupInviteMessage ? 'text' : func(...args); });
 
     function wid(v) {
-        if (!v) return '';
+        if (v == null) return null;
         if (typeof v === 'string') return v;
-        return v._serialized || v.user || '';
+        return v._serialized || v.user || null;
     }
 
     function safeStr(v) {
         if (v == null) return String(v);
         if (typeof v !== 'object') return String(v);
-        try { return JSON.stringify(v); } catch { return String(v); }
+        try {
+            var s = JSON.stringify(v);
+            return s.length > 500 ? s.slice(0, 500) + '...' : s;
+        } catch (e) { return String(v); }
     }
 
-    // [HOOK-1] Monitor retry receipts sent by WhatsApp Web
-    window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, (func, ...args) => {
-        const params = args[0] || {};
+    window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, function(func, ...args) {
+        var params = args[0] || {};
         window.onDiagLog('debug', 'RETRY_RECEIPT_SENT', JSON.stringify({
             externalId: params.externalId,
             to: wid(params.to),
@@ -286,33 +288,34 @@ exports.ExposeStore = () => {
             retryReason: params.retryReason,
             isPeer: params.isPeer,
         }));
-        return func(...args);
+        return func.apply(this, args);
     });
 
-    // [HOOK-2] Monitor decryption results — see WHY decryption fails
     window.injectToFunction({ module: 'WAWebHandleMsgSendReceipt', function: 'sendReceipt' }, function(func, ...args) {
-        const [receipt, msgInfo, decryptResult] = args;
-        var from = wid(receipt?.senderPn) || wid(receipt?.participant) || wid(receipt?.senderLid) || wid(receipt?.peerRecipientPn) || wid(receipt?.peerRecipientLid);
+        var receipt = args[0] || {};
+        var msgInfo = args[1];
+        var decryptResult = args[2];
+        var from = wid(receipt.senderPn) || wid(receipt.participant) || wid(receipt.senderLid) || wid(receipt.peerRecipientPn) || wid(receipt.peerRecipientLid) || wid(receipt.from);
+        var participant = wid(receipt.participant);
         window.onDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify({
-            msgId: receipt?.externalId,
+            msgId: receipt.externalId,
             from: from,
-            type: receipt?.type,
-            pushname: receipt?.pushname,
-            msgType: msgInfo?.type,
+            participant: participant !== from ? participant : null,
+            type: receipt.type,
+            pushname: receipt.pushname,
+            msgType: msgInfo ? msgInfo.type : null,
             result: safeStr(decryptResult),
         }));
         return func.apply(this, args);
     });
 
-    // [HOOK-3] Monitor identity changes — may skip ensureE2ESessions when offline
     window.injectToFunction({ module: 'WAWebHandleIdentityChange', function: 'handleE2eIdentityChange' }, function(func, ...args) {
         var info = args[0] || {};
-        var from = wid(info?.senderPn) || wid(info?.participant) || wid(info?.from) || wid(info?.attrs?.from);
-        var participant = wid(info?.participantLid) || wid(info?.participant) || wid(info?.attrs?.participant);
+        var from = wid(info.senderPn) || wid(info.participant) || wid(info.from) || wid(info.attrs && info.attrs.from);
+        var participant = wid(info.participantLid) || wid(info.participant) || wid(info.attrs && info.attrs.participant);
         window.onDiagLog('debug', 'IDENTITY_CHANGE', JSON.stringify({
             from: from,
             participant: participant,
-            keys: info && typeof info === 'object' ? Object.keys(info).slice(0, 15) : null,
         }));
         return func.apply(this, args);
     });
