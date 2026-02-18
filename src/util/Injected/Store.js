@@ -290,17 +290,33 @@ exports.ExposeStore = () => {
     });
 
     // [HOOK-2] Monitor decryption results — see WHY decryption fails
-    window.injectToFunction({ module: 'WAWebHandleMsgSendReceipt', function: 'sendReceipt' }, (func, ...args) => {
+    window.injectToFunction({ module: 'WAWebHandleMsgSendReceipt', function: 'sendReceipt' }, function(func, ...args) {
         const [stanza, meta, result] = args;
+        function describeArg(val, depth) {
+            if (depth > 2 || val == null) return String(val);
+            if (typeof val !== 'object') return typeof val + ':' + String(val).slice(0, 100);
+            var keys = Object.keys(val).slice(0, 20);
+            if (depth > 1) return '{' + keys.join(',') + '}';
+            var obj = {};
+            keys.forEach(function(k) { obj[k] = describeArg(val[k], depth + 1); });
+            return obj;
+        }
         window.onDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify({
+            argCount: args.length,
+            arg0_type: typeof stanza,
+            arg0_keys: stanza && typeof stanza === 'object' ? Object.keys(stanza).slice(0, 20) : null,
+            arg0_desc: describeArg(stanza, 0),
+            arg1_type: typeof meta,
+            arg1_keys: meta && typeof meta === 'object' ? Object.keys(meta).slice(0, 20) : null,
+            arg1_desc: describeArg(meta, 0),
+            arg2_type: typeof result,
+            arg2_desc: describeArg(result, 0),
             msgId: stanza?.attrs?.id || meta?.externalId,
             from: wid(stanza?.attrs?.from || meta?.from),
             result: safeStr(result),
-            retryReason: meta?.retryReason,
-            retryCount: meta?.retryCount,
             hasError: !!stanza?.content?.find?.(c => c.tag === 'error'),
         }));
-        return func(...args);
+        return func.apply(this, args);
     });
 
     // [HOOK-3] Monitor identity changes — may skip ensureE2ESessions when offline
