@@ -247,11 +247,11 @@ exports.ExposeStore = () => {
             const originalFunction = module[funcName];
             if (typeof originalFunction !== 'function') return;
 
-            module[funcName] = (...args) => {
+            module[funcName] = function(...args) {
                 try {
-                    return callback(originalFunction, ...args);
+                    return callback(originalFunction.bind(this), ...args);
                 } catch {
-                    return originalFunction(...args);
+                    return originalFunction.apply(this, args);
                 }
             };
 
