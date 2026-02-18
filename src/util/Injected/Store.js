@@ -267,17 +267,14 @@ exports.ExposeStore = () => {
     // [HOOK-1] Monitor retry receipts sent by WhatsApp Web
     window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, (func, ...args) => {
         const params = args[0] || {};
-        const to = params.to?.toString?.() || String(params.to);
-        if (to !== 'status@broadcast') {
-            window.onDiagLog('debug', 'RETRY_RECEIPT_SENT', JSON.stringify({
-                externalId: params.externalId,
-                to,
-                retryCount: params.retryCount,
-                retryReason: params.retryReason,
-                isPeer: params.isPeer,
-                stack: new Error().stack
-            }));
-        }
+        window.onDiagLog('debug', 'RETRY_RECEIPT_SENT', JSON.stringify({
+            externalId: params.externalId,
+            to: params.to?.toString?.() || String(params.to),
+            retryCount: params.retryCount,
+            retryReason: params.retryReason,
+            isPeer: params.isPeer,
+            stack: new Error().stack
+        }));
         return func(...args);
     });
 
@@ -286,16 +283,13 @@ exports.ExposeStore = () => {
         const [stanza, meta, result] = args;
         const msgId = stanza?.attrs?.id || meta?.externalId;
         const from = stanza?.attrs?.from || meta?.from;
-        const fromStr = from?.toString?.() || String(from || '');
-        if (fromStr !== 'status@broadcast') {
-            window.onDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify({
-                msgId,
-                from: fromStr,
-                result: String(result),
-                retryReason: meta?.retryReason,
-                retryCount: meta?.retryCount
-            }));
-        }
+        window.onDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify({
+            msgId,
+            from: from?.toString?.() || String(from || ''),
+            result: String(result),
+            retryReason: meta?.retryReason,
+            retryCount: meta?.retryCount
+        }));
         return func(...args);
     });
 
