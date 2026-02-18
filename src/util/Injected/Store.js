@@ -264,16 +264,27 @@ exports.ExposeStore = () => {
 
     window.injectToFunction({ module: 'WAWebE2EProtoUtils', function: 'typeAttributeFromProtobuf' }, (func, ...args) => { const [proto] = args; return proto.locationMessage || proto.groupInviteMessage ? 'text' : func(...args); });
 
+    function wid(v) {
+        if (!v) return '';
+        if (typeof v === 'string') return v;
+        return v._serialized || v.user || '';
+    }
+
+    function safeStr(v) {
+        if (v == null) return String(v);
+        if (typeof v !== 'object') return String(v);
+        try { return JSON.stringify(v); } catch { return String(v); }
+    }
+
     // [HOOK-1] Monitor retry receipts sent by WhatsApp Web
     window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, (func, ...args) => {
         const params = args[0] || {};
         window.onDiagLog('debug', 'RETRY_RECEIPT_SENT', JSON.stringify({
             externalId: params.externalId,
-            to: params.to?.toString?.() || String(params.to),
+            to: wid(params.to),
             retryCount: params.retryCount,
             retryReason: params.retryReason,
             isPeer: params.isPeer,
-            stack: new Error().stack
         }));
         return func(...args);
     });
@@ -281,14 +292,13 @@ exports.ExposeStore = () => {
     // [HOOK-2] Monitor decryption results — see WHY decryption fails
     window.injectToFunction({ module: 'WAWebHandleMsgSendReceipt', function: 'sendReceipt' }, (func, ...args) => {
         const [stanza, meta, result] = args;
-        const msgId = stanza?.attrs?.id || meta?.externalId;
-        const from = stanza?.attrs?.from || meta?.from;
         window.onDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify({
-            msgId,
-            from: from?.toString?.() || String(from || ''),
-            result: String(result),
+            msgId: stanza?.attrs?.id || meta?.externalId,
+            from: wid(stanza?.attrs?.from || meta?.from),
+            result: safeStr(result),
             retryReason: meta?.retryReason,
-            retryCount: meta?.retryCount
+            retryCount: meta?.retryCount,
+            hasError: !!stanza?.content?.find?.(c => c.tag === 'error'),
         }));
         return func(...args);
     });
@@ -297,9 +307,8 @@ exports.ExposeStore = () => {
     window.injectToFunction({ module: 'WAWebHandleIdentityChange', function: 'handleE2eIdentityChange' }, (func, ...args) => {
         const stanza = args[0];
         window.onDiagLog('debug', 'IDENTITY_CHANGE', JSON.stringify({
-            from: stanza?.attrs?.from?.toString?.() || String(stanza?.attrs?.from || ''),
-            participant: stanza?.attrs?.participant?.toString?.() || '',
-            stack: new Error().stack
+            from: wid(stanza?.attrs?.from),
+            participant: wid(stanza?.attrs?.participant),
         }));
         return func(...args);
     });
