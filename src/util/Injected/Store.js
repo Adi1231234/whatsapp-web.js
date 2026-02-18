@@ -292,10 +292,10 @@ exports.ExposeStore = () => {
     // [HOOK-2] Monitor decryption results — see WHY decryption fails
     window.injectToFunction({ module: 'WAWebHandleMsgSendReceipt', function: 'sendReceipt' }, function(func, ...args) {
         const [receipt, msgInfo, decryptResult] = args;
+        var from = wid(receipt?.senderPn) || wid(receipt?.participant) || wid(receipt?.senderLid) || wid(receipt?.peerRecipientPn) || wid(receipt?.peerRecipientLid);
         window.onDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify({
             msgId: receipt?.externalId,
-            from: wid(receipt?.senderPn),
-            participant: wid(receipt?.participant),
+            from: from,
             type: receipt?.type,
             pushname: receipt?.pushname,
             msgType: msgInfo?.type,
@@ -305,12 +305,15 @@ exports.ExposeStore = () => {
     });
 
     // [HOOK-3] Monitor identity changes — may skip ensureE2ESessions when offline
-    window.injectToFunction({ module: 'WAWebHandleIdentityChange', function: 'handleE2eIdentityChange' }, (func, ...args) => {
-        const stanza = args[0];
+    window.injectToFunction({ module: 'WAWebHandleIdentityChange', function: 'handleE2eIdentityChange' }, function(func, ...args) {
+        var info = args[0] || {};
+        var from = wid(info?.senderPn) || wid(info?.participant) || wid(info?.from) || wid(info?.attrs?.from);
+        var participant = wid(info?.participantLid) || wid(info?.participant) || wid(info?.attrs?.participant);
         window.onDiagLog('debug', 'IDENTITY_CHANGE', JSON.stringify({
-            from: wid(stanza?.attrs?.from),
-            participant: wid(stanza?.attrs?.participant),
+            from: from,
+            participant: participant,
+            keys: info && typeof info === 'object' ? Object.keys(info).slice(0, 15) : null,
         }));
-        return func(...args);
+        return func.apply(this, args);
     });
 };
