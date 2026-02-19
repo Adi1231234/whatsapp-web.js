@@ -297,15 +297,23 @@ exports.ExposeStore = () => {
         var decryptResult = args[2];
         var from = wid(receipt.senderPn) || wid(receipt.participant) || wid(receipt.senderLid) || wid(receipt.peerRecipientPn) || wid(receipt.peerRecipientLid) || wid(receipt.from);
         var participant = wid(receipt.participant);
-        window.onDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify({
+        var resultStr = safeStr(decryptResult);
+        var logData = {
             msgId: receipt.externalId,
             from: from,
             participant: participant !== from ? participant : null,
             type: receipt.type,
             pushname: receipt.pushname,
             msgType: msgInfo ? msgInfo.type : null,
-            result: safeStr(decryptResult),
-        }));
+            result: resultStr,
+        };
+        if (resultStr && resultStr.indexOf('BACKFILL') !== -1) {
+            logData.receiptKeys = Object.keys(receipt).sort().join(',');
+            logData.receiptRaw = safeStr(receipt);
+            logData.msgInfoRaw = safeStr(msgInfo);
+            logData.decryptResultRaw = safeStr(decryptResult);
+        }
+        window.onDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify(logData));
         return func.apply(this, args);
     });
 
