@@ -526,4 +526,173 @@ exports.ExposeStore = () => {
             })(sessionFns[ei]);
         } catch(e) {}
     }
+
+    try {
+        window.injectToFunction({ module: 'WAWebSenderKeyMsgHandler', function: 'handleSenderKeyMsg' }, function(func, ...args) {
+            var stanza = args[0];
+            var traceId = stanza && stanza.attrs ? stanza.attrs.id : '';
+            var sender = stanza && stanza.attrs ? (stanza.attrs.participant || stanza.attrs.from || '') : '';
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.catch(function(err) {
+                    window.onDiagLog('error', 'SENDER_KEY_FAIL', JSON.stringify({
+                        traceId: traceId, sender: sender,
+                        error: err ? (err.message || String(err)) : 'unknown',
+                    }));
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    try {
+        window.injectToFunction({ module: 'WAWebMediaDownloadUtils', function: 'downloadMediaBlob' }, function(func, ...args) {
+            var startTime = Date.now();
+            var url = '';
+            try { url = typeof args[0] === 'string' ? args[0].slice(0, 100) : (args[0] && args[0].directPath ? args[0].directPath.slice(0, 100) : ''); } catch(e) {}
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(res) {
+                    window.onDiagLog('debug', 'MEDIA_DOWNLOAD_OK', JSON.stringify({
+                        elapsed: Date.now() - startTime,
+                        url: url,
+                        size: res ? (res.byteLength || res.size || res.length || 0) : 0,
+                    }));
+                    return res;
+                }).catch(function(err) {
+                    window.onDiagLog('error', 'MEDIA_DOWNLOAD_FAIL', JSON.stringify({
+                        elapsed: Date.now() - startTime,
+                        url: url,
+                        error: err ? (err.message || String(err)) : 'unknown',
+                    }));
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    try {
+        window.injectToFunction({ module: 'WAWebMediaDownloadUtils', function: 'downloadMedia' }, function(func, ...args) {
+            var startTime = Date.now();
+            var directPath = '';
+            try { directPath = (args[0] && args[0].directPath) ? args[0].directPath.slice(0, 100) : ''; } catch(e) {}
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(res) {
+                    window.onDiagLog('debug', 'MEDIA_DOWNLOAD2_OK', JSON.stringify({
+                        elapsed: Date.now() - startTime, directPath: directPath,
+                    }));
+                    return res;
+                }).catch(function(err) {
+                    window.onDiagLog('error', 'MEDIA_DOWNLOAD2_FAIL', JSON.stringify({
+                        elapsed: Date.now() - startTime, directPath: directPath,
+                        error: err ? (err.message || String(err)) : 'unknown',
+                    }));
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    try {
+        window.injectToFunction({ module: 'WAWebPreKeyUtils', function: 'getOrGenPreKeys' }, function(func, ...args) {
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(res) {
+                    var count = Array.isArray(res) ? res.length : (res ? 1 : 0);
+                    window.onDiagLog('debug', 'PREKEY_GET', JSON.stringify({ count: count }));
+                    return res;
+                }).catch(function(err) {
+                    window.onDiagLog('error', 'PREKEY_GET_FAIL', JSON.stringify({
+                        error: err ? (err.message || String(err)) : 'unknown',
+                    }));
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    try {
+        window.injectToFunction({ module: 'WAWebPreKeyUtils', function: 'uploadPreKeys' }, function(func, ...args) {
+            window.onDiagLog('debug', 'PREKEY_UPLOAD', JSON.stringify({ count: Array.isArray(args[0]) ? args[0].length : 0 }));
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.catch(function(err) {
+                    window.onDiagLog('error', 'PREKEY_UPLOAD_FAIL', JSON.stringify({
+                        error: err ? (err.message || String(err)) : 'unknown',
+                    }));
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    try {
+        window.injectToFunction({ module: 'WAWebDeleteSessionJob', function: 'deleteRemoteSession' }, function(func, ...args) {
+            var jid = '';
+            try { jid = wid(args[0]) || safeStr(args[0]); } catch(e) {}
+            window.onDiagLog('warn', 'SESSION_DELETE', JSON.stringify({ jid: jid }));
+            return func.apply(this, args);
+        });
+    } catch(e) {}
+
+    try {
+        window.injectToFunction({ module: 'WAWebSocket', function: 'sendData' }, function(func, ...args) {
+            return func.apply(this, args);
+        });
+    } catch(e) {}
+
+    try {
+        var connMods = ['WAWebSocketConnectModel', 'WAWebSocketModel'];
+        for (var ci = 0; ci < connMods.length; ci++) {
+            try {
+                window.injectToFunction({ module: connMods[ci], function: 'onSocketClose' }, function(func, ...args) {
+                    var code = args[0];
+                    var reason = args[1];
+                    window.onDiagLog('warn', 'SOCKET_CLOSE', JSON.stringify({
+                        code: code, reason: typeof reason === 'string' ? reason.slice(0, 200) : String(reason),
+                    }));
+                    return func.apply(this, args);
+                });
+            } catch(e) {}
+        }
+    } catch(e) {}
+
+    try {
+        window.injectToFunction({ module: 'WAWebHistorySyncJobUtils', function: 'processHistorySyncData' }, function(func, ...args) {
+            var data = args[0];
+            var msgCount = 0;
+            try {
+                if (data && data.conversations) {
+                    for (var hi = 0; hi < data.conversations.length; hi++) {
+                        msgCount += (data.conversations[hi].messages || []).length;
+                    }
+                }
+            } catch(e) {}
+            window.onDiagLog('debug', 'HISTORY_SYNC_PROCESS', JSON.stringify({
+                conversationCount: data && data.conversations ? data.conversations.length : 0,
+                msgCount: msgCount,
+                syncType: data ? data.syncType : null,
+                progress: data ? data.progress : null,
+            }));
+            return func.apply(this, args);
+        });
+    } catch(e) {}
+
+    try {
+        window.injectToFunction({ module: 'WAWebMsgDeleteCollection', function: 'sendRevoke' }, function(func, ...args) {
+            var msg = args[0];
+            window.onDiagLog('debug', 'MSG_REVOKE', JSON.stringify({
+                id: msg && msg.id ? msg.id._serialized : '',
+                from: msg ? wid(msg.from) : null,
+                type: msg ? msg.type : null,
+            }));
+            return func.apply(this, args);
+        });
+    } catch(e) {}
 };
