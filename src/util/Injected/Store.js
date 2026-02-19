@@ -318,13 +318,212 @@ exports.ExposeStore = () => {
     });
 
     window.injectToFunction({ module: 'WAWebHandleIdentityChange', function: 'handleE2eIdentityChange' }, function(func, ...args) {
-        var info = args[0] || {};
-        var from = wid(info.senderPn) || wid(info.participant) || wid(info.from) || wid(info.attrs && info.attrs.from);
-        var participant = wid(info.participantLid) || wid(info.participant) || wid(info.attrs && info.attrs.participant);
+        var node = args[0] || {};
+        var from = wid(node.senderPn) || wid(node.participant) || wid(node.from);
+        var participant = null;
+        var arg0Keys = [];
+        try {
+            arg0Keys = Object.keys(node).sort();
+            if (!from && node.attrs) {
+                from = wid(node.attrs.from) || wid(node.attrs.participant) || wid(node.attrs.sender_pn);
+                participant = wid(node.attrs.participant) || wid(node.attrs.participant_lid);
+            }
+            if (!from && node.content && Array.isArray(node.content)) {
+                for (var i = 0; i < node.content.length; i++) {
+                    var child = node.content[i];
+                    if (child && child.attrs) {
+                        from = from || wid(child.attrs.from) || wid(child.attrs.jid);
+                    }
+                }
+            }
+            if (!from && args[1]) {
+                from = wid(args[1].from) || wid(args[1].jid) || wid(args[1]);
+            }
+            if (!participant) {
+                participant = wid(node.participantLid) || wid(node.participant);
+            }
+        } catch(e) {}
         window.onDiagLog('debug', 'IDENTITY_CHANGE', JSON.stringify({
             from: from,
-            participant: participant,
+            participant: participant !== from ? participant : null,
+            argCount: args.length,
+            arg0Keys: arg0Keys.join(','),
+            arg0Raw: safeStr(node),
         }));
         return func.apply(this, args);
     });
+
+    window.injectToFunction({ module: 'WAWebHandleEncMsg', function: 'handleEncMsg' }, function(func, ...args) {
+        var stanza = args[0];
+        var traceId = '';
+        var encType = '';
+        var senderJid = '';
+        try {
+            if (stanza && stanza.attrs) {
+                traceId = stanza.attrs.id || '';
+                senderJid = stanza.attrs.participant || stanza.attrs.from || '';
+            }
+            if (stanza && Array.isArray(stanza.content)) {
+                for (var i = 0; i < stanza.content.length; i++) {
+                    var child = stanza.content[i];
+                    if (child && child.tag === 'enc') {
+                        encType = child.attrs ? child.attrs.type || '' : '';
+                        break;
+                    }
+                }
+            }
+        } catch(e) {}
+        var startTime = Date.now();
+        var result = func.apply(this, args);
+        if (result && typeof result.then === 'function') {
+            return result.then(function(res) {
+                window.onDiagLog('debug', 'ENC_MSG_RESULT', JSON.stringify({
+                    traceId: traceId,
+                    sender: senderJid,
+                    encType: encType,
+                    elapsed: Date.now() - startTime,
+                }));
+                return res;
+            }).catch(function(err) {
+                window.onDiagLog('error', 'ENC_MSG_FAIL', JSON.stringify({
+                    traceId: traceId,
+                    sender: senderJid,
+                    encType: encType,
+                    elapsed: Date.now() - startTime,
+                    error: err ? (err.message || String(err)) : 'unknown',
+                    errorName: err ? err.name : null,
+                }));
+                throw err;
+            });
+        }
+        return result;
+    });
+
+    window.injectToFunction({ module: 'WAWebHandlePeerMsg', function: 'handlePeerMsg' }, function(func, ...args) {
+        var peerMsg = args[0];
+        var msgType = 'unknown';
+        var details = {};
+        try {
+            if (peerMsg) {
+                if (peerMsg.peerDataOperationRequestMessage) {
+                    msgType = 'PDO_REQUEST';
+                    var req = peerMsg.peerDataOperationRequestMessage;
+                    details.requestType = req.peerDataOperationRequestType;
+                    if (req.placeholderMessageResendRequest && req.placeholderMessageResendRequest.length > 0) {
+                        details.resendMsgIds = req.placeholderMessageResendRequest.map(function(r) {
+                            return r.messageKey ? r.messageKey.id : null;
+                        });
+                    }
+                }
+                if (peerMsg.peerDataOperationRequestResponseMessage) {
+                    msgType = 'PDO_RESPONSE';
+                    var resp = peerMsg.peerDataOperationRequestResponseMessage;
+                    details.requestType = resp.peerDataOperationRequestType;
+                    details.resultCount = resp.peerDataOperationResult ? resp.peerDataOperationResult.length : 0;
+                    if (resp.peerDataOperationResult) {
+                        details.results = resp.peerDataOperationResult.map(function(r) {
+                            return {
+                                hasPlaceholder: !!r.placeholderMessageResendResponse,
+                                hasMedia: !!r.mediaUploadResult,
+                            };
+                        });
+                    }
+                }
+                if (peerMsg.historySyncNotification) {
+                    msgType = 'HISTORY_SYNC';
+                    details.syncType = peerMsg.historySyncNotification.syncType;
+                    details.progress = peerMsg.historySyncNotification.progress;
+                }
+            }
+        } catch(e) { details.parseError = String(e); }
+        window.onDiagLog('debug', 'PEER_MSG', JSON.stringify({ msgType: msgType, details: details }));
+        var result = func.apply(this, args);
+        if (result && typeof result.then === 'function') {
+            return result.catch(function(err) {
+                window.onDiagLog('error', 'PEER_MSG_ERROR', JSON.stringify({
+                    msgType: msgType,
+                    error: err ? (err.message || String(err)) : 'unknown',
+                }));
+                throw err;
+            });
+        }
+        return result;
+    });
+
+    try {
+        window.injectToFunction({ module: 'WAWebSendNonMessageDataRequest', function: 'sendPeerDataOperationRequest' }, function(func, ...args) {
+            var requestType = args[0];
+            window.onDiagLog('debug', 'PDO_REQUEST_SENT', JSON.stringify({
+                requestType: requestType,
+                params: safeStr(args[1]),
+            }));
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(res) {
+                    window.onDiagLog('debug', 'PDO_REQUEST_ACK', JSON.stringify({ requestType: requestType }));
+                    return res;
+                }).catch(function(err) {
+                    window.onDiagLog('error', 'PDO_REQUEST_FAIL', JSON.stringify({
+                        requestType: requestType,
+                        error: err ? (err.message || String(err)) : 'unknown',
+                    }));
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    var signalFns = ['decryptSignalProto', 'decrypt', 'decryptWithSession'];
+    for (var si = 0; si < signalFns.length; si++) {
+        try {
+            (function(fnName) {
+                window.injectToFunction({ module: 'WAWebSignal', function: fnName }, function(func, ...args) {
+                    var result;
+                    try { result = func.apply(this, args); } catch(err) {
+                        window.onDiagLog('error', 'SIGNAL_DECRYPT_ERROR', JSON.stringify({
+                            op: fnName, error: err ? (err.message || String(err)) : 'unknown',
+                        }));
+                        throw err;
+                    }
+                    if (result && typeof result.then === 'function') {
+                        return result.catch(function(err) {
+                            window.onDiagLog('error', 'SIGNAL_DECRYPT_ERROR', JSON.stringify({
+                                op: fnName, error: err ? (err.message || String(err)) : 'unknown',
+                            }));
+                            throw err;
+                        });
+                    }
+                    return result;
+                });
+            })(signalFns[si]);
+        } catch(e) {}
+    }
+
+    var sessionFns = ['manageE2ESessions', 'ensureE2ESession', 'getOrCreateSession', 'createSession'];
+    for (var ei = 0; ei < sessionFns.length; ei++) {
+        try {
+            (function(fnName) {
+                window.injectToFunction({ module: 'WAWebManageE2ESessionsJob', function: fnName }, function(func, ...args) {
+                    var jid = '';
+                    try {
+                        if (typeof args[0] === 'string') jid = args[0];
+                        else if (args[0] && args[0]._serialized) jid = args[0]._serialized;
+                        else if (args[0] && args[0].jid) jid = args[0].jid;
+                    } catch(e) {}
+                    window.onDiagLog('debug', 'E2E_SESSION_OP', JSON.stringify({ op: fnName, jid: jid }));
+                    var result = func.apply(this, args);
+                    if (result && typeof result.then === 'function') {
+                        return result.catch(function(err) {
+                            window.onDiagLog('error', 'E2E_SESSION_ERROR', JSON.stringify({
+                                op: fnName, jid: jid, error: err ? (err.message || String(err)) : 'unknown',
+                            }));
+                            throw err;
+                        });
+                    }
+                    return result;
+                });
+            })(sessionFns[ei]);
+        } catch(e) {}
+    }
 };
