@@ -279,9 +279,13 @@ exports.ExposeStore = () => {
         } catch (e) { return String(v); }
     }
 
+    function safeDiagLog(level, tag, data) {
+        try { safeDiagLog(level, tag, typeof data === 'string' ? data : JSON.stringify(data)); } catch(e) {}
+    }
+
     window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, function(func, ...args) {
         var params = args[0] || {};
-        window.onDiagLog('debug', 'RETRY_RECEIPT_SENT', JSON.stringify({
+        safeDiagLog('debug', 'RETRY_RECEIPT_SENT', JSON.stringify({
             externalId: params.externalId,
             to: wid(params.to),
             retryCount: params.retryCount,
@@ -313,7 +317,7 @@ exports.ExposeStore = () => {
             logData.msgInfoRaw = safeStr(msgInfo);
             logData.decryptResultRaw = safeStr(decryptResult);
         }
-        window.onDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify(logData));
+        safeDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify(logData));
         return func.apply(this, args);
     });
 
@@ -343,7 +347,7 @@ exports.ExposeStore = () => {
                 participant = wid(node.participantLid) || wid(node.participant);
             }
         } catch(e) {}
-        window.onDiagLog('debug', 'IDENTITY_CHANGE', JSON.stringify({
+        safeDiagLog('debug', 'IDENTITY_CHANGE', JSON.stringify({
             from: from,
             participant: participant !== from ? participant : null,
             argCount: args.length,
@@ -377,7 +381,7 @@ exports.ExposeStore = () => {
         var result = func.apply(this, args);
         if (result && typeof result.then === 'function') {
             return result.then(function(res) {
-                window.onDiagLog('debug', 'ENC_MSG_RESULT', JSON.stringify({
+                safeDiagLog('debug', 'ENC_MSG_RESULT', JSON.stringify({
                     traceId: traceId,
                     sender: senderJid,
                     encType: encType,
@@ -385,7 +389,7 @@ exports.ExposeStore = () => {
                 }));
                 return res;
             }).catch(function(err) {
-                window.onDiagLog('error', 'ENC_MSG_FAIL', JSON.stringify({
+                safeDiagLog('error', 'ENC_MSG_FAIL', JSON.stringify({
                     traceId: traceId,
                     sender: senderJid,
                     encType: encType,
@@ -436,11 +440,11 @@ exports.ExposeStore = () => {
                 }
             }
         } catch(e) { details.parseError = String(e); }
-        window.onDiagLog('debug', 'PEER_MSG', JSON.stringify({ msgType: msgType, details: details }));
+        safeDiagLog('debug', 'PEER_MSG', JSON.stringify({ msgType: msgType, details: details }));
         var result = func.apply(this, args);
         if (result && typeof result.then === 'function') {
             return result.catch(function(err) {
-                window.onDiagLog('error', 'PEER_MSG_ERROR', JSON.stringify({
+                safeDiagLog('error', 'PEER_MSG_ERROR', JSON.stringify({
                     msgType: msgType,
                     error: err ? (err.message || String(err)) : 'unknown',
                 }));
@@ -453,17 +457,17 @@ exports.ExposeStore = () => {
     try {
         window.injectToFunction({ module: 'WAWebSendNonMessageDataRequest', function: 'sendPeerDataOperationRequest' }, function(func, ...args) {
             var requestType = args[0];
-            window.onDiagLog('debug', 'PDO_REQUEST_SENT', JSON.stringify({
+            safeDiagLog('debug', 'PDO_REQUEST_SENT', JSON.stringify({
                 requestType: requestType,
                 params: safeStr(args[1]),
             }));
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
-                    window.onDiagLog('debug', 'PDO_REQUEST_ACK', JSON.stringify({ requestType: requestType }));
+                    safeDiagLog('debug', 'PDO_REQUEST_ACK', JSON.stringify({ requestType: requestType }));
                     return res;
                 }).catch(function(err) {
-                    window.onDiagLog('error', 'PDO_REQUEST_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'PDO_REQUEST_FAIL', JSON.stringify({
                         requestType: requestType,
                         error: err ? (err.message || String(err)) : 'unknown',
                     }));
@@ -481,14 +485,14 @@ exports.ExposeStore = () => {
                 window.injectToFunction({ module: 'WAWebSignal', function: fnName }, function(func, ...args) {
                     var result;
                     try { result = func.apply(this, args); } catch(err) {
-                        window.onDiagLog('error', 'SIGNAL_DECRYPT_ERROR', JSON.stringify({
+                        safeDiagLog('error', 'SIGNAL_DECRYPT_ERROR', JSON.stringify({
                             op: fnName, error: err ? (err.message || String(err)) : 'unknown',
                         }));
                         throw err;
                     }
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
-                            window.onDiagLog('error', 'SIGNAL_DECRYPT_ERROR', JSON.stringify({
+                            safeDiagLog('error', 'SIGNAL_DECRYPT_ERROR', JSON.stringify({
                                 op: fnName, error: err ? (err.message || String(err)) : 'unknown',
                             }));
                             throw err;
@@ -511,11 +515,11 @@ exports.ExposeStore = () => {
                         else if (args[0] && args[0]._serialized) jid = args[0]._serialized;
                         else if (args[0] && args[0].jid) jid = args[0].jid;
                     } catch(e) {}
-                    window.onDiagLog('debug', 'E2E_SESSION_OP', JSON.stringify({ op: fnName, jid: jid }));
+                    safeDiagLog('debug', 'E2E_SESSION_OP', JSON.stringify({ op: fnName, jid: jid }));
                     var result = func.apply(this, args);
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
-                            window.onDiagLog('error', 'E2E_SESSION_ERROR', JSON.stringify({
+                            safeDiagLog('error', 'E2E_SESSION_ERROR', JSON.stringify({
                                 op: fnName, jid: jid, error: err ? (err.message || String(err)) : 'unknown',
                             }));
                             throw err;
@@ -535,7 +539,7 @@ exports.ExposeStore = () => {
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.catch(function(err) {
-                    window.onDiagLog('error', 'SENDER_KEY_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'SENDER_KEY_FAIL', JSON.stringify({
                         traceId: traceId, sender: sender,
                         error: err ? (err.message || String(err)) : 'unknown',
                     }));
@@ -554,14 +558,14 @@ exports.ExposeStore = () => {
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
-                    window.onDiagLog('debug', 'MEDIA_DOWNLOAD_OK', JSON.stringify({
+                    safeDiagLog('debug', 'MEDIA_DOWNLOAD_OK', JSON.stringify({
                         elapsed: Date.now() - startTime,
                         url: url,
                         size: res ? (res.byteLength || res.size || res.length || 0) : 0,
                     }));
                     return res;
                 }).catch(function(err) {
-                    window.onDiagLog('error', 'MEDIA_DOWNLOAD_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'MEDIA_DOWNLOAD_FAIL', JSON.stringify({
                         elapsed: Date.now() - startTime,
                         url: url,
                         error: err ? (err.message || String(err)) : 'unknown',
@@ -581,12 +585,12 @@ exports.ExposeStore = () => {
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
-                    window.onDiagLog('debug', 'MEDIA_DOWNLOAD2_OK', JSON.stringify({
+                    safeDiagLog('debug', 'MEDIA_DOWNLOAD2_OK', JSON.stringify({
                         elapsed: Date.now() - startTime, directPath: directPath,
                     }));
                     return res;
                 }).catch(function(err) {
-                    window.onDiagLog('error', 'MEDIA_DOWNLOAD2_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'MEDIA_DOWNLOAD2_FAIL', JSON.stringify({
                         elapsed: Date.now() - startTime, directPath: directPath,
                         error: err ? (err.message || String(err)) : 'unknown',
                     }));
@@ -603,10 +607,10 @@ exports.ExposeStore = () => {
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
                     var count = Array.isArray(res) ? res.length : (res ? 1 : 0);
-                    window.onDiagLog('debug', 'PREKEY_GET', JSON.stringify({ count: count }));
+                    safeDiagLog('debug', 'PREKEY_GET', JSON.stringify({ count: count }));
                     return res;
                 }).catch(function(err) {
-                    window.onDiagLog('error', 'PREKEY_GET_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'PREKEY_GET_FAIL', JSON.stringify({
                         error: err ? (err.message || String(err)) : 'unknown',
                     }));
                     throw err;
@@ -618,11 +622,11 @@ exports.ExposeStore = () => {
 
     try {
         window.injectToFunction({ module: 'WAWebPreKeyUtils', function: 'uploadPreKeys' }, function(func, ...args) {
-            window.onDiagLog('debug', 'PREKEY_UPLOAD', JSON.stringify({ count: Array.isArray(args[0]) ? args[0].length : 0 }));
+            safeDiagLog('debug', 'PREKEY_UPLOAD', JSON.stringify({ count: Array.isArray(args[0]) ? args[0].length : 0 }));
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.catch(function(err) {
-                    window.onDiagLog('error', 'PREKEY_UPLOAD_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'PREKEY_UPLOAD_FAIL', JSON.stringify({
                         error: err ? (err.message || String(err)) : 'unknown',
                     }));
                     throw err;
@@ -636,13 +640,7 @@ exports.ExposeStore = () => {
         window.injectToFunction({ module: 'WAWebDeleteSessionJob', function: 'deleteRemoteSession' }, function(func, ...args) {
             var jid = '';
             try { jid = wid(args[0]) || safeStr(args[0]); } catch(e) {}
-            window.onDiagLog('warn', 'SESSION_DELETE', JSON.stringify({ jid: jid }));
-            return func.apply(this, args);
-        });
-    } catch(e) {}
-
-    try {
-        window.injectToFunction({ module: 'WAWebSocket', function: 'sendData' }, function(func, ...args) {
+            safeDiagLog('warn', 'SESSION_DELETE', JSON.stringify({ jid: jid }));
             return func.apply(this, args);
         });
     } catch(e) {}
@@ -654,7 +652,7 @@ exports.ExposeStore = () => {
                 window.injectToFunction({ module: connMods[ci], function: 'onSocketClose' }, function(func, ...args) {
                     var code = args[0];
                     var reason = args[1];
-                    window.onDiagLog('warn', 'SOCKET_CLOSE', JSON.stringify({
+                    safeDiagLog('warn', 'SOCKET_CLOSE', JSON.stringify({
                         code: code, reason: typeof reason === 'string' ? reason.slice(0, 200) : String(reason),
                     }));
                     return func.apply(this, args);
@@ -674,7 +672,7 @@ exports.ExposeStore = () => {
                     }
                 }
             } catch(e) {}
-            window.onDiagLog('debug', 'HISTORY_SYNC_PROCESS', JSON.stringify({
+            safeDiagLog('debug', 'HISTORY_SYNC_PROCESS', JSON.stringify({
                 conversationCount: data && data.conversations ? data.conversations.length : 0,
                 msgCount: msgCount,
                 syncType: data ? data.syncType : null,
@@ -687,7 +685,7 @@ exports.ExposeStore = () => {
     try {
         window.injectToFunction({ module: 'WAWebMsgDeleteCollection', function: 'sendRevoke' }, function(func, ...args) {
             var msg = args[0];
-            window.onDiagLog('debug', 'MSG_REVOKE', JSON.stringify({
+            safeDiagLog('debug', 'MSG_REVOKE', JSON.stringify({
                 id: msg && msg.id ? msg.id._serialized : '',
                 from: msg ? wid(msg.from) : null,
                 type: msg ? msg.type : null,
