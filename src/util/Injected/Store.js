@@ -407,12 +407,27 @@ exports.ExposeStore = () => {
         var result = func.apply(this, args);
         if (result && typeof result.then === 'function') {
             return result.then(function(res) {
-                if (!skipDiag) safeDiagLog('debug', 'ENC_MSG_RESULT', JSON.stringify({
-                    traceId: traceId,
-                    sender: senderJid,
-                    encType: encType,
-                    elapsed: Date.now() - startTime,
-                }));
+                if (!skipDiag) {
+                    var resultInfo = {
+                        traceId: traceId,
+                        sender: senderJid,
+                        encType: encType,
+                        elapsed: Date.now() - startTime,
+                    };
+                    try {
+                        if (res !== undefined && res !== null) {
+                            resultInfo.resultType = typeof res;
+                            if (typeof res === 'object') {
+                                resultInfo.resultKeys = Object.keys(res).slice(0, 15).join(',');
+                                if (res.type) resultInfo.msgType = res.type;
+                                if (res.id) resultInfo.msgId = typeof res.id === 'object' ? res.id._serialized || res.id.id : String(res.id);
+                                if (res.body !== undefined) resultInfo.hasBody = !!res.body;
+                                if (res.isNewMsg !== undefined) resultInfo.isNewMsg = res.isNewMsg;
+                            }
+                        }
+                    } catch(e2) {}
+                    safeDiagLog('debug', 'ENC_MSG_RESULT', JSON.stringify(resultInfo));
+                }
                 return res;
             }).catch(function(err) {
                 safeDiagLog('error', 'ENC_MSG_FAIL', JSON.stringify({
@@ -707,6 +722,248 @@ exports.ExposeStore = () => {
             return func.apply(this, args);
         });
     } catch(e) {}
+
+    // [L13] Hook downloadAndMaybeDecrypt to understand filehash mismatch root cause
+    try {
+        window.injectToFunction({ module: 'WAWebDownloadManager', function: 'downloadManager.downloadAndMaybeDecrypt' }, function(func, ...args) {
+            var opts = args[0] || {};
+            var startTime = Date.now();
+            var inputLog = {
+                directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
+                encFilehash: opts.encFilehash || null,
+                filehash: opts.filehash || null,
+                mediaKeyPrefix: null,
+                mediaKeyTimestamp: opts.mediaKeyTimestamp,
+                type: opts.type,
+                hasSignal: !!opts.signal,
+            };
+            try {
+                if (opts.mediaKey) {
+                    var keyBytes = new Uint8Array(opts.mediaKey.slice(0, 8));
+                    inputLog.mediaKeyPrefix = btoa(String.fromCharCode.apply(null, keyBytes));
+                    inputLog.mediaKeyLength = opts.mediaKey.byteLength || opts.mediaKey.length;
+                }
+            } catch(e) {}
+
+            safeDiagLog('debug', 'DL_DECRYPT_START', JSON.stringify(inputLog));
+
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(decrypted) {
+                    // Success - compute hash of result to compare
+                    var resultInfo = {
+                        elapsed: Date.now() - startTime,
+                        byteLength: decrypted ? (decrypted.byteLength || 0) : 0,
+                        type: opts.type,
+                    };
+                    // Try to compute SHA-256 of the decrypted result
+                    if (decrypted && typeof crypto !== 'undefined' && crypto.subtle) {
+                        return crypto.subtle.digest('SHA-256', decrypted).then(function(hashBuf) {
+                            var hashArr = new Uint8Array(hashBuf);
+                            resultInfo.computedFilehash = btoa(String.fromCharCode.apply(null, hashArr));
+                            resultInfo.expectedFilehash = opts.filehash;
+                            resultInfo.hashMatch = resultInfo.computedFilehash === opts.filehash;
+                            safeDiagLog('debug', 'DL_DECRYPT_OK', JSON.stringify(resultInfo));
+                            return decrypted;
+                        }).catch(function() {
+                            safeDiagLog('debug', 'DL_DECRYPT_OK', JSON.stringify(resultInfo));
+                            return decrypted;
+                        });
+                    }
+                    safeDiagLog('debug', 'DL_DECRYPT_OK', JSON.stringify(resultInfo));
+                    return decrypted;
+                }).catch(function(err) {
+                    var errorInfo = {
+                        elapsed: Date.now() - startTime,
+                        type: opts.type,
+                        errorName: err ? err.name : null,
+                        errorMessage: err ? String(err.message || err).substring(0, 500) : null,
+                        errorStatus: err ? err.status : null,
+                        errorCode: err ? err.code : null,
+                        expectedEncFilehash: opts.encFilehash,
+                        expectedFilehash: opts.filehash,
+                    };
+                    // Extract ALL properties from the error object
+                    try {
+                        var allProps = {};
+                        for (var k in err) {
+                            if (err.hasOwnProperty(k) && !['message', 'stack', 'name'].includes(k)) {
+                                var v = err[k];
+                                allProps[k] = (typeof v === 'object' && v !== null) 
+                                    ? JSON.stringify(v).substring(0, 300) 
+                                    : String(v);
+                            }
+                        }
+                        errorInfo.errorProps = allProps;
+                        // Also check prototype chain for getters
+                        var proto = Object.getPrototypeOf(err);
+                        if (proto && proto !== Error.prototype) {
+                            var descriptors = Object.getOwnPropertyNames(proto);
+                            var protoProps = {};
+                            for (var pi = 0; pi < descriptors.length; pi++) {
+                                var pn = descriptors[pi];
+                                if (!['constructor', 'message', 'stack', 'name', 'toString'].includes(pn)) {
+                                    try { protoProps[pn] = String(err[pn]).substring(0, 200); } catch(e2) {}
+                                }
+                            }
+                            if (Object.keys(protoProps).length > 0) errorInfo.errorProtoProps = protoProps;
+                        }
+                    } catch(e2) {}
+                    safeDiagLog('error', 'DL_DECRYPT_FAIL', JSON.stringify(errorInfo));
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {
+        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', JSON.stringify({ hook: 'downloadAndMaybeDecrypt', error: String(e) }));
+    }
+
+    // [L13] Hook msg.downloadMedia (the internal WA function, not wwjs) to see what resolve does
+    try {
+        window.injectToFunction({ module: 'WAWebMediaStorage', function: 'default.prototype.downloadMedia' }, function(func, ...args) {
+            var opts = args[0] || {};
+            var startTime = Date.now();
+            safeDiagLog('debug', 'WA_INTERNAL_DOWNLOAD_START', JSON.stringify({
+                downloadEvenIfExpensive: opts.downloadEvenIfExpensive,
+                rmrReason: opts.rmrReason,
+                hasThis: !!this,
+                mediaStage: this && this.mediaStage,
+                type: this && this.type,
+            }));
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(res) {
+                    safeDiagLog('debug', 'WA_INTERNAL_DOWNLOAD_OK', JSON.stringify({
+                        elapsed: Date.now() - startTime,
+                        mediaStageAfter: this && this.mediaStage,
+                        hasResult: !!res,
+                    }));
+                    return res;
+                }.bind(this)).catch(function(err) {
+                    safeDiagLog('error', 'WA_INTERNAL_DOWNLOAD_FAIL', JSON.stringify({
+                        elapsed: Date.now() - startTime,
+                        errorName: err ? err.name : null,
+                        errorMessage: err ? String(err.message || err).substring(0, 300) : null,
+                        mediaStageAfter: this && this.mediaStage,
+                    }));
+                    throw err;
+                }.bind(this));
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    // [L13] Hook to detect BACKFILL message processing - check if messages are marked as placeholder
+    try {
+        window.injectToFunction({ module: 'WAWebMsgModel', function: 'default.prototype.isPlaceholder' }, function(func, ...args) {
+            var result = func.apply(this, args);
+            // Only log when isPlaceholder returns true (interesting case)
+            if (result) {
+                safeDiagLog('debug', 'MSG_IS_PLACEHOLDER', JSON.stringify({
+                    id: this.id ? this.id._serialized : null,
+                    type: this.type,
+                    hasMedia: this.hasMedia,
+                }));
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    // [L13] Check WAMediaCalculateFilehash to understand hash computation
+    try {
+        window.injectToFunction({ module: 'WAMediaCalculateFilehash', function: 'calculateFilehash' }, function(func, ...args) {
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(hash) {
+                    safeDiagLog('debug', 'FILEHASH_CALC', JSON.stringify({
+                        inputSize: args[0] ? (args[0].byteLength || args[0].size || args[0].length || 0) : 0,
+                        resultHash: hash ? String(hash).substring(0, 50) : null,
+                    }));
+                    return hash;
+                });
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    // [SILENT_LOSS] Wrap Store.Msg.add to trace ALL add attempts
+    try {
+        const origMsgAdd = window.Store.Msg.add.bind(window.Store.Msg);
+        window.Store.Msg.add = function(...args) {
+            try {
+                const models = Array.isArray(args[0]) ? args[0] : [args[0]];
+                const opts = args[1] || {};
+                for (const m of models) {
+                    if (!m) continue;
+                    const id = m.id?._serialized || m.id?.id || '';
+                    const from = m.from?._serialized || m.from?.user || '';
+                    if (from === 'status@broadcast' || from.includes('@g.us')) continue;
+                    const alreadyExists = window.Store.Msg.get(id);
+                    safeDiagLog('debug', 'MSG_ADD_ATTEMPT', JSON.stringify({
+                        traceId: id,
+                        from: from,
+                        type: m.type,
+                        isNewMsg: !!m.isNewMsg,
+                        alreadyExists: !!alreadyExists,
+                        mergeOption: !!opts.merge,
+                        hasBody: !!(m.body || m.caption),
+                    }));
+                }
+            } catch(e) {}
+            return origMsgAdd(...args);
+        };
+        safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.add-wrapper');
+    } catch(e) {
+        safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: 'Store.Msg.add-wrapper', reason: String(e) }));
+    }
+
+    // [SILENT_LOSS] Hook Store.Msg.addAndGet if it exists
+    try {
+        if (typeof window.Store.Msg.addAndGet === 'function') {
+            var origAddAndGet = window.Store.Msg.addAndGet.bind(window.Store.Msg);
+            window.Store.Msg.addAndGet = function(...args) {
+                try {
+                    var m = args[0];
+                    var id = m?.id?._serialized || m?.id?.id || '';
+                    var from = m?.from?._serialized || m?.from?.user || '';
+                    if (from !== 'status@broadcast' && !from.includes('@g.us')) {
+                        safeDiagLog('debug', 'MSG_ADD_AND_GET', JSON.stringify({
+                            traceId: id, from: from, type: m?.type, isNewMsg: !!m?.isNewMsg,
+                        }));
+                    }
+                } catch(e) {}
+                return origAddAndGet(...args);
+            };
+            safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.addAndGet-wrapper');
+        }
+    } catch(e) {}
+
+    // [SILENT_LOSS] Try to hook modules between decryption and Store.Msg.add
+    var msgProcessModules = [
+        'WAWebHandleReceivedMsg',
+        'WAWebMsgHandler',
+        'WAWebProcessMsg',
+        'WAWebChatMsgHandler',
+        'WAWebAddMsgToChat',
+        'WAWebMsgProcessing',
+        'WAWebProcessReceivedMessages',
+        'WAWebHandleIncomingMsg',
+    ];
+
+    for (var mi = 0; mi < msgProcessModules.length; mi++) {
+        try {
+            var modName = msgProcessModules[mi];
+            var mod = window.require(modName);
+            if (mod) {
+                var fnNames = Object.keys(mod).filter(function(k) { return typeof mod[k] === 'function'; });
+                safeDiagLog('debug', 'MSG_PROCESS_MODULE_FOUND', JSON.stringify({
+                    module: modName,
+                    functions: fnNames.slice(0, 20).join(','),
+                }));
+            }
+        } catch(e) {}
+    }
 
     try {
         window.injectToFunction({ module: 'WAWebMsgDeleteCollection', function: 'sendRevoke' }, function(func, ...args) {
