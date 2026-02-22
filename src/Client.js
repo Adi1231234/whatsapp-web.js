@@ -804,8 +804,10 @@ class Client extends EventEmitter {
             // Helper: check if message type indicates a file/image/media attachment
             // All diag logs use debug level — actual errors are logged by the app's parseIncomingMessage
 
+            // Helper namespace for diagnostic functions
+            window.__wwjsDiag = window.__wwjsDiag || {};
             // Helper: resolve WID → phone number. Returns phone string or the original serialized WID.
-            window._resolvePhone = (wid) => {
+            window.__wwjsDiag.resolvePhone = (wid) => {
                 try {
                     const serialized = wid?._serialized || String(wid || '');
                     if (!serialized) return '';
@@ -818,14 +820,14 @@ class Client extends EventEmitter {
                 }
             };
             // Helper: build common trace fields for a message { traceId, from, to }
-            window._diagTrace = (msg) => {
+            window.__wwjsDiag.diagTrace = (msg) => {
                 try {
                     const traceId = msg.id?._serialized || '';
                     // from = actual sender (author for groups, from for DMs)
                     const senderWid = msg.author || msg.from;
-                    const from = window._resolvePhone(senderWid);
+                    const from = window.__wwjsDiag.resolvePhone(senderWid);
                     // to = recipient (the connected account)
-                    const to = window._resolvePhone(msg.to);
+                    const to = window.__wwjsDiag.resolvePhone(msg.to);
                     return { traceId, from, to };
                 } catch (e) {
                     return { traceId: msg.id?._serialized || '', from: msg.from?._serialized || '', to: msg.to?._serialized || '' };
@@ -840,7 +842,7 @@ class Client extends EventEmitter {
                 var idRemote = msg.id?.remote?._serialized || '';
                 if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !msg.isStatusV3 && idRemote !== 'status@broadcast') {
                     window.onDiagLog('debug', 'change:type', JSON.stringify({
-                        ...window._diagTrace(msg),
+                        ...window.__wwjsDiag.diagTrace(msg),
                         newType: msg.type
                     }));
                 }

@@ -555,6 +555,7 @@ exports.LoadUtils = () => {
                 id: message.id?._serialized,
                 type: message.type
             }));
+            return null;
         }
 
         msg.isEphemeral = message.isEphemeral;

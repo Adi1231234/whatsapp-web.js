@@ -240,7 +240,7 @@ exports.ExposeStore = () => {
         try {
             let module = window.require(target.module);
             if (!module) {
-                safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: hookId, reason: 'module not found' }));
+                safeDiagLog('warn', 'HOOK_FAIL', { hook: hookId, reason: 'module not found' });
                 return;
             }
 
@@ -249,7 +249,7 @@ exports.ExposeStore = () => {
 
             for (const key of path) {
                 if (!module[key]) {
-                    safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: hookId, reason: 'path not found: ' + key }));
+                    safeDiagLog('warn', 'HOOK_FAIL', { hook: hookId, reason: 'path not found: ' + key });
                     return;
                 }
                 module = module[key];
@@ -257,7 +257,7 @@ exports.ExposeStore = () => {
 
             const originalFunction = module[funcName];
             if (typeof originalFunction !== 'function') {
-                safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: hookId, reason: 'not a function' }));
+                safeDiagLog('warn', 'HOOK_FAIL', { hook: hookId, reason: 'not a function' });
                 return;
             }
 
@@ -271,14 +271,14 @@ exports.ExposeStore = () => {
 
             safeDiagLog('debug', 'HOOK_OK', hookId);
         } catch(e) {
-            safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: hookId, reason: e ? (e.message || String(e)) : 'unknown' }));
+            safeDiagLog('warn', 'HOOK_FAIL', { hook: hookId, reason: e ? (e.message || String(e)) : 'unknown' });
             return;
         }
     };
 
-    window.injectToFunction({ module: 'WAWebBackendJobsCommon', function: 'mediaTypeFromProtobuf' }, (func, ...args) => { const [proto] = args; return proto.locationMessage ? null : func(...args); });
+    window.injectToFunction({ module: 'WAWebBackendJobsCommon', function: 'mediaTypeFromProtobuf' }, function(func, ...args) { const proto = args[0]; return proto.locationMessage ? null : func.apply(this, args); });
 
-    window.injectToFunction({ module: 'WAWebE2EProtoUtils', function: 'typeAttributeFromProtobuf' }, (func, ...args) => { const [proto] = args; return proto.locationMessage || proto.groupInviteMessage ? 'text' : func(...args); });
+    window.injectToFunction({ module: 'WAWebE2EProtoUtils', function: 'typeAttributeFromProtobuf' }, function(func, ...args) { const proto = args[0]; return proto.locationMessage || proto.groupInviteMessage ? 'text' : func.apply(this, args); });
 
     function wid(v) {
         if (v == null) return null;
@@ -306,13 +306,13 @@ exports.ExposeStore = () => {
     window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, function(func, ...args) {
         var params = args[0] || {};
         if (_isStatusOrGroup(params.to)) return func.apply(this, args);
-        safeDiagLog('debug', 'RETRY_RECEIPT_SENT', JSON.stringify({
+        safeDiagLog('debug', 'RETRY_RECEIPT_SENT', {
             externalId: params.externalId,
             to: wid(params.to),
             retryCount: params.retryCount,
             retryReason: params.retryReason,
             isPeer: params.isPeer,
-        }));
+        });
         return func.apply(this, args);
     });
 
@@ -342,7 +342,7 @@ exports.ExposeStore = () => {
             logData.msgInfoRaw = safeStr(msgInfo);
             logData.decryptResultRaw = safeStr(decryptResult);
         }
-        safeDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', JSON.stringify(logData));
+        safeDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', logData);
         return func.apply(this, args);
     });
 
@@ -372,13 +372,13 @@ exports.ExposeStore = () => {
                 participant = wid(node.participantLid) || wid(node.participant);
             }
         } catch(e) {}
-        safeDiagLog('debug', 'IDENTITY_CHANGE', JSON.stringify({
+        safeDiagLog('debug', 'IDENTITY_CHANGE', {
             from: from,
             participant: participant !== from ? participant : null,
             argCount: args.length,
             arg0Keys: arg0Keys.join(','),
             arg0Raw: safeStr(node),
-        }));
+        });
         return func.apply(this, args);
     });
 
@@ -426,18 +426,18 @@ exports.ExposeStore = () => {
                             }
                         }
                     } catch(e2) {}
-                    safeDiagLog('debug', 'ENC_MSG_RESULT', JSON.stringify(resultInfo));
+                    safeDiagLog('debug', 'ENC_MSG_RESULT', resultInfo);
                 }
                 return res;
             }).catch(function(err) {
-                safeDiagLog('error', 'ENC_MSG_FAIL', JSON.stringify({
+                safeDiagLog('error', 'ENC_MSG_FAIL', {
                     traceId: traceId,
                     sender: senderJid,
                     encType: encType,
                     elapsed: Date.now() - startTime,
                     error: err ? (err.message || String(err)) : 'unknown',
                     errorName: err ? err.name : null,
-                }));
+                });
                 throw err;
             });
         }
@@ -481,14 +481,14 @@ exports.ExposeStore = () => {
                 }
             }
         } catch(e) { details.parseError = String(e); }
-        safeDiagLog('debug', 'PEER_MSG', JSON.stringify({ msgType: msgType, details: details }));
+        safeDiagLog('debug', 'PEER_MSG', { msgType: msgType, details: details });
         var result = func.apply(this, args);
         if (result && typeof result.then === 'function') {
             return result.catch(function(err) {
-                safeDiagLog('error', 'PEER_MSG_ERROR', JSON.stringify({
+                safeDiagLog('error', 'PEER_MSG_ERROR', {
                     msgType: msgType,
                     error: err ? (err.message || String(err)) : 'unknown',
-                }));
+                });
                 throw err;
             });
         }
@@ -498,20 +498,20 @@ exports.ExposeStore = () => {
     try {
         window.injectToFunction({ module: 'WAWebSendNonMessageDataRequest', function: 'sendPeerDataOperationRequest' }, function(func, ...args) {
             var requestType = args[0];
-            safeDiagLog('debug', 'PDO_REQUEST_SENT', JSON.stringify({
+            safeDiagLog('debug', 'PDO_REQUEST_SENT', {
                 requestType: requestType,
                 params: safeStr(args[1]),
-            }));
+            });
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
-                    safeDiagLog('debug', 'PDO_REQUEST_ACK', JSON.stringify({ requestType: requestType }));
+                    safeDiagLog('debug', 'PDO_REQUEST_ACK', { requestType: requestType });
                     return res;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'PDO_REQUEST_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'PDO_REQUEST_FAIL', {
                         requestType: requestType,
                         error: err ? (err.message || String(err)) : 'unknown',
-                    }));
+                    });
                     throw err;
                 });
             }
@@ -526,16 +526,16 @@ exports.ExposeStore = () => {
                 window.injectToFunction({ module: 'WAWebSignal', function: fnName }, function(func, ...args) {
                     var result;
                     try { result = func.apply(this, args); } catch(err) {
-                        safeDiagLog('error', 'SIGNAL_DECRYPT_ERROR', JSON.stringify({
+                        safeDiagLog('error', 'SIGNAL_DECRYPT_ERROR', {
                             op: fnName, error: err ? (err.message || String(err)) : 'unknown',
-                        }));
+                        });
                         throw err;
                     }
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
-                            safeDiagLog('error', 'SIGNAL_DECRYPT_ERROR', JSON.stringify({
+                            safeDiagLog('error', 'SIGNAL_DECRYPT_ERROR', {
                                 op: fnName, error: err ? (err.message || String(err)) : 'unknown',
-                            }));
+                            });
                             throw err;
                         });
                     }
@@ -556,13 +556,13 @@ exports.ExposeStore = () => {
                         else if (args[0] && args[0]._serialized) jid = args[0]._serialized;
                         else if (args[0] && args[0].jid) jid = args[0].jid;
                     } catch(e) {}
-                    safeDiagLog('debug', 'E2E_SESSION_OP', JSON.stringify({ op: fnName, jid: jid }));
+                    safeDiagLog('debug', 'E2E_SESSION_OP', { op: fnName, jid: jid });
                     var result = func.apply(this, args);
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
-                            safeDiagLog('error', 'E2E_SESSION_ERROR', JSON.stringify({
+                            safeDiagLog('error', 'E2E_SESSION_ERROR', {
                                 op: fnName, jid: jid, error: err ? (err.message || String(err)) : 'unknown',
-                            }));
+                            });
                             throw err;
                         });
                     }
@@ -580,10 +580,10 @@ exports.ExposeStore = () => {
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.catch(function(err) {
-                    safeDiagLog('error', 'SENDER_KEY_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'SENDER_KEY_FAIL', {
                         traceId: traceId, sender: sender,
                         error: err ? (err.message || String(err)) : 'unknown',
-                    }));
+                    });
                     throw err;
                 });
             }
@@ -599,18 +599,18 @@ exports.ExposeStore = () => {
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
-                    safeDiagLog('debug', 'MEDIA_DOWNLOAD_OK', JSON.stringify({
+                    safeDiagLog('debug', 'MEDIA_DOWNLOAD_OK', {
                         elapsed: Date.now() - startTime,
                         url: url,
                         size: res ? (res.byteLength || res.size || res.length || 0) : 0,
-                    }));
+                    });
                     return res;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'MEDIA_DOWNLOAD_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'MEDIA_DOWNLOAD_FAIL', {
                         elapsed: Date.now() - startTime,
                         url: url,
                         error: err ? (err.message || String(err)) : 'unknown',
-                    }));
+                    });
                     throw err;
                 });
             }
@@ -626,15 +626,15 @@ exports.ExposeStore = () => {
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
-                    safeDiagLog('debug', 'MEDIA_DOWNLOAD2_OK', JSON.stringify({
+                    safeDiagLog('debug', 'MEDIA_DOWNLOAD2_OK', {
                         elapsed: Date.now() - startTime, directPath: directPath,
-                    }));
+                    });
                     return res;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'MEDIA_DOWNLOAD2_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'MEDIA_DOWNLOAD2_FAIL', {
                         elapsed: Date.now() - startTime, directPath: directPath,
                         error: err ? (err.message || String(err)) : 'unknown',
-                    }));
+                    });
                     throw err;
                 });
             }
@@ -648,12 +648,12 @@ exports.ExposeStore = () => {
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
                     var count = Array.isArray(res) ? res.length : (res ? 1 : 0);
-                    safeDiagLog('debug', 'PREKEY_GET', JSON.stringify({ count: count }));
+                    safeDiagLog('debug', 'PREKEY_GET', { count: count });
                     return res;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'PREKEY_GET_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'PREKEY_GET_FAIL', {
                         error: err ? (err.message || String(err)) : 'unknown',
-                    }));
+                    });
                     throw err;
                 });
             }
@@ -663,13 +663,13 @@ exports.ExposeStore = () => {
 
     try {
         window.injectToFunction({ module: 'WAWebPreKeyUtils', function: 'uploadPreKeys' }, function(func, ...args) {
-            safeDiagLog('debug', 'PREKEY_UPLOAD', JSON.stringify({ count: Array.isArray(args[0]) ? args[0].length : 0 }));
+            safeDiagLog('debug', 'PREKEY_UPLOAD', { count: Array.isArray(args[0]) ? args[0].length : 0 });
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.catch(function(err) {
-                    safeDiagLog('error', 'PREKEY_UPLOAD_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'PREKEY_UPLOAD_FAIL', {
                         error: err ? (err.message || String(err)) : 'unknown',
-                    }));
+                    });
                     throw err;
                 });
             }
@@ -681,7 +681,7 @@ exports.ExposeStore = () => {
         window.injectToFunction({ module: 'WAWebDeleteSessionJob', function: 'deleteRemoteSession' }, function(func, ...args) {
             var jid = '';
             try { jid = wid(args[0]) || safeStr(args[0]); } catch(e) {}
-            safeDiagLog('warn', 'SESSION_DELETE', JSON.stringify({ jid: jid }));
+            safeDiagLog('warn', 'SESSION_DELETE', { jid: jid });
             return func.apply(this, args);
         });
     } catch(e) {}
@@ -693,9 +693,9 @@ exports.ExposeStore = () => {
                 window.injectToFunction({ module: connMods[ci], function: 'onSocketClose' }, function(func, ...args) {
                     var code = args[0];
                     var reason = args[1];
-                    safeDiagLog('warn', 'SOCKET_CLOSE', JSON.stringify({
+                    safeDiagLog('warn', 'SOCKET_CLOSE', {
                         code: code, reason: typeof reason === 'string' ? reason.slice(0, 200) : String(reason),
-                    }));
+                    });
                     return func.apply(this, args);
                 });
             } catch(e) {}
@@ -713,12 +713,12 @@ exports.ExposeStore = () => {
                     }
                 }
             } catch(e) {}
-            safeDiagLog('debug', 'HISTORY_SYNC_PROCESS', JSON.stringify({
+            safeDiagLog('debug', 'HISTORY_SYNC_PROCESS', {
                 conversationCount: data && data.conversations ? data.conversations.length : 0,
                 msgCount: msgCount,
                 syncType: data ? data.syncType : null,
                 progress: data ? data.progress : null,
-            }));
+            });
             return func.apply(this, args);
         });
     } catch(e) {}
@@ -745,30 +745,16 @@ exports.ExposeStore = () => {
                 }
             } catch(e) {}
 
-            safeDiagLog('debug', 'DL_DECRYPT_START', JSON.stringify(inputLog));
+            safeDiagLog('debug', 'DL_DECRYPT_START', inputLog);
 
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(decrypted) {
-                    var resultInfo = {
+                    safeDiagLog('debug', 'DL_DECRYPT_OK', {
                         elapsed: Date.now() - startTime,
                         byteLength: decrypted ? (decrypted.byteLength || 0) : 0,
                         type: opts.type,
-                    };
-                    if (decrypted && typeof crypto !== 'undefined' && crypto.subtle) {
-                        return crypto.subtle.digest('SHA-256', decrypted).then(function(hashBuf) {
-                            var hashArr = new Uint8Array(hashBuf);
-                            resultInfo.computedFilehash = btoa(String.fromCharCode.apply(null, hashArr));
-                            resultInfo.expectedFilehash = opts.filehash;
-                            resultInfo.hashMatch = resultInfo.computedFilehash === opts.filehash;
-                            safeDiagLog('debug', 'DL_DECRYPT_OK', JSON.stringify(resultInfo));
-                            return decrypted;
-                        }).catch(function() {
-                            safeDiagLog('debug', 'DL_DECRYPT_OK', JSON.stringify(resultInfo));
-                            return decrypted;
-                        });
-                    }
-                    safeDiagLog('debug', 'DL_DECRYPT_OK', JSON.stringify(resultInfo));
+                    });
                     return decrypted;
                 }).catch(function(err) {
                     var errorInfo = {
@@ -807,14 +793,14 @@ exports.ExposeStore = () => {
                             if (Object.keys(protoProps).length > 0) errorInfo.errorProtoProps = protoProps;
                         }
                     } catch(e2) {}
-                    safeDiagLog('error', 'DL_DECRYPT_FAIL', JSON.stringify(errorInfo));
+                    safeDiagLog('error', 'DL_DECRYPT_FAIL', errorInfo);
                     throw err;
                 });
             }
             return result;
         });
     } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', JSON.stringify({ hook: 'downloadAndMaybeDecrypt', error: String(e) }));
+        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'downloadAndMaybeDecrypt', error: String(e) });
     }
 
     // [L13] Hook WAWebMmsClient.download to wrap the ciphertextValidator and capture actual vs expected hash
@@ -825,61 +811,62 @@ exports.ExposeStore = () => {
             var expectedHash = opts.filehash || opts.encFilehash; // download() receives encFilehash as 'filehash' param
 
             if (originalValidator) {
-                opts.ciphertextValidator = function(downloadedBytes) {
+                args[0] = Object.assign({}, opts, { ciphertextValidator: function(downloadedBytes) {
                     // Compute hash once and compare - avoids double SHA-256 computation
                     var size = downloadedBytes ? (downloadedBytes.byteLength || 0) : 0;
                     return window.require('WAMediaCalculateFilehash').calculateFilehash(downloadedBytes).then(function(computedHash) {
                         var isValid = computedHash === expectedHash;
                         if (!isValid) {
-                            safeDiagLog('error', 'ENC_HASH_MISMATCH_DETAIL', JSON.stringify({
+                            safeDiagLog('error', 'ENC_HASH_MISMATCH_DETAIL', {
                                 computedEncHash: computedHash,
                                 expectedEncHash: expectedHash,
                                 downloadedSize: size,
                                 directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
                                 debugString: opts.debugString || null,
-                            }));
+                            });
                         }
                         return isValid;
                     }).catch(function(e) {
-                        safeDiagLog('error', 'ENC_HASH_CALC_ERROR', JSON.stringify({
+                        safeDiagLog('error', 'ENC_HASH_CALC_ERROR', {
                             error: String(e),
                             downloadedSize: size,
-                        }));
+                        });
                         return originalValidator(downloadedBytes);
                     });
-                };
+                } });
+                opts = args[0];
             }
 
-            safeDiagLog('debug', 'MMS_DOWNLOAD_START', JSON.stringify({
+            safeDiagLog('debug', 'MMS_DOWNLOAD_START', {
                 directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
                 expectedHash: expectedHash,
                 hasValidator: !!originalValidator,
                 type: opts.type,
                 mode: opts.mode,
                 staticUrl: opts.staticUrl ? 'present' : null,
-            }));
+            });
 
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(data) {
-                    safeDiagLog('debug', 'MMS_DOWNLOAD_OK', JSON.stringify({
+                    safeDiagLog('debug', 'MMS_DOWNLOAD_OK', {
                         directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
                         size: data ? (data.byteLength || 0) : 0,
-                    }));
+                    });
                     return data;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'MMS_DOWNLOAD_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'MMS_DOWNLOAD_FAIL', {
                         directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
                         errorName: err ? err.name : null,
                         errorMessage: err ? String(err.message || err).substring(0, 300) : null,
-                    }));
+                    });
                     throw err;
                 });
             }
             return result;
         });
     } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', JSON.stringify({ hook: 'WAWebMmsClient.download', error: String(e) }));
+        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'WAWebMmsClient.download', error: String(e) });
     }
 
     // [L13] Hook WAWebCryptoDecryptMedia to capture decryption details
@@ -887,50 +874,36 @@ exports.ExposeStore = () => {
         window.injectToFunction({ module: 'WAWebCryptoDecryptMedia', function: 'default' }, function(func, ...args) {
             var opts = args[0] || {};
             var startTime = Date.now();
-            safeDiagLog('debug', 'DECRYPT_MEDIA_START', JSON.stringify({
+            safeDiagLog('debug', 'DECRYPT_MEDIA_START', {
                 expectedPlaintextHash: opts.expectedPlaintextHash || null,
                 ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
                 hasMediaKeys: !!opts.mediaKeys,
                 debugString: opts.debugString || null,
-            }));
+            });
 
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(plaintext) {
-                    var info = {
+                    safeDiagLog('debug', 'DECRYPT_MEDIA_OK', {
                         elapsed: Date.now() - startTime,
                         plaintextSize: plaintext ? (plaintext.byteLength || 0) : 0,
-                    };
-                    // Compute plaintext hash for logging
-                    if (plaintext && typeof crypto !== 'undefined' && crypto.subtle) {
-                        return crypto.subtle.digest('SHA-256', plaintext).then(function(hashBuf) {
-                            info.computedPlaintextHash = btoa(String.fromCharCode.apply(null, new Uint8Array(hashBuf)));
-                            info.expectedPlaintextHash = opts.expectedPlaintextHash;
-                            info.plaintextHashMatch = info.computedPlaintextHash === opts.expectedPlaintextHash;
-                            safeDiagLog('debug', 'DECRYPT_MEDIA_OK', JSON.stringify(info));
-                            return plaintext;
-                        }).catch(function() {
-                            safeDiagLog('debug', 'DECRYPT_MEDIA_OK', JSON.stringify(info));
-                            return plaintext;
-                        });
-                    }
-                    safeDiagLog('debug', 'DECRYPT_MEDIA_OK', JSON.stringify(info));
+                    });
                     return plaintext;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'DECRYPT_MEDIA_FAIL', JSON.stringify({
+                    safeDiagLog('error', 'DECRYPT_MEDIA_FAIL', {
                         elapsed: Date.now() - startTime,
                         errorName: err ? err.name : null,
                         errorMessage: err ? String(err.message || err).substring(0, 500) : null,
                         expectedPlaintextHash: opts.expectedPlaintextHash,
                         ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
-                    }));
+                    });
                     throw err;
                 });
             }
             return result;
         });
     } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', JSON.stringify({ hook: 'WAWebCryptoDecryptMedia', error: String(e) }));
+        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'WAWebCryptoDecryptMedia', error: String(e) });
     }
 
     // [L13] Hook WAWebValidateMediaFilehash to capture unencrypted media hash validation
@@ -944,11 +917,11 @@ exports.ExposeStore = () => {
                     if (!isValid) {
                         // Hash mismatch on unencrypted media - compute actual hash
                         return window.require('WAMediaCalculateFilehash').calculateFilehash(data).then(function(actual) {
-                            safeDiagLog('error', 'PLAINTEXT_HASH_MISMATCH_DETAIL', JSON.stringify({
+                            safeDiagLog('error', 'PLAINTEXT_HASH_MISMATCH_DETAIL', {
                                 computedHash: actual,
                                 expectedHash: expectedHash,
                                 dataSize: data ? (data.byteLength || 0) : 0,
-                            }));
+                            });
                             return isValid;
                         }).catch(function() { return isValid; });
                     }
@@ -964,32 +937,17 @@ exports.ExposeStore = () => {
         window.injectToFunction({ module: 'WAWebMsgModel', function: 'default.prototype.isPlaceholder' }, function(func, ...args) {
             var result = func.apply(this, args);
             if (result) {
-                safeDiagLog('debug', 'MSG_IS_PLACEHOLDER', JSON.stringify({
+                safeDiagLog('debug', 'MSG_IS_PLACEHOLDER', {
                     id: this.id ? this.id._serialized : null,
                     type: this.type,
                     hasMedia: this.hasMedia,
-                }));
-            }
-            return result;
-        });
-    } catch(e) {}
-
-    // [L13] Hook calculateFilehash for tracing
-    try {
-        window.injectToFunction({ module: 'WAMediaCalculateFilehash', function: 'calculateFilehash' }, function(func, ...args) {
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(hash) {
-                    safeDiagLog('debug', 'FILEHASH_CALC', JSON.stringify({
-                        inputSize: args[0] ? (args[0].byteLength || args[0].size || args[0].length || 0) : 0,
-                        resultHash: hash ? String(hash).substring(0, 50) : null,
-                    }));
-                    return hash;
                 });
             }
             return result;
         });
     } catch(e) {}
+
+    // [L13] FILEHASH_CALC hook removed (M1 — too noisy, low diagnostic value)
 
     // [SILENT_LOSS] Wrap Store.Msg.add to trace ALL add attempts
     try {
@@ -1004,7 +962,7 @@ exports.ExposeStore = () => {
                     const from = m.from?._serialized || m.from?.user || '';
                     if (from === 'status@broadcast' || from.includes('@g.us')) continue;
                     const alreadyExists = window.Store.Msg.get(id);
-                    safeDiagLog('debug', 'MSG_ADD_ATTEMPT', JSON.stringify({
+                    safeDiagLog('debug', 'MSG_ADD_ATTEMPT', {
                         traceId: id,
                         from: from,
                         type: m.type,
@@ -1012,14 +970,14 @@ exports.ExposeStore = () => {
                         alreadyExists: !!alreadyExists,
                         mergeOption: !!opts.merge,
                         hasBody: !!(m.body || m.caption),
-                    }));
+                    });
                 }
             } catch(e) {}
             return origMsgAdd(...args);
         };
         safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.add-wrapper');
     } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: 'Store.Msg.add-wrapper', reason: String(e) }));
+        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'Store.Msg.add-wrapper', reason: String(e) });
     }
 
     // [SILENT_LOSS] Hook Store.Msg.addAndGet if it exists
@@ -1032,9 +990,9 @@ exports.ExposeStore = () => {
                     var id = m?.id?._serialized || m?.id?.id || '';
                     var from = m?.from?._serialized || m?.from?.user || '';
                     if (from !== 'status@broadcast' && !from.includes('@g.us')) {
-                        safeDiagLog('debug', 'MSG_ADD_AND_GET', JSON.stringify({
+                        safeDiagLog('debug', 'MSG_ADD_AND_GET', {
                             traceId: id, from: from, type: m?.type, isNewMsg: !!m?.isNewMsg,
-                        }));
+                        });
                     }
                 } catch(e) {}
                 return origAddAndGet(...args);
@@ -1061,10 +1019,10 @@ exports.ExposeStore = () => {
             var mod = window.require(modName);
             if (mod) {
                 var fnNames = Object.keys(mod).filter(function(k) { return typeof mod[k] === 'function'; });
-                safeDiagLog('debug', 'MSG_PROCESS_MODULE_FOUND', JSON.stringify({
+                safeDiagLog('debug', 'MSG_PROCESS_MODULE_FOUND', {
                     module: modName,
                     functions: fnNames.slice(0, 20).join(','),
-                }));
+                });
             }
         } catch(e) {}
     }
@@ -1073,11 +1031,11 @@ exports.ExposeStore = () => {
         window.injectToFunction({ module: 'WAWebMsgDeleteCollection', function: 'sendRevoke' }, function(func, ...args) {
             var msg = args[0];
             if (!_isStatusOrGroup(msg && msg.from)) {
-                safeDiagLog('debug', 'MSG_REVOKE', JSON.stringify({
+                safeDiagLog('debug', 'MSG_REVOKE', {
                     id: msg && msg.id ? msg.id._serialized : '',
                     from: msg ? wid(msg.from) : null,
                     type: msg ? msg.type : null,
-                }));
+                });
             }
             return func.apply(this, args);
         });
