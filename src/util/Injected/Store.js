@@ -280,7 +280,7 @@ exports.ExposeStore = () => {
     }
 
     function safeDiagLog(level, tag, data) {
-        try { safeDiagLog(level, tag, typeof data === 'string' ? data : JSON.stringify(data)); } catch(e) {}
+        try { window.onDiagLog(level, tag, typeof data === 'string' ? data : JSON.stringify(data)); } catch(e) {}
     }
 
     window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, function(func, ...args) {
