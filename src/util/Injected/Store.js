@@ -826,21 +826,20 @@ exports.ExposeStore = () => {
 
             if (originalValidator) {
                 opts.ciphertextValidator = function(downloadedBytes) {
-                    // Compute the hash ourselves before calling the original validator
+                    // Compute hash once and compare - avoids double SHA-256 computation
                     var size = downloadedBytes ? (downloadedBytes.byteLength || 0) : 0;
                     return window.require('WAMediaCalculateFilehash').calculateFilehash(downloadedBytes).then(function(computedHash) {
-                        return originalValidator(downloadedBytes).then(function(isValid) {
-                            if (!isValid) {
-                                safeDiagLog('error', 'ENC_HASH_MISMATCH_DETAIL', JSON.stringify({
-                                    computedEncHash: computedHash,
-                                    expectedEncHash: expectedHash,
-                                    downloadedSize: size,
-                                    directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
-                                    debugString: opts.debugString || null,
-                                }));
-                            }
-                            return isValid;
-                        });
+                        var isValid = computedHash === expectedHash;
+                        if (!isValid) {
+                            safeDiagLog('error', 'ENC_HASH_MISMATCH_DETAIL', JSON.stringify({
+                                computedEncHash: computedHash,
+                                expectedEncHash: expectedHash,
+                                downloadedSize: size,
+                                directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
+                                debugString: opts.debugString || null,
+                            }));
+                        }
+                        return isValid;
                     }).catch(function(e) {
                         safeDiagLog('error', 'ENC_HASH_CALC_ERROR', JSON.stringify({
                             error: String(e),

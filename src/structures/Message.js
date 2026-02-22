@@ -476,22 +476,21 @@ class Message extends Base {
                 }));
                 return null;
             }
-            // [L13] Snapshot crypto fields BEFORE resolve attempt
-            const cryptoBefore = {
-                directPath: msg.directPath,
-                mediaKey: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
-                mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                encFilehash: msg.encFilehash,
-                filehash: msg.filehash,
-                mediaStage: msg.mediaData.mediaStage,
-                mediaStageTimestamp: msg.mediaData.mediaStageTimestamp,
-                isBackfill: !!(msg.__x_isBackfill || msg.isBackfill),
-                protocolMessageType: msg.protocolMessageType,
-                ephemeralDuration: msg.ephemeralDuration,
-                messageSecret: !!msg.messageSecret,
-            };
-
             if (msg.mediaData.mediaStage != 'RESOLVED') {
+                // [L13] Snapshot crypto fields BEFORE resolve attempt
+                const cryptoBefore = {
+                    directPath: msg.directPath,
+                    mediaKey: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
+                    mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                    encFilehash: msg.encFilehash,
+                    filehash: msg.filehash,
+                    mediaStage: msg.mediaData.mediaStage,
+                    mediaStageTimestamp: msg.mediaData.mediaStageTimestamp,
+                    isBackfill: !!(msg.__x_isBackfill || msg.isBackfill),
+                    protocolMessageType: msg.protocolMessageType,
+                    ephemeralDuration: msg.ephemeralDuration,
+                    messageSecret: !!msg.messageSecret,
+                };
                 // try to resolve media
                 let resolveError = null;
                 try {
