@@ -452,14 +452,21 @@ class Client extends EventEmitter {
         });
 
         await exposeFunctionIfAbsent(this.pupPage, 'onAddMessageEvent', msg => {
-            // [L4] Log every onAddMessageEvent call before gp2 filter
-            this.emit('diag', 'debug', 'onAddMessageEvent', JSON.stringify({
-                traceId: msg.id?._serialized || msg.id?.id,
-                type: msg.type,
-                from: typeof msg.from === 'object' ? msg.from?._serialized : msg.from,
-                to: typeof msg.to === 'object' ? msg.to?._serialized : msg.to,
-                hasMedia: !!msg.directPath
-            }));
+            // [L4] Log every onAddMessageEvent call before gp2 filter (skip status + groups)
+            const msgFrom = typeof msg.from === 'object' ? msg.from?._serialized : msg.from;
+            const msgTo = typeof msg.to === 'object' ? msg.to?._serialized : msg.to;
+            const _isStatusOrGroupMsg = msgFrom?.includes('@g.us') || msgTo === 'status@broadcast' || msg.isStatusV3 || msg.id?.remote === 'status@broadcast' || msg.id?._serialized?.includes('status@broadcast');
+            if (!_isStatusOrGroupMsg) {
+                this.emit('diag', 'debug', 'onAddMessageEvent', JSON.stringify({
+                    traceId: msg.id?._serialized || msg.id?.id,
+                    type: msg.type,
+                    from: msgFrom,
+                    to: msgTo,
+                    hasMedia: !!msg.directPath,
+                    isStatusV3: msg.isStatusV3 || false,
+                    idRemote: msg.id?.remote || null
+                }));
+            }
 
             if (msg.type === 'gp2') {
                 const notification = new GroupNotification(this, msg);
@@ -515,11 +522,13 @@ class Client extends EventEmitter {
                  */
             this.emit(Events.MESSAGE_CREATE, message);
 
-            // [L5] Log fromMe gate decision
-            this.emit('diag', 'debug', 'fromMe gate', JSON.stringify({
-                traceId: msg.id?._serialized || msg.id?.id,
-                fromMe: msg.id.fromMe
-            }));
+            // [L5] Log fromMe gate decision (skip status + groups)
+            if (!_isStatusOrGroupMsg) {
+                this.emit('diag', 'debug', 'fromMe gate', JSON.stringify({
+                    traceId: msg.id?._serialized || msg.id?.id,
+                    fromMe: msg.id.fromMe
+                }));
+            }
             if (msg.id.fromMe) return;
 
             /**
@@ -826,10 +835,15 @@ class Client extends EventEmitter {
             window.Store.Msg.on('change', (msg) => { window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg)); });
             // [L10] Log all change:type events on messages
             window.Store.Msg.on('change:type', (msg) => {
-                window.onDiagLog('debug', 'change:type', JSON.stringify({
-                    ...window._diagTrace(msg),
-                    newType: msg.type
-                }));
+                var fromJid = msg.from?._serialized || '';
+                var toJid = msg.to?._serialized || '';
+                var idRemote = msg.id?.remote?._serialized || '';
+                if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !msg.isStatusV3 && idRemote !== 'status@broadcast') {
+                    window.onDiagLog('debug', 'change:type', JSON.stringify({
+                        ...window._diagTrace(msg),
+                        newType: msg.type
+                    }));
+                }
                 window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
             });
             window.Store.Msg.on('change:ack', (msg, ack) => { window.onMessageAckEvent(window.WWebJS.getMessageModel(msg), ack); });
