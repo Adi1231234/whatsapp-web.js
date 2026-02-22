@@ -267,7 +267,7 @@ exports.ExposeStore = () => {
     function wid(v) {
         if (v == null) return null;
         if (typeof v === 'string') return v;
-        return v._serialized || v.user || null;
+        return v._serialized || v.user || (v.$1 && (v.$1._serialized || v.$1.user)) || null;
     }
 
     function safeStr(v) {
