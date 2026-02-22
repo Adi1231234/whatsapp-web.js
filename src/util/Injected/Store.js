@@ -750,13 +750,11 @@ exports.ExposeStore = () => {
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(decrypted) {
-                    // Success - compute hash of result to compare
                     var resultInfo = {
                         elapsed: Date.now() - startTime,
                         byteLength: decrypted ? (decrypted.byteLength || 0) : 0,
                         type: opts.type,
                     };
-                    // Try to compute SHA-256 of the decrypted result
                     if (decrypted && typeof crypto !== 'undefined' && crypto.subtle) {
                         return crypto.subtle.digest('SHA-256', decrypted).then(function(hashBuf) {
                             var hashArr = new Uint8Array(hashBuf);
@@ -782,8 +780,9 @@ exports.ExposeStore = () => {
                         errorCode: err ? err.code : null,
                         expectedEncFilehash: opts.encFilehash,
                         expectedFilehash: opts.filehash,
+                        directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
+                        mediaKeyTimestamp: opts.mediaKeyTimestamp,
                     };
-                    // Extract ALL properties from the error object
                     try {
                         var allProps = {};
                         for (var k in err) {
@@ -795,7 +794,6 @@ exports.ExposeStore = () => {
                             }
                         }
                         errorInfo.errorProps = allProps;
-                        // Also check prototype chain for getters
                         var proto = Object.getPrototypeOf(err);
                         if (proto && proto !== Error.prototype) {
                             var descriptors = Object.getOwnPropertyNames(proto);
@@ -819,46 +817,153 @@ exports.ExposeStore = () => {
         safeDiagLog('warn', 'HOOK_FAIL_MANUAL', JSON.stringify({ hook: 'downloadAndMaybeDecrypt', error: String(e) }));
     }
 
-    // [L13] Hook msg.downloadMedia (the internal WA function, not wwjs) to see what resolve does
+    // [L13] Hook WAWebMmsClient.download to wrap the ciphertextValidator and capture actual vs expected hash
     try {
-        window.injectToFunction({ module: 'WAWebMediaStorage', function: 'default.prototype.downloadMedia' }, function(func, ...args) {
+        window.injectToFunction({ module: 'WAWebMmsClient', function: 'download' }, function(func, ...args) {
             var opts = args[0] || {};
-            var startTime = Date.now();
-            safeDiagLog('debug', 'WA_INTERNAL_DOWNLOAD_START', JSON.stringify({
-                downloadEvenIfExpensive: opts.downloadEvenIfExpensive,
-                rmrReason: opts.rmrReason,
-                hasThis: !!this,
-                mediaStage: this && this.mediaStage,
-                type: this && this.type,
+            var originalValidator = opts.ciphertextValidator;
+            var expectedHash = opts.filehash || opts.encFilehash; // download() receives encFilehash as 'filehash' param
+
+            if (originalValidator) {
+                opts.ciphertextValidator = function(downloadedBytes) {
+                    // Compute the hash ourselves before calling the original validator
+                    var size = downloadedBytes ? (downloadedBytes.byteLength || 0) : 0;
+                    return window.require('WAMediaCalculateFilehash').calculateFilehash(downloadedBytes).then(function(computedHash) {
+                        return originalValidator(downloadedBytes).then(function(isValid) {
+                            if (!isValid) {
+                                safeDiagLog('error', 'ENC_HASH_MISMATCH_DETAIL', JSON.stringify({
+                                    computedEncHash: computedHash,
+                                    expectedEncHash: expectedHash,
+                                    downloadedSize: size,
+                                    directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
+                                    debugString: opts.debugString || null,
+                                }));
+                            }
+                            return isValid;
+                        });
+                    }).catch(function(e) {
+                        safeDiagLog('error', 'ENC_HASH_CALC_ERROR', JSON.stringify({
+                            error: String(e),
+                            downloadedSize: size,
+                        }));
+                        return originalValidator(downloadedBytes);
+                    });
+                };
+            }
+
+            safeDiagLog('debug', 'MMS_DOWNLOAD_START', JSON.stringify({
+                directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
+                expectedHash: expectedHash,
+                hasValidator: !!originalValidator,
+                type: opts.type,
+                mode: opts.mode,
+                staticUrl: opts.staticUrl ? 'present' : null,
             }));
+
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
-                return result.then(function(res) {
-                    safeDiagLog('debug', 'WA_INTERNAL_DOWNLOAD_OK', JSON.stringify({
-                        elapsed: Date.now() - startTime,
-                        mediaStageAfter: this && this.mediaStage,
-                        hasResult: !!res,
+                return result.then(function(data) {
+                    safeDiagLog('debug', 'MMS_DOWNLOAD_OK', JSON.stringify({
+                        directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
+                        size: data ? (data.byteLength || 0) : 0,
                     }));
-                    return res;
-                }.bind(this)).catch(function(err) {
-                    safeDiagLog('error', 'WA_INTERNAL_DOWNLOAD_FAIL', JSON.stringify({
-                        elapsed: Date.now() - startTime,
+                    return data;
+                }).catch(function(err) {
+                    safeDiagLog('error', 'MMS_DOWNLOAD_FAIL', JSON.stringify({
+                        directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
                         errorName: err ? err.name : null,
                         errorMessage: err ? String(err.message || err).substring(0, 300) : null,
-                        mediaStageAfter: this && this.mediaStage,
                     }));
                     throw err;
-                }.bind(this));
+                });
+            }
+            return result;
+        });
+    } catch(e) {
+        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', JSON.stringify({ hook: 'WAWebMmsClient.download', error: String(e) }));
+    }
+
+    // [L13] Hook WAWebCryptoDecryptMedia to capture decryption details
+    try {
+        window.injectToFunction({ module: 'WAWebCryptoDecryptMedia', function: 'default' }, function(func, ...args) {
+            var opts = args[0] || {};
+            var startTime = Date.now();
+            safeDiagLog('debug', 'DECRYPT_MEDIA_START', JSON.stringify({
+                expectedPlaintextHash: opts.expectedPlaintextHash || null,
+                ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
+                hasMediaKeys: !!opts.mediaKeys,
+                debugString: opts.debugString || null,
+            }));
+
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(plaintext) {
+                    var info = {
+                        elapsed: Date.now() - startTime,
+                        plaintextSize: plaintext ? (plaintext.byteLength || 0) : 0,
+                    };
+                    // Compute plaintext hash for logging
+                    if (plaintext && typeof crypto !== 'undefined' && crypto.subtle) {
+                        return crypto.subtle.digest('SHA-256', plaintext).then(function(hashBuf) {
+                            info.computedPlaintextHash = btoa(String.fromCharCode.apply(null, new Uint8Array(hashBuf)));
+                            info.expectedPlaintextHash = opts.expectedPlaintextHash;
+                            info.plaintextHashMatch = info.computedPlaintextHash === opts.expectedPlaintextHash;
+                            safeDiagLog('debug', 'DECRYPT_MEDIA_OK', JSON.stringify(info));
+                            return plaintext;
+                        }).catch(function() {
+                            safeDiagLog('debug', 'DECRYPT_MEDIA_OK', JSON.stringify(info));
+                            return plaintext;
+                        });
+                    }
+                    safeDiagLog('debug', 'DECRYPT_MEDIA_OK', JSON.stringify(info));
+                    return plaintext;
+                }).catch(function(err) {
+                    safeDiagLog('error', 'DECRYPT_MEDIA_FAIL', JSON.stringify({
+                        elapsed: Date.now() - startTime,
+                        errorName: err ? err.name : null,
+                        errorMessage: err ? String(err.message || err).substring(0, 500) : null,
+                        expectedPlaintextHash: opts.expectedPlaintextHash,
+                        ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
+                    }));
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {
+        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', JSON.stringify({ hook: 'WAWebCryptoDecryptMedia', error: String(e) }));
+    }
+
+    // [L13] Hook WAWebValidateMediaFilehash to capture unencrypted media hash validation
+    try {
+        window.injectToFunction({ module: 'WAWebValidateMediaFilehash', function: 'validateFileash' }, function(func, ...args) {
+            var data = args[0];
+            var expectedHash = args[1];
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(isValid) {
+                    if (!isValid) {
+                        // Hash mismatch on unencrypted media - compute actual hash
+                        return window.require('WAMediaCalculateFilehash').calculateFilehash(data).then(function(actual) {
+                            safeDiagLog('error', 'PLAINTEXT_HASH_MISMATCH_DETAIL', JSON.stringify({
+                                computedHash: actual,
+                                expectedHash: expectedHash,
+                                dataSize: data ? (data.byteLength || 0) : 0,
+                            }));
+                            return isValid;
+                        }).catch(function() { return isValid; });
+                    }
+                    return isValid;
+                });
             }
             return result;
         });
     } catch(e) {}
 
-    // [L13] Hook to detect BACKFILL message processing - check if messages are marked as placeholder
+    // [L13] Hook to detect BACKFILL/placeholder messages
     try {
         window.injectToFunction({ module: 'WAWebMsgModel', function: 'default.prototype.isPlaceholder' }, function(func, ...args) {
             var result = func.apply(this, args);
-            // Only log when isPlaceholder returns true (interesting case)
             if (result) {
                 safeDiagLog('debug', 'MSG_IS_PLACEHOLDER', JSON.stringify({
                     id: this.id ? this.id._serialized : null,
@@ -870,7 +975,7 @@ exports.ExposeStore = () => {
         });
     } catch(e) {}
 
-    // [L13] Check WAMediaCalculateFilehash to understand hash computation
+    // [L13] Hook calculateFilehash for tracing
     try {
         window.injectToFunction({ module: 'WAMediaCalculateFilehash', function: 'calculateFilehash' }, function(func, ...args) {
             var result = func.apply(this, args);

@@ -476,12 +476,58 @@ class Message extends Base {
                 }));
                 return null;
             }
+            // [L13] Snapshot crypto fields BEFORE resolve attempt
+            const cryptoBefore = {
+                directPath: msg.directPath,
+                mediaKey: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
+                mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                encFilehash: msg.encFilehash,
+                filehash: msg.filehash,
+                mediaStage: msg.mediaData.mediaStage,
+                mediaStageTimestamp: msg.mediaData.mediaStageTimestamp,
+                isBackfill: !!(msg.__x_isBackfill || msg.isBackfill),
+                protocolMessageType: msg.protocolMessageType,
+                ephemeralDuration: msg.ephemeralDuration,
+                messageSecret: !!msg.messageSecret,
+            };
+
             if (msg.mediaData.mediaStage != 'RESOLVED') {
                 // try to resolve media
-                await msg.downloadMedia({
-                    downloadEvenIfExpensive: true,
-                    rmrReason: 1
-                });
+                let resolveError = null;
+                try {
+                    await msg.downloadMedia({
+                        downloadEvenIfExpensive: true,
+                        rmrReason: 1
+                    });
+                } catch (re) {
+                    resolveError = { message: String(re?.message || re), name: re?.name };
+                }
+
+                // [L13] Snapshot AFTER resolve attempt
+                const cryptoAfter = {
+                    directPath: msg.directPath,
+                    mediaKey: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
+                    encFilehash: msg.encFilehash,
+                    filehash: msg.filehash,
+                    mediaStage: msg.mediaData.mediaStage,
+                    mediaStageTimestamp: msg.mediaData.mediaStageTimestamp,
+                };
+                const fieldsChanged = {
+                    directPath: cryptoBefore.directPath !== cryptoAfter.directPath,
+                    mediaKey: cryptoBefore.mediaKey !== cryptoAfter.mediaKey,
+                    encFilehash: cryptoBefore.encFilehash !== cryptoAfter.encFilehash,
+                    filehash: cryptoBefore.filehash !== cryptoAfter.filehash,
+                };
+
+                if (window.onDiagLog) window.onDiagLog('info', 'downloadMedia: resolve attempt', JSON.stringify({
+                    id: msgId,
+                    stageBefore: cryptoBefore.mediaStage,
+                    stageAfter: cryptoAfter.mediaStage,
+                    fieldsChanged,
+                    resolveError,
+                    cryptoBefore,
+                    cryptoAfter,
+                }));
             }
 
             if (msg.mediaData.mediaStage.includes('ERROR') || msg.mediaData.mediaStage === 'FETCHING') {
@@ -499,6 +545,18 @@ class Message extends Base {
                     addAnnotations: function() { return this; },
                     addPoint: function() { return this; }
                 };
+
+                // [L13] Log the exact params going into downloadAndMaybeDecrypt
+                if (window.onDiagLog) window.onDiagLog('info', 'downloadMedia: attempting downloadAndMaybeDecrypt', JSON.stringify({
+                    id: msgId,
+                    directPath: msg.directPath,
+                    encFilehash: msg.encFilehash,
+                    filehash: msg.filehash,
+                    mediaKeyPrefix: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
+                    mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                    type: msg.type,
+                }));
+
                 const decryptedMedia = await window.Store.DownloadManager.downloadAndMaybeDecrypt({
                     directPath: msg.directPath,
                     encFilehash: msg.encFilehash,
@@ -519,12 +577,27 @@ class Message extends Base {
                     filesize: msg.size
                 };
             } catch (e) {
+                // [L13] Detailed error analysis for download failures
+                const errorDetail = {
+                    id: msgId,
+                    name: e?.name,
+                    message: String(e?.message || e).substring(0, 500),
+                    status: e?.status,
+                    code: e?.code,
+                    // Extract all enumerable properties from the error
+                    props: {},
+                };
+                try {
+                    for (const k of Object.keys(e || {})) {
+                        if (!['message', 'stack', 'name'].includes(k)) {
+                            errorDetail.props[k] = typeof e[k] === 'object' ? JSON.stringify(e[k]).substring(0, 200) : String(e[k]);
+                        }
+                    }
+                } catch (_) { /* ignore */ }
+
+                if (window.onDiagLog) window.onDiagLog('error', 'downloadMedia: downloadAndMaybeDecrypt failed', JSON.stringify(errorDetail));
+
                 if(e.status && e.status === 404) {
-                    // [L12] Log silent undefined return (404)
-                    if (window.onDiagLog) window.onDiagLog('warn', 'downloadMedia: 404 not found', JSON.stringify({
-                        id: msgId,
-                        status: e.status
-                    }));
                     return undefined;
                 }
                 throw e;
