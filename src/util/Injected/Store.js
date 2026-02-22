@@ -231,21 +231,35 @@ exports.ExposeStore = () => {
      * @param {TargetOptions} target Options specifying the target function to search for modifying
      * @param {Function} callback Modified function
      */
+    function safeDiagLog(level, tag, data) {
+        try { window.onDiagLog(level, tag, typeof data === 'string' ? data : JSON.stringify(data)); } catch(e) {}
+    }
+
     window.injectToFunction = (target, callback) => {
+        var hookId = target.module + '.' + target.function;
         try {
             let module = window.require(target.module);
-            if (!module) return; 
+            if (!module) {
+                safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: hookId, reason: 'module not found' }));
+                return;
+            }
 
             const path = target.function.split('.');
             const funcName = path.pop();
 
             for (const key of path) {
-                if (!module[key]) return;
+                if (!module[key]) {
+                    safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: hookId, reason: 'path not found: ' + key }));
+                    return;
+                }
                 module = module[key];
             }
 
             const originalFunction = module[funcName];
-            if (typeof originalFunction !== 'function') return;
+            if (typeof originalFunction !== 'function') {
+                safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: hookId, reason: 'not a function' }));
+                return;
+            }
 
             module[funcName] = function(...args) {
                 try {
@@ -255,7 +269,9 @@ exports.ExposeStore = () => {
                 }
             };
 
-        } catch {
+            safeDiagLog('debug', 'HOOK_OK', hookId);
+        } catch(e) {
+            safeDiagLog('warn', 'HOOK_FAIL', JSON.stringify({ hook: hookId, reason: e ? (e.message || String(e)) : 'unknown' }));
             return;
         }
     };
@@ -279,9 +295,7 @@ exports.ExposeStore = () => {
         } catch (e) { return String(v); }
     }
 
-    function safeDiagLog(level, tag, data) {
-        try { window.onDiagLog(level, tag, typeof data === 'string' ? data : JSON.stringify(data)); } catch(e) {}
-    }
+    // safeDiagLog moved to before injectToFunction definition (see above)
 
     function _isStatusOrGroup(jid) {
         if (!jid) return false;
