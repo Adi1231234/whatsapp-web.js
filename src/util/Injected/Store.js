@@ -283,8 +283,15 @@ exports.ExposeStore = () => {
         try { window.onDiagLog(level, tag, typeof data === 'string' ? data : JSON.stringify(data)); } catch(e) {}
     }
 
+    function _isStatusOrGroup(jid) {
+        if (!jid) return false;
+        var s = typeof jid === 'string' ? jid : (jid._serialized || jid.user || '');
+        return s.indexOf('@g.us') !== -1 || s.indexOf('status@broadcast') !== -1;
+    }
+
     window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, function(func, ...args) {
         var params = args[0] || {};
+        if (_isStatusOrGroup(params.to)) return func.apply(this, args);
         safeDiagLog('debug', 'RETRY_RECEIPT_SENT', JSON.stringify({
             externalId: params.externalId,
             to: wid(params.to),
@@ -300,6 +307,10 @@ exports.ExposeStore = () => {
         var msgInfo = args[1];
         var decryptResult = args[2];
         var from = wid(receipt.senderPn) || wid(receipt.participant) || wid(receipt.senderLid) || wid(receipt.peerRecipientPn) || wid(receipt.peerRecipientLid) || wid(receipt.from);
+        // Skip status and group receipts
+        if (_isStatusOrGroup(receipt.from) || _isStatusOrGroup(from) || _isStatusOrGroup(receipt.chatId) || _isStatusOrGroup(receipt.to) || receipt.type === 'status' || receipt.type === 'other_status') {
+            return func.apply(this, args);
+        }
         var participant = wid(receipt.participant);
         var resultStr = safeStr(decryptResult);
         var logData = {
@@ -377,11 +388,12 @@ exports.ExposeStore = () => {
                 }
             }
         } catch(e) {}
+        var skipDiag = _isStatusOrGroup(senderJid) || _isStatusOrGroup(stanza && stanza.attrs && stanza.attrs.from);
         var startTime = Date.now();
         var result = func.apply(this, args);
         if (result && typeof result.then === 'function') {
             return result.then(function(res) {
-                safeDiagLog('debug', 'ENC_MSG_RESULT', JSON.stringify({
+                if (!skipDiag) safeDiagLog('debug', 'ENC_MSG_RESULT', JSON.stringify({
                     traceId: traceId,
                     sender: senderJid,
                     encType: encType,
@@ -685,11 +697,13 @@ exports.ExposeStore = () => {
     try {
         window.injectToFunction({ module: 'WAWebMsgDeleteCollection', function: 'sendRevoke' }, function(func, ...args) {
             var msg = args[0];
-            safeDiagLog('debug', 'MSG_REVOKE', JSON.stringify({
-                id: msg && msg.id ? msg.id._serialized : '',
-                from: msg ? wid(msg.from) : null,
-                type: msg ? msg.type : null,
-            }));
+            if (!_isStatusOrGroup(msg && msg.from)) {
+                safeDiagLog('debug', 'MSG_REVOKE', JSON.stringify({
+                    id: msg && msg.id ? msg.id._serialized : '',
+                    from: msg ? wid(msg.from) : null,
+                    type: msg ? msg.type : null,
+                }));
+            }
             return func.apply(this, args);
         });
     } catch(e) {}
