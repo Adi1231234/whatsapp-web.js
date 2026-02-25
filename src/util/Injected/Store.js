@@ -761,7 +761,7 @@ exports.ExposeStore = () => {
                         elapsed: Date.now() - startTime,
                         type: opts.type,
                         errorName: err ? err.name : null,
-                        errorMessage: err ? String(err.message || err).substring(0, 500) : null,
+                        errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 500) : null,
                         errorStatus: err ? err.status : null,
                         errorCode: err ? err.code : null,
                         expectedEncFilehash: opts.encFilehash,
@@ -858,7 +858,7 @@ exports.ExposeStore = () => {
                     safeDiagLog('error', 'MMS_DOWNLOAD_FAIL', {
                         directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
                         errorName: err ? err.name : null,
-                        errorMessage: err ? String(err.message || err).substring(0, 300) : null,
+                        errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 300) : null,
                     });
                     throw err;
                 });
@@ -893,7 +893,7 @@ exports.ExposeStore = () => {
                     safeDiagLog('error', 'DECRYPT_MEDIA_FAIL', {
                         elapsed: Date.now() - startTime,
                         errorName: err ? err.name : null,
-                        errorMessage: err ? String(err.message || err).substring(0, 500) : null,
+                        errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 500) : null,
                         expectedPlaintextHash: opts.expectedPlaintextHash,
                         ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
                     });
