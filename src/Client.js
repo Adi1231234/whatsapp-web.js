@@ -860,8 +860,27 @@ class Client extends EventEmitter {
             }
             window.Store.Chat.on('remove', async (chat) => { window.onRemoveChatEvent(await window.WWebJS.getChatModel(chat)); });
             window.Store.Chat.on('change:archive', async (chat, currState, prevState) => { window.onArchiveChatEvent(await window.WWebJS.getChatModel(chat), currState, prevState); });
+            // Track message IDs handled by the normal 'add' path so the
+            // change:type fallback below can skip them.
+            const __handledByAdd = new Set();
+            const __HANDLED_SET_CAP = 5000;
+
             window.Store.Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
+                    const _id = msg.id?._serialized;
+                    if (_id) {
+                        __handledByAdd.add(_id);
+                        if (__handledByAdd.size > __HANDLED_SET_CAP) {
+                            // Evict oldest entries (Set iteration order = insertion order)
+                            const iter = __handledByAdd.values();
+                            for (let i = 0; i < 1000; i++) iter.next();
+                            // Rebuild with remaining
+                            const remaining = [];
+                            for (const v of __handledByAdd) remaining.push(v);
+                            __handledByAdd.clear();
+                            for (const v of remaining.slice(1000)) __handledByAdd.add(v);
+                        }
+                    }
                     if(msg.type === 'ciphertext') {
                         // Defer message event until ciphertext is resolved (type changed)
                         msg.once('change:type', (_msg) => {
@@ -871,6 +890,30 @@ class Client extends EventEmitter {
                     } else {
                         window.onAddMessageEvent(window.WWebJS.getMessageModel(msg)); 
                     }
+                }
+            });
+
+            // [SILENT_LOSS_FIX] Fallback: catch messages that were added to
+            // Store.Msg without triggering the 'add' event (e.g. via set/merge).
+            // When their type changes from 'ciphertext' to a real type and the
+            // normal path didn't handle them, emit them as new messages.
+            window.Store.Msg.on('change:type', (msg) => {
+                try {
+                    const id = msg.id?._serialized;
+                    if (!id || __handledByAdd.has(id)) return;
+                    if (!msg.isNewMsg) return;
+                    if (msg.type === 'ciphertext') return; // still encrypted
+
+                    // This message bypassed the 'add' event — emit it now
+                    __handledByAdd.add(id);
+                    window.onDiagLog?.('warn', 'ADD_BYPASS_RECOVERED', JSON.stringify({
+                        traceId: id,
+                        type: msg.type,
+                        from: msg.from?._serialized || '',
+                    }));
+                    window.onAddMessageEvent(window.WWebJS.getMessageModel(msg));
+                } catch (e) {
+                    // Fallback must never break the main flow
                 }
             });
             window.Store.Chat.on('change:unreadCount', (chat) => {window.onChatUnreadCountEvent(chat);});
