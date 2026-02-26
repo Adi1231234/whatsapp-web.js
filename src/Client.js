@@ -401,7 +401,7 @@ class Client extends EventEmitter {
         this.pupPage.evaluate = async function (...args) {
             self._diagEvalInflight++;
             const inflight = self._diagEvalInflight;
-            if (inflight > 5) {
+            if (inflight > 20) {
                 self.emit('diag', 'warn', 'HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
             }
             try {
