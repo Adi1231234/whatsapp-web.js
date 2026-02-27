@@ -519,7 +519,7 @@ exports.ExposeStore = () => {
         });
     } catch(e) {}
 
-    var signalFns = ['decryptSignalProto', 'decrypt', 'decryptWithSession'];
+    var signalFns = ['Cipher.decryptSignalProto', 'Cipher.decryptGroupSignalProto', 'Cipher.encryptSignalProto'];
     for (var si = 0; si < signalFns.length; si++) {
         try {
             (function(fnName) {
@@ -545,7 +545,7 @@ exports.ExposeStore = () => {
         } catch(e) {}
     }
 
-    var sessionFns = ['manageE2ESessions', 'ensureE2ESession', 'getOrCreateSession', 'createSession'];
+    var sessionFns = ['ensureE2ESessions'];
     for (var ei = 0; ei < sessionFns.length; ei++) {
         try {
             (function(fnName) {
@@ -569,6 +569,36 @@ exports.ExposeStore = () => {
                     return result;
                 });
             })(sessionFns[ei]);
+        } catch(e) {}
+    }
+
+    // Hook Signal session lifecycle (create/delete) for debugging session corruption
+    var signalSessionFns = ['createSignalSession', 'deleteRemoteSession', 'deleteRemoteInfo'];
+    for (var ssi = 0; ssi < signalSessionFns.length; ssi++) {
+        try {
+            (function(fnName) {
+                window.injectToFunction({ module: 'WAWebSignal', function: 'Session.' + fnName }, function(func, ...args) {
+                    var jid = '';
+                    try {
+                        if (typeof args[0] === 'string') jid = args[0];
+                        else if (args[0] && args[0]._serialized) jid = args[0]._serialized;
+                        else if (args[0] && args[0].user) jid = args[0].user;
+                    } catch(e) {}
+                    if (!_isStatusOrGroup(jid)) {
+                        safeDiagLog('debug', 'SIGNAL_SESSION_OP', { op: fnName, jid: wid(args[0]) || jid });
+                    }
+                    var result = func.apply(this, args);
+                    if (result && typeof result.then === 'function') {
+                        return result.catch(function(err) {
+                            safeDiagLog('error', 'SIGNAL_SESSION_ERROR', {
+                                op: fnName, jid: wid(args[0]) || jid, error: err ? (err.message || String(err)) : 'unknown',
+                            });
+                            throw err;
+                        });
+                    }
+                    return result;
+                });
+            })(signalSessionFns[ssi]);
         } catch(e) {}
     }
 
