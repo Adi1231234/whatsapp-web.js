@@ -375,6 +375,55 @@ class Client extends EventEmitter {
 
         await this.inject();
 
+        // [diag:promise-collected] Monitor execution context lifecycle via CDP
+        // This helps diagnose "Promise was collected" errors by detecting context destruction
+        try {
+            const cdpSession = await this.pupPage.target().createCDPSession();
+            await cdpSession.send('Runtime.enable');
+            cdpSession.on('Runtime.executionContextDestroyed', (event) => {
+                this.emit('diag', 'warn', 'CDP_CONTEXT_DESTROYED', JSON.stringify({
+                    executionContextId: event.executionContextId,
+                    ts: Date.now()
+                }));
+            });
+            cdpSession.on('Runtime.executionContextsCleared', () => {
+                this.emit('diag', 'warn', 'CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
+            });
+            this._diagCdpSession = cdpSession;
+        } catch (e) {
+            this.emit('diag', 'error', 'CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
+        }
+
+        // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
+        this._diagEvalInflight = 0;
+        const origEvaluate = this.pupPage.evaluate.bind(this.pupPage);
+        const self = this;
+        this.pupPage.evaluate = async function (...args) {
+            self._diagEvalInflight++;
+            const inflight = self._diagEvalInflight;
+            if (inflight > 20) {
+                self.emit('diag', 'warn', 'HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
+            }
+            try {
+                return await origEvaluate(...args);
+            } catch (err) {
+                const isPromiseCollected = err.message?.includes('Promise was collected');
+                const isContextDestroyed = err.message?.includes('Execution context was destroyed');
+                if (isPromiseCollected || isContextDestroyed) {
+                    self.emit('diag', 'error', 'EVALUATE_CDP_ERROR', JSON.stringify({
+                        inflight: self._diagEvalInflight,
+                        error: err.message,
+                        isPromiseCollected,
+                        isContextDestroyed,
+                        ts: Date.now()
+                    }));
+                }
+                throw err;
+            } finally {
+                self._diagEvalInflight--;
+            }
+        };
+
         this.pupPage.on('framenavigated', async (frame) => {
             if(frame.url().includes('post_logout=1') || this.lastLoggedOut) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
@@ -1383,9 +1432,26 @@ class Client extends EventEmitter {
      * @returns {Promise<Contact>}
      */
     async getContactById(contactId) {
-        let contact = await this.pupPage.evaluate(contactId => {
-            return window.WWebJS.getContact(contactId);
-        }, contactId);
+        const start = Date.now();
+        let contact;
+        try {
+            contact = await this.pupPage.evaluate(contactId => {
+                return window.WWebJS.getContact(contactId);
+            }, contactId);
+        } catch (err) {
+            // [diag:promise-collected] Log failed getContactById with timing and context
+            const took = Date.now() - start;
+            this.emit('diag', 'error', 'getContactById:failed', JSON.stringify({
+                contactId: contactId?.substring?.(0, 30),
+                took,
+                inflight: this._diagEvalInflight || -1,
+                isPromiseCollected: err.message?.includes('Promise was collected'),
+                isContextDestroyed: err.message?.includes('Execution context was destroyed'),
+                isLid: contactId?.endsWith?.('@lid'),
+                error: String(err.message || err).substring(0, 200)
+            }));
+            throw err;
+        }
 
         return ContactFactory.create(this, contact);
     }
