@@ -463,7 +463,7 @@ exports.ExposeStore = () => {
                 return res;
             }).catch(function(err) {
                 if (!skipDiag) {
-                    safeDiagLog('error', 'ENC_MSG_FAIL', {
+                    safeDiagLog('warn', 'ENC_MSG_FAIL', {
                         traceId: traceId,
                         sender: senderJid,
                         encType: encType,
@@ -520,7 +520,7 @@ exports.ExposeStore = () => {
         var result = func.apply(this, args);
         if (result && typeof result.then === 'function') {
             return result.catch(function(err) {
-                safeDiagLog('error', 'PEER_MSG_ERROR', {
+                safeDiagLog('debug', 'PEER_MSG_ERROR', {
                     msgType: msgType,
                     error: err ? (err.message || String(err)) : 'unknown',
                 });
@@ -543,7 +543,7 @@ exports.ExposeStore = () => {
                     safeDiagLog('debug', 'PDO_REQUEST_ACK', { requestType: requestType });
                     return res;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'PDO_REQUEST_FAIL', {
+                    safeDiagLog('warn', 'PDO_REQUEST_FAIL', {
                         requestType: requestType,
                         error: err ? (err.message || String(err)) : 'unknown',
                     });
@@ -562,14 +562,14 @@ exports.ExposeStore = () => {
                 window.injectToFunction({ module: 'WAWebSignal', function: fnName }, function(func, ...args) {
                     var result;
                     try { result = func.apply(this, args); } catch(err) {
-                        safeDiagLog('error', 'SIGNAL_DECRYPT_ERROR', {
+                        safeDiagLog('warn', 'SIGNAL_DECRYPT_ERROR', {
                             op: fnName, error: err ? (err.message || String(err)) : 'unknown',
                         });
                         throw err;
                     }
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
-                            safeDiagLog('error', 'SIGNAL_DECRYPT_ERROR', {
+                            safeDiagLog('warn', 'SIGNAL_DECRYPT_ERROR', {
                                 op: fnName, error: err ? (err.message || String(err)) : 'unknown',
                             });
                             throw err;
@@ -599,7 +599,7 @@ exports.ExposeStore = () => {
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
                             if (!_isStatusOrGroup(jid)) {
-                                safeDiagLog('error', 'E2E_SESSION_ERROR', {
+                                safeDiagLog('debug', 'E2E_SESSION_ERROR', {
                                     op: fnName, jid: jid, error: err ? (err.message || String(err)) : 'unknown',
                                 });
                             }
@@ -631,7 +631,7 @@ exports.ExposeStore = () => {
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
                             if (!_isStatusOrGroup(jid)) {
-                                safeDiagLog('error', 'SIGNAL_SESSION_ERROR', {
+                                safeDiagLog('debug', 'SIGNAL_SESSION_ERROR', {
                                     op: fnName, jid: wid(args[0]) || jid, error: err ? (err.message || String(err)) : 'unknown',
                                 });
                             }
@@ -655,7 +655,7 @@ exports.ExposeStore = () => {
             if (result && typeof result.then === 'function') {
                 return result.catch(function(err) {
                     if (!_isStatusOrGroup(fromJid)) {
-                        safeDiagLog('error', 'SENDER_KEY_FAIL', {
+                        safeDiagLog('warn', 'SENDER_KEY_FAIL', {
                             traceId: traceId, sender: sender,
                             error: err ? (err.message || String(err)) : 'unknown',
                         });
@@ -683,7 +683,7 @@ exports.ExposeStore = () => {
                     });
                     return res;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'MEDIA_DOWNLOAD_FAIL', {
+                    safeDiagLog('debug', 'MEDIA_DOWNLOAD_FAIL', {
                         elapsed: Date.now() - startTime,
                         url: url,
                         error: err ? (err.message || String(err)) : 'unknown',
@@ -708,7 +708,7 @@ exports.ExposeStore = () => {
                     });
                     return res;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'MEDIA_DOWNLOAD2_FAIL', {
+                    safeDiagLog('debug', 'MEDIA_DOWNLOAD2_FAIL', {
                         elapsed: Date.now() - startTime, directPath: directPath,
                         error: err ? (err.message || String(err)) : 'unknown',
                     });
@@ -728,7 +728,7 @@ exports.ExposeStore = () => {
                     safeDiagLog('debug', 'PREKEY_GET', { count: count });
                     return res;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'PREKEY_GET_FAIL', {
+                    safeDiagLog('warn', 'PREKEY_GET_FAIL', {
                         error: err ? (err.message || String(err)) : 'unknown',
                     });
                     throw err;
@@ -744,7 +744,7 @@ exports.ExposeStore = () => {
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.catch(function(err) {
-                    safeDiagLog('error', 'PREKEY_UPLOAD_FAIL', {
+                    safeDiagLog('warn', 'PREKEY_UPLOAD_FAIL', {
                         error: err ? (err.message || String(err)) : 'unknown',
                     });
                     throw err;
@@ -912,7 +912,7 @@ exports.ExposeStore = () => {
                         }
                         return isValid;
                     }).catch(function(e) {
-                        safeDiagLog('error', 'ENC_HASH_CALC_ERROR', {
+                        safeDiagLog('debug', 'ENC_HASH_CALC_ERROR', {
                             error: String(e),
                             downloadedSize: size,
                         });
