@@ -303,6 +303,10 @@ exports.ExposeStore = () => {
         return s.indexOf('@g.us') !== -1 || s.indexOf('status@broadcast') !== -1;
     }
 
+    function _isThumbnailType(type) {
+        return typeof type === 'string' && type.indexOf('thumbnail-') === 0;
+    }
+
     /**
      * Determines if a message-like object should be excluded from diagnostic logs.
      * Filters: stickers, group msgs, status/broadcast, self msgs, msgs without media.
@@ -803,8 +807,8 @@ exports.ExposeStore = () => {
     try {
         window.injectToFunction({ module: 'WAWebDownloadManager', function: 'downloadManager.downloadAndMaybeDecrypt' }, function(func, ...args) {
             var opts = args[0] || {};
-            // Skip sticker downloads from diagnostics
-            if (opts.type === 'sticker') return func.apply(this, args);
+            // Skip sticker and thumbnail downloads from diagnostics
+            if (opts.type === 'sticker' || _isThumbnailType(opts.type)) return func.apply(this, args);
             var startTime = Date.now();
             var inputLog = {
                 directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
@@ -886,8 +890,8 @@ exports.ExposeStore = () => {
     try {
         window.injectToFunction({ module: 'WAWebMmsClient', function: 'download' }, function(func, ...args) {
             var opts = args[0] || {};
-            // Skip sticker downloads from diagnostics
-            if (opts.type === 'sticker') return func.apply(this, args);
+            // Skip sticker and thumbnail downloads from diagnostics
+            if (opts.type === 'sticker' || _isThumbnailType(opts.type)) return func.apply(this, args);
             var originalValidator = opts.ciphertextValidator;
             var expectedHash = opts.filehash || opts.encFilehash; // download() receives encFilehash as 'filehash' param
 
