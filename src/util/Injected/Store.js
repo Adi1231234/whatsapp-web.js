@@ -990,8 +990,10 @@ exports.ExposeStore = () => {
                     if (!m) continue;
                     const id = m.id?._serialized || m.id?.id || '';
                     const from = m.from?._serialized || m.from?.user || '';
-                    if (from === 'status@broadcast' || from.includes('@g.us')) continue;
+                    if (from === 'status@broadcast' || from.includes('@g.us') || id.includes('@g.us')) continue;
                     const alreadyExists = window.Store.Msg.get(id);
+                    // Skip no-op re-adds (existing msg, not new) — these fire dozens of times/sec during sync
+                    if (alreadyExists && !m.isNewMsg) continue;
                     safeDiagLog('debug', 'MSG_ADD_ATTEMPT', {
                         traceId: id,
                         from: from,
