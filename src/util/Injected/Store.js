@@ -594,9 +594,11 @@ exports.ExposeStore = () => {
                     var result = func.apply(this, args);
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
-                            safeDiagLog('error', 'E2E_SESSION_ERROR', {
-                                op: fnName, jid: jid, error: err ? (err.message || String(err)) : 'unknown',
-                            });
+                            if (!_isStatusOrGroup(jid)) {
+                                safeDiagLog('error', 'E2E_SESSION_ERROR', {
+                                    op: fnName, jid: jid, error: err ? (err.message || String(err)) : 'unknown',
+                                });
+                            }
                             throw err;
                         });
                     }
@@ -624,9 +626,11 @@ exports.ExposeStore = () => {
                     var result = func.apply(this, args);
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
-                            safeDiagLog('error', 'SIGNAL_SESSION_ERROR', {
-                                op: fnName, jid: wid(args[0]) || jid, error: err ? (err.message || String(err)) : 'unknown',
-                            });
+                            if (!_isStatusOrGroup(jid)) {
+                                safeDiagLog('error', 'SIGNAL_SESSION_ERROR', {
+                                    op: fnName, jid: wid(args[0]) || jid, error: err ? (err.message || String(err)) : 'unknown',
+                                });
+                            }
                             throw err;
                         });
                     }
@@ -1113,7 +1117,7 @@ exports.ExposeStore = () => {
     try {
         window.injectToFunction({ module: 'WAWebMsgDeleteCollection', function: 'sendRevoke' }, function(func, ...args) {
             var msg = args[0];
-            if (!_isStatusOrGroup(msg && msg.from)) {
+            if (!_shouldSkipDiag(msg)) {
                 safeDiagLog('debug', 'MSG_REVOKE', {
                     id: msg && msg.id ? msg.id._serialized : '',
                     from: msg ? wid(msg.from) : null,
