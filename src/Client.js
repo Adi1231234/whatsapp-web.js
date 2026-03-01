@@ -894,6 +894,7 @@ class Client extends EventEmitter {
                 if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !msg.isStatusV3 && idRemote !== 'status@broadcast') {
                     window.onDiagLog('debug', 'change:type', JSON.stringify({
                         ...window.__wwjsDiag.diagTrace(msg),
+                        prevType: msg.previousAttributes?.()?.type || msg.previousAttributes?.type || null,
                         newType: msg.type
                     }));
                 }
