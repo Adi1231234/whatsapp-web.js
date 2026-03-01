@@ -303,6 +303,27 @@ exports.ExposeStore = () => {
         return s.indexOf('@g.us') !== -1 || s.indexOf('status@broadcast') !== -1;
     }
 
+    /**
+     * Determines if a message-like object should be excluded from diagnostic logs.
+     * Filters: stickers, group msgs, status/broadcast, self msgs, msgs without media.
+     * @param {object} msg - Message model with type, from, to, fromMe, hasMedia, directPath, mediaKey
+     * @returns {boolean} true if this message should NOT produce diagnostic logs
+     */
+    function _shouldSkipDiag(msg) {
+        if (!msg) return false;
+        // Stickers
+        if (msg.type === 'sticker') return true;
+        // Self
+        if (msg.fromMe) return true;
+        // Group or status
+        var from = msg.from ? (typeof msg.from === 'string' ? msg.from : (msg.from._serialized || '')) : '';
+        var to = msg.to ? (typeof msg.to === 'string' ? msg.to : (msg.to._serialized || '')) : '';
+        if (_isStatusOrGroup(from) || _isStatusOrGroup(to)) return true;
+        // No media (no directPath and no mediaKey and hasMedia is false)
+        if (!msg.hasMedia && !msg.directPath && !msg.mediaKey) return true;
+        return false;
+    }
+
     window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, function(func, ...args) {
         var params = args[0] || {};
         if (_isStatusOrGroup(params.to)) return func.apply(this, args);
@@ -321,8 +342,12 @@ exports.ExposeStore = () => {
         var msgInfo = args[1];
         var decryptResult = args[2];
         var from = wid(receipt.senderPn) || wid(receipt.participant) || wid(receipt.senderLid) || wid(receipt.peerRecipientPn) || wid(receipt.peerRecipientLid) || wid(receipt.from);
-        // Skip status and group receipts
+        // Skip status, group, and sticker receipts
         if (_isStatusOrGroup(receipt.from) || _isStatusOrGroup(from) || _isStatusOrGroup(receipt.chatId) || _isStatusOrGroup(receipt.to) || receipt.type === 'status' || receipt.type === 'other_status') {
+            return func.apply(this, args);
+        }
+        // Skip sticker message receipts
+        if (msgInfo && msgInfo.type === 'sticker') {
             return func.apply(this, args);
         }
         var participant = wid(receipt.participant);
@@ -372,13 +397,16 @@ exports.ExposeStore = () => {
                 participant = wid(node.participantLid) || wid(node.participant);
             }
         } catch(e) {}
-        safeDiagLog('debug', 'IDENTITY_CHANGE', {
-            from: from,
-            participant: participant !== from ? participant : null,
-            argCount: args.length,
-            arg0Keys: arg0Keys.join(','),
-            arg0Raw: safeStr(node),
-        });
+        // Filter group and status identity changes — not relevant for 1:1 diagnostics
+        if (!_isStatusOrGroup(from)) {
+            safeDiagLog('debug', 'IDENTITY_CHANGE', {
+                from: from,
+                participant: participant !== from ? participant : null,
+                argCount: args.length,
+                arg0Keys: arg0Keys.join(','),
+                arg0Raw: safeStr(node),
+            });
+        }
         return func.apply(this, args);
     });
 
@@ -430,14 +458,16 @@ exports.ExposeStore = () => {
                 }
                 return res;
             }).catch(function(err) {
-                safeDiagLog('error', 'ENC_MSG_FAIL', {
-                    traceId: traceId,
-                    sender: senderJid,
-                    encType: encType,
-                    elapsed: Date.now() - startTime,
-                    error: err ? (err.message || String(err)) : 'unknown',
-                    errorName: err ? err.name : null,
-                });
+                if (!skipDiag) {
+                    safeDiagLog('error', 'ENC_MSG_FAIL', {
+                        traceId: traceId,
+                        sender: senderJid,
+                        encType: encType,
+                        elapsed: Date.now() - startTime,
+                        error: err ? (err.message || String(err)) : 'unknown',
+                        errorName: err ? err.name : null,
+                    });
+                }
                 throw err;
             });
         }
@@ -481,7 +511,8 @@ exports.ExposeStore = () => {
                 }
             }
         } catch(e) { details.parseError = String(e); }
-        safeDiagLog('debug', 'PEER_MSG', { msgType: msgType, details: details });
+        // Peer messages are self-to-self protocol messages (PDO, history sync) — skip to reduce noise (fromMe equivalent)
+        // Only log errors for debugging protocol failures
         var result = func.apply(this, args);
         if (result && typeof result.then === 'function') {
             return result.catch(function(err) {
@@ -519,6 +550,7 @@ exports.ExposeStore = () => {
         });
     } catch(e) {}
 
+    // NOTE: Signal crypto hooks below only have raw crypto args — cannot filter by message type/sender
     var signalFns = ['Cipher.decryptSignalProto', 'Cipher.decryptGroupSignalProto', 'Cipher.encryptSignalProto'];
     for (var si = 0; si < signalFns.length; si++) {
         try {
@@ -556,7 +588,9 @@ exports.ExposeStore = () => {
                         else if (args[0] && args[0]._serialized) jid = args[0]._serialized;
                         else if (args[0] && args[0].jid) jid = args[0].jid;
                     } catch(e) {}
-                    safeDiagLog('debug', 'E2E_SESSION_OP', { op: fnName, jid: jid });
+                    if (!_isStatusOrGroup(jid)) {
+                        safeDiagLog('debug', 'E2E_SESSION_OP', { op: fnName, jid: jid });
+                    }
                     var result = func.apply(this, args);
                     if (result && typeof result.then === 'function') {
                         return result.catch(function(err) {
@@ -607,13 +641,17 @@ exports.ExposeStore = () => {
             var stanza = args[0];
             var traceId = stanza && stanza.attrs ? stanza.attrs.id : '';
             var sender = stanza && stanza.attrs ? (stanza.attrs.participant || stanza.attrs.from || '') : '';
+            // Sender keys are used exclusively for group encryption — filter group senders
+            var fromJid = stanza && stanza.attrs ? (stanza.attrs.from || '') : '';
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.catch(function(err) {
-                    safeDiagLog('error', 'SENDER_KEY_FAIL', {
-                        traceId: traceId, sender: sender,
-                        error: err ? (err.message || String(err)) : 'unknown',
-                    });
+                    if (!_isStatusOrGroup(fromJid)) {
+                        safeDiagLog('error', 'SENDER_KEY_FAIL', {
+                            traceId: traceId, sender: sender,
+                            error: err ? (err.message || String(err)) : 'unknown',
+                        });
+                    }
                     throw err;
                 });
             }
@@ -622,6 +660,7 @@ exports.ExposeStore = () => {
     } catch(e) {}
 
     try {
+        // NOTE: Cannot filter by message type — only has download URL/directPath, no message context
         window.injectToFunction({ module: 'WAWebMediaDownloadUtils', function: 'downloadMediaBlob' }, function(func, ...args) {
             var startTime = Date.now();
             var url = '';
@@ -711,7 +750,9 @@ exports.ExposeStore = () => {
         window.injectToFunction({ module: 'WAWebDeleteSessionJob', function: 'deleteRemoteSession' }, function(func, ...args) {
             var jid = '';
             try { jid = wid(args[0]) || safeStr(args[0]); } catch(e) {}
-            safeDiagLog('warn', 'SESSION_DELETE', { jid: jid });
+            if (!_isStatusOrGroup(jid)) {
+                safeDiagLog('warn', 'SESSION_DELETE', { jid: jid });
+            }
             return func.apply(this, args);
         });
     } catch(e) {}
@@ -754,6 +795,7 @@ exports.ExposeStore = () => {
     } catch(e) {}
 
     // [L13] Hook downloadAndMaybeDecrypt to understand filehash mismatch root cause
+    // NOTE: Cannot filter by message type here — only has media opts (directPath, filehash, etc.), no message context
     try {
         window.injectToFunction({ module: 'WAWebDownloadManager', function: 'downloadManager.downloadAndMaybeDecrypt' }, function(func, ...args) {
             var opts = args[0] || {};
@@ -834,6 +876,7 @@ exports.ExposeStore = () => {
     }
 
     // [L13] Hook WAWebMmsClient.download to wrap the ciphertextValidator and capture actual vs expected hash
+    // NOTE: Cannot filter by message type here — only has media download opts, no message context
     try {
         window.injectToFunction({ module: 'WAWebMmsClient', function: 'download' }, function(func, ...args) {
             var opts = args[0] || {};
@@ -900,6 +943,7 @@ exports.ExposeStore = () => {
     }
 
     // [L13] Hook WAWebCryptoDecryptMedia to capture decryption details
+    // NOTE: Cannot filter by message type here — only has crypto params, no message context
     try {
         window.injectToFunction({ module: 'WAWebCryptoDecryptMedia', function: 'default' }, function(func, ...args) {
             var opts = args[0] || {};
@@ -966,7 +1010,7 @@ exports.ExposeStore = () => {
     try {
         window.injectToFunction({ module: 'WAWebMsgModel', function: 'default.prototype.isPlaceholder' }, function(func, ...args) {
             var result = func.apply(this, args);
-            if (result) {
+            if (result && !_shouldSkipDiag(this)) {
                 safeDiagLog('debug', 'MSG_IS_PLACEHOLDER', {
                     id: this.id ? this.id._serialized : null,
                     type: this.type,
@@ -991,6 +1035,9 @@ exports.ExposeStore = () => {
                     const id = m.id?._serialized || m.id?.id || '';
                     const from = m.from?._serialized || m.from?.user || '';
                     if (from === 'status@broadcast' || from.includes('@g.us') || id.includes('@g.us')) continue;
+                    // Filter stickers, self, and no-media messages
+                    if (m.type === 'sticker' || m.fromMe) continue;
+                    if (!m.hasMedia && !m.directPath && !m.mediaKey) continue;
                     const alreadyExists = window.Store.Msg.get(id);
                     // Skip no-op re-adds (existing msg, not new) — these fire dozens of times/sec during sync
                     if (alreadyExists && !m.isNewMsg) continue;
@@ -1021,7 +1068,7 @@ exports.ExposeStore = () => {
                     var m = args[0];
                     var id = m?.id?._serialized || m?.id?.id || '';
                     var from = m?.from?._serialized || m?.from?.user || '';
-                    if (from !== 'status@broadcast' && !from.includes('@g.us')) {
+                    if (from !== 'status@broadcast' && !from.includes('@g.us') && !_shouldSkipDiag(m)) {
                         safeDiagLog('debug', 'MSG_ADD_AND_GET', {
                             traceId: id, from: from, type: m?.type, isNewMsg: !!m?.isNewMsg,
                         });
