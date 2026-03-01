@@ -505,7 +505,9 @@ class Client extends EventEmitter {
             const msgFrom = typeof msg.from === 'object' ? msg.from?._serialized : msg.from;
             const msgTo = typeof msg.to === 'object' ? msg.to?._serialized : msg.to;
             const _isStatusOrGroupMsg = msgFrom?.includes('@g.us') || msgTo === 'status@broadcast' || msg.isStatusV3 || msg.id?.remote === 'status@broadcast' || msg.id?._serialized?.includes('status@broadcast');
-            if (!_isStatusOrGroupMsg) {
+            // Filter: stickers, self, no-media, status, groups
+            const _shouldSkipDiagMsg = _isStatusOrGroupMsg || msg.type === 'sticker' || msg.id?.fromMe || (!msg.directPath && !msg.mediaKey);
+            if (!_shouldSkipDiagMsg) {
                 this.emit('diag', 'debug', 'onAddMessageEvent', JSON.stringify({
                     traceId: msg.id?._serialized || msg.id?.id,
                     type: msg.type,
@@ -571,8 +573,8 @@ class Client extends EventEmitter {
                  */
             this.emit(Events.MESSAGE_CREATE, message);
 
-            // [L5] Log fromMe gate decision (skip status + groups)
-            if (!_isStatusOrGroupMsg) {
+            // [L5] Log fromMe gate decision (skip stickers, self, no-media, status, groups)
+            if (!_shouldSkipDiagMsg) {
                 this.emit('diag', 'debug', 'fromMe gate', JSON.stringify({
                     traceId: msg.id?._serialized || msg.id?.id,
                     fromMe: msg.id.fromMe

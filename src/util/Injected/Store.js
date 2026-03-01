@@ -795,10 +795,12 @@ exports.ExposeStore = () => {
     } catch(e) {}
 
     // [L13] Hook downloadAndMaybeDecrypt to understand filehash mismatch root cause
-    // NOTE: Cannot filter by message type here — only has media opts (directPath, filehash, etc.), no message context
+    // NOTE: Limited filtering — only opts.type available (no from/fromMe). Can filter stickers.
     try {
         window.injectToFunction({ module: 'WAWebDownloadManager', function: 'downloadManager.downloadAndMaybeDecrypt' }, function(func, ...args) {
             var opts = args[0] || {};
+            // Skip sticker downloads from diagnostics
+            if (opts.type === 'sticker') return func.apply(this, args);
             var startTime = Date.now();
             var inputLog = {
                 directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
@@ -876,10 +878,12 @@ exports.ExposeStore = () => {
     }
 
     // [L13] Hook WAWebMmsClient.download to wrap the ciphertextValidator and capture actual vs expected hash
-    // NOTE: Cannot filter by message type here — only has media download opts, no message context
+    // NOTE: Limited filtering — only opts.type available. Can filter stickers.
     try {
         window.injectToFunction({ module: 'WAWebMmsClient', function: 'download' }, function(func, ...args) {
             var opts = args[0] || {};
+            // Skip sticker downloads from diagnostics
+            if (opts.type === 'sticker') return func.apply(this, args);
             var originalValidator = opts.ciphertextValidator;
             var expectedHash = opts.filehash || opts.encFilehash; // download() receives encFilehash as 'filehash' param
 
