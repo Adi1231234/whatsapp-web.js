@@ -892,10 +892,24 @@ class Client extends EventEmitter {
                 var toJid = msg.to?._serialized || '';
                 var idRemote = msg.id?.remote?._serialized || '';
                 if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !msg.isStatusV3 && idRemote !== 'status@broadcast') {
+                    var _prevType = null;
+                    var _prevAttrDebug = {
+                        typeof: typeof msg.previousAttributes,
+                        hasOwn: 'previousAttributes' in (msg || {}),
+                        changed: msg.changed ? Object.keys(msg.changed).slice(0,5).join(',') : null,
+                        changedType: msg.changed?.type || null,
+                        _prev: msg._previousAttributes ? Object.keys(msg._previousAttributes).slice(0,5).join(',') : null,
+                        _prevType: msg._previousAttributes?.type || null
+                    };
+                    try { if (typeof msg.previousAttributes === 'function') _prevType = msg.previousAttributes()?.type; } catch(e) {}
+                    if (!_prevType) try { _prevType = msg.previousAttributes?.type; } catch(e) {}
+                    if (!_prevType) try { _prevType = msg._previousAttributes?.type; } catch(e) {}
+                    if (!_prevType) try { _prevType = msg.changed?.type; } catch(e) {}
                     window.onDiagLog('debug', 'change:type', JSON.stringify({
                         ...window.__wwjsDiag.diagTrace(msg),
-                        prevType: msg.previousAttributes?.()?.type || msg.previousAttributes?.type || null,
-                        newType: msg.type
+                        prevType: _prevType || null,
+                        newType: msg.type,
+                        _prevAttrDebug: _prevAttrDebug
                     }));
                 }
                 window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
