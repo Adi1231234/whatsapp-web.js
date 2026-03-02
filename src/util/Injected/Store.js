@@ -300,7 +300,7 @@ exports.ExposeStore = () => {
     function _isStatusOrGroup(jid) {
         if (!jid) return false;
         var s = typeof jid === 'string' ? jid : (jid._serialized || jid.user || '');
-        return s.indexOf('@g.us') !== -1 || s.indexOf('status@broadcast') !== -1;
+        return s.indexOf('@g.us') !== -1 || s.indexOf('status@broadcast') !== -1 || s.indexOf('@newsletter') !== -1;
     }
 
     function _isThumbnailType(type) {

@@ -504,7 +504,7 @@ class Client extends EventEmitter {
             // [L4] Log every onAddMessageEvent call before gp2 filter (skip status + groups)
             const msgFrom = typeof msg.from === 'object' ? msg.from?._serialized : msg.from;
             const msgTo = typeof msg.to === 'object' ? msg.to?._serialized : msg.to;
-            const _isStatusOrGroupMsg = msgFrom?.includes('@g.us') || msgTo === 'status@broadcast' || msg.isStatusV3 || msg.id?.remote === 'status@broadcast' || msg.id?._serialized?.includes('status@broadcast');
+            const _isStatusOrGroupMsg = msgFrom?.includes('@g.us') || msgFrom?.includes('@newsletter') || msgTo === 'status@broadcast' || msg.isStatusV3 || msg.id?.remote === 'status@broadcast' || msg.id?.remote?.includes?.('@newsletter') || msg.id?._serialized?.includes('status@broadcast');
             // Filter: stickers, self, no-media, status, groups
             const _shouldSkipDiagMsg = _isStatusOrGroupMsg || msg.type === 'sticker' || msg.id?.fromMe || (!msg.directPath && !msg.mediaKey);
             if (!_shouldSkipDiagMsg) {
@@ -896,7 +896,7 @@ class Client extends EventEmitter {
                 var fromJid = msg?.from?._serialized || '';
                 var toJid = msg?.to?._serialized || '';
                 var idRemote = msg?.id?.remote?._serialized || '';
-                if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !(msg && msg.isStatusV3) && idRemote !== 'status@broadcast') {
+                if (fromJid.indexOf('@g.us') === -1 && fromJid.indexOf('@newsletter') === -1 && toJid !== 'status@broadcast' && !(msg && msg.isStatusV3) && idRemote !== 'status@broadcast' && idRemote.indexOf('@newsletter') === -1) {
                     window.onDiagLog('debug', 'change:type', JSON.stringify({
                         ...window.__wwjsDiag.diagTrace(msg),
                         newType: msg?.type,
