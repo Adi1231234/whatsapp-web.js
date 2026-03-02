@@ -375,6 +375,55 @@ class Client extends EventEmitter {
 
         await this.inject();
 
+        // [diag:promise-collected] Monitor execution context lifecycle via CDP
+        // This helps diagnose "Promise was collected" errors by detecting context destruction
+        try {
+            const cdpSession = await this.pupPage.target().createCDPSession();
+            await cdpSession.send('Runtime.enable');
+            cdpSession.on('Runtime.executionContextDestroyed', (event) => {
+                this.emit('diag', 'warn', 'CDP_CONTEXT_DESTROYED', JSON.stringify({
+                    executionContextId: event.executionContextId,
+                    ts: Date.now()
+                }));
+            });
+            cdpSession.on('Runtime.executionContextsCleared', () => {
+                this.emit('diag', 'warn', 'CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
+            });
+            this._diagCdpSession = cdpSession;
+        } catch (e) {
+            this.emit('diag', 'error', 'CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
+        }
+
+        // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
+        this._diagEvalInflight = 0;
+        const origEvaluate = this.pupPage.evaluate.bind(this.pupPage);
+        const self = this;
+        this.pupPage.evaluate = async function (...args) {
+            self._diagEvalInflight++;
+            const inflight = self._diagEvalInflight;
+            if (inflight > 20) {
+                self.emit('diag', 'warn', 'HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
+            }
+            try {
+                return await origEvaluate(...args);
+            } catch (err) {
+                const isPromiseCollected = err.message?.includes('Promise was collected');
+                const isContextDestroyed = err.message?.includes('Execution context was destroyed');
+                if (isPromiseCollected || isContextDestroyed) {
+                    self.emit('diag', 'error', 'EVALUATE_CDP_ERROR', JSON.stringify({
+                        inflight: self._diagEvalInflight,
+                        error: err.message,
+                        isPromiseCollected,
+                        isContextDestroyed,
+                        ts: Date.now()
+                    }));
+                }
+                throw err;
+            } finally {
+                self._diagEvalInflight--;
+            }
+        };
+
         this.pupPage.on('framenavigated', async (frame) => {
             if(frame.url().includes('post_logout=1') || this.lastLoggedOut) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
@@ -383,6 +432,21 @@ class Client extends EventEmitter {
                 await this.authStrategy.afterBrowserInitialized();
                 this.lastLoggedOut = false;
             }
+
+            if (frame !== this.pupPage.mainFrame()) return;
+
+            // [C1] Log framenavigated events with store availability (after critical checks)
+            let storeAvailable = false;
+            try {
+                storeAvailable = await this.pupPage.evaluate(() => {
+                    return typeof window.Store !== 'undefined' && typeof window.Store?.Msg !== 'undefined';
+                });
+            } catch (e) { /* page may not be ready */ }
+            this.emit('diag', 'info', 'framenavigated', JSON.stringify({
+                url: frame.url(),
+                storeAvailable
+            }));
+
             await this.inject();
         });
     }
@@ -424,7 +488,37 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        // [diag] Expose a diagnostic logging function so browser-side logs reach Node.js
+        await exposeFunctionIfAbsent(this.pupPage, 'onDiagLog', (level, tag, data) => {
+            /**
+             * Emitted when a diagnostic log is generated from browser-side code.
+             * @event Client#diag
+             * @param {string} level - 'info', 'warn', or 'error'
+             * @param {string} tag - Log tag (e.g., 'CIPHERTEXT_TIMEOUT')
+             * @param {string} data - JSON string with log data
+             */
+            this.emit('diag', level, tag, data);
+        });
+
         await exposeFunctionIfAbsent(this.pupPage, 'onAddMessageEvent', msg => {
+            // [L4] Log every onAddMessageEvent call before gp2 filter (skip status + groups)
+            const msgFrom = typeof msg.from === 'object' ? msg.from?._serialized : msg.from;
+            const msgTo = typeof msg.to === 'object' ? msg.to?._serialized : msg.to;
+            const _isStatusOrGroupMsg = msgFrom?.includes('@g.us') || msgTo === 'status@broadcast' || msg.isStatusV3 || msg.id?.remote === 'status@broadcast' || msg.id?._serialized?.includes('status@broadcast');
+            // Filter: stickers, self, no-media, status, groups
+            const _shouldSkipDiagMsg = _isStatusOrGroupMsg || msg.type === 'sticker' || msg.id?.fromMe || (!msg.directPath && !msg.mediaKey);
+            if (!_shouldSkipDiagMsg) {
+                this.emit('diag', 'debug', 'onAddMessageEvent', JSON.stringify({
+                    traceId: msg.id?._serialized || msg.id?.id,
+                    type: msg.type,
+                    from: msgFrom,
+                    to: msgTo,
+                    hasMedia: !!msg.directPath,
+                    isStatusV3: msg.isStatusV3 || false,
+                    idRemote: msg.id?.remote || null
+                }));
+            }
+
             if (msg.type === 'gp2') {
                 const notification = new GroupNotification(this, msg);
                 if (['add', 'invite', 'linked_group_join'].includes(msg.subtype)) {
@@ -479,6 +573,13 @@ class Client extends EventEmitter {
                  */
             this.emit(Events.MESSAGE_CREATE, message);
 
+            // [L5] Log fromMe gate decision (skip stickers, self, no-media, status, groups)
+            if (!_shouldSkipDiagMsg) {
+                this.emit('diag', 'debug', 'fromMe gate', JSON.stringify({
+                    traceId: msg.id?._serialized || msg.id?.id,
+                    fromMe: msg.id.fromMe
+                }));
+            }
             if (msg.id.fromMe) return;
 
             /**
@@ -751,8 +852,64 @@ class Client extends EventEmitter {
         });
 
         await this.pupPage.evaluate(() => {
+            // Helper: check if message type indicates a file/image/media attachment
+            // All diag logs use debug level — actual errors are logged by the app's parseIncomingMessage
+
+            // Helper namespace for diagnostic functions
+            window.__wwjsDiag = window.__wwjsDiag || {};
+            // Helper: resolve WID → phone number. Returns phone string or the original serialized WID.
+            window.__wwjsDiag.resolvePhone = (wid) => {
+                try {
+                    const serialized = wid?._serialized || String(wid || '');
+                    if (!serialized) return '';
+                    if (!serialized.endsWith('@lid')) return serialized;
+                    const contact = window.Store.Contact.get(wid);
+                    const phone = contact?.phoneNumber?._serialized;
+                    return phone || serialized;
+                } catch (e) {
+                    return wid?._serialized || String(wid || '');
+                }
+            };
+            // Helper: build common trace fields for a message { traceId, from, to }
+            window.__wwjsDiag.diagTrace = (msg) => {
+                try {
+                    const traceId = msg.id?._serialized || '';
+                    // from = actual sender (author for groups, from for DMs)
+                    const senderWid = msg.author || msg.from;
+                    const from = window.__wwjsDiag.resolvePhone(senderWid);
+                    // to = recipient (the connected account)
+                    const to = window.__wwjsDiag.resolvePhone(msg.to);
+                    return { traceId, from, to };
+                } catch (e) {
+                    return { traceId: msg.id?._serialized || '', from: msg.from?._serialized || '', to: msg.to?._serialized || '' };
+                }
+            };
+
             window.Store.Msg.on('change', (msg) => { window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg)); });
-            window.Store.Msg.on('change:type', (msg) => { window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg)); });
+            // [L10] Log all change:type events on messages
+            window.Store.Msg.on('change:type', function() {
+                // Capture ALL arguments to discover what WA Web passes
+                var args = Array.prototype.slice.call(arguments);
+                var msg = args[0];
+                var arg1 = args[1]; // likely newType or prevType
+                var arg2 = args[2]; // likely prevType or options
+                var fromJid = msg?.from?._serialized || '';
+                var toJid = msg?.to?._serialized || '';
+                var idRemote = msg?.id?.remote?._serialized || '';
+                if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !(msg && msg.isStatusV3) && idRemote !== 'status@broadcast') {
+                    window.onDiagLog('debug', 'change:type', JSON.stringify({
+                        ...window.__wwjsDiag.diagTrace(msg),
+                        newType: msg?.type,
+                        argCount: args.length,
+                        arg1Type: typeof arg1,
+                        arg1Value: typeof arg1 === 'object' ? JSON.stringify(arg1).slice(0, 200) : String(arg1),
+                        arg2Type: typeof arg2,
+                        arg2Value: typeof arg2 === 'object' ? JSON.stringify(arg2).slice(0, 200) : String(arg2),
+                        allArgTypes: args.map(function(a) { return typeof a; }).join(',')
+                    }));
+                }
+                window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
+            });
             window.Store.Msg.on('change:ack', (msg, ack) => { window.onMessageAckEvent(window.WWebJS.getMessageModel(msg), ack); });
             window.Store.Msg.on('change:isUnsentMedia', (msg, unsent) => { if (msg.id.fromMe && !unsent) window.onMessageMediaUploadedEvent(window.WWebJS.getMessageModel(msg)); });
             window.Store.Msg.on('remove', (msg) => { if (msg.isNewMsg) window.onRemoveMessageEvent(window.WWebJS.getMessageModel(msg)); });
@@ -765,15 +922,60 @@ class Client extends EventEmitter {
             }
             window.Store.Chat.on('remove', async (chat) => { window.onRemoveChatEvent(await window.WWebJS.getChatModel(chat)); });
             window.Store.Chat.on('change:archive', async (chat, currState, prevState) => { window.onArchiveChatEvent(await window.WWebJS.getChatModel(chat), currState, prevState); });
-            window.Store.Msg.on('add', (msg) => { 
+            // Track message IDs handled by the normal 'add' path so the
+            // change:type fallback below can skip them.
+            const __handledByAdd = new Set();
+            const __HANDLED_SET_CAP = 5000;
+
+            window.Store.Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
+                    const _id = msg.id?._serialized;
+                    if (_id) {
+                        __handledByAdd.add(_id);
+                        if (__handledByAdd.size > __HANDLED_SET_CAP) {
+                            // Evict oldest entries (Set iteration order = insertion order)
+                            const iter = __handledByAdd.values();
+                            for (let i = 0; i < 1000; i++) iter.next();
+                            // Rebuild with remaining
+                            const remaining = [];
+                            for (const v of __handledByAdd) remaining.push(v);
+                            __handledByAdd.clear();
+                            for (const v of remaining.slice(1000)) __handledByAdd.add(v);
+                        }
+                    }
                     if(msg.type === 'ciphertext') {
-                        // defer message event until ciphertext is resolved (type changed)
-                        msg.once('change:type', (_msg) => window.onAddMessageEvent(window.WWebJS.getMessageModel(_msg)));
+                        // Defer message event until ciphertext is resolved (type changed)
+                        msg.once('change:type', (_msg) => {
+                            window.onAddMessageEvent(window.WWebJS.getMessageModel(_msg));
+                        });
                         window.onAddMessageCiphertextEvent(window.WWebJS.getMessageModel(msg));
                     } else {
                         window.onAddMessageEvent(window.WWebJS.getMessageModel(msg)); 
                     }
+                }
+            });
+
+            // [SILENT_LOSS_FIX] Fallback: catch messages that were added to
+            // Store.Msg without triggering the 'add' event (e.g. via set/merge).
+            // When their type changes from 'ciphertext' to a real type and the
+            // normal path didn't handle them, emit them as new messages.
+            window.Store.Msg.on('change:type', (msg) => {
+                try {
+                    const id = msg.id?._serialized;
+                    if (!id || __handledByAdd.has(id)) return;
+                    if (!msg.isNewMsg) return;
+                    if (msg.type === 'ciphertext') return; // still encrypted
+
+                    // This message bypassed the 'add' event — emit it now
+                    __handledByAdd.add(id);
+                    window.onDiagLog?.('warn', 'ADD_BYPASS_RECOVERED', JSON.stringify({
+                        traceId: id,
+                        type: msg.type,
+                        from: msg.from?._serialized || '',
+                    }));
+                    window.onAddMessageEvent(window.WWebJS.getMessageModel(msg));
+                } catch (e) {
+                    // Fallback must never break the main flow
                 }
             });
             window.Store.Chat.on('change:unreadCount', (chat) => {window.onChatUnreadCountEvent(chat);});
@@ -843,6 +1045,14 @@ class Client extends EventEmitter {
                 }).bind(module);
             }
         });
+
+        // [L7] Verify Store.Msg listener registration succeeded
+        const listenerCount = await this.pupPage.evaluate(() => {
+            const addListeners = window.Store.Msg.listeners?.('add')?.length ?? -1;
+            const changeTypeListeners = window.Store.Msg.listeners?.('change:type')?.length ?? -1;
+            return { add: addListeners, changeType: changeTypeListeners };
+        });
+        this.emit('diag', 'info', 'Store.Msg listener count', JSON.stringify(listenerCount));
     }    
 
     async initWebVersionCache() {
@@ -1235,9 +1445,26 @@ class Client extends EventEmitter {
      * @returns {Promise<Contact>}
      */
     async getContactById(contactId) {
-        let contact = await this.pupPage.evaluate(contactId => {
-            return window.WWebJS.getContact(contactId);
-        }, contactId);
+        const start = Date.now();
+        let contact;
+        try {
+            contact = await this.pupPage.evaluate(contactId => {
+                return window.WWebJS.getContact(contactId);
+            }, contactId);
+        } catch (err) {
+            // [diag:promise-collected] Log failed getContactById with timing and context
+            const took = Date.now() - start;
+            this.emit('diag', 'error', 'getContactById:failed', JSON.stringify({
+                contactId: contactId?.substring?.(0, 30),
+                took,
+                inflight: this._diagEvalInflight || -1,
+                isPromiseCollected: err.message?.includes('Promise was collected'),
+                isContextDestroyed: err.message?.includes('Execution context was destroyed'),
+                isLid: contactId?.endsWith?.('@lid'),
+                error: String(err.message || err).substring(0, 200)
+            }));
+            throw err;
+        }
 
         return ContactFactory.create(this, contact);
     }
