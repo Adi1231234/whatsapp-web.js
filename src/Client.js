@@ -887,29 +887,25 @@ class Client extends EventEmitter {
 
             window.Store.Msg.on('change', (msg) => { window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg)); });
             // [L10] Log all change:type events on messages
-            window.Store.Msg.on('change:type', (msg) => {
-                var fromJid = msg.from?._serialized || '';
-                var toJid = msg.to?._serialized || '';
-                var idRemote = msg.id?.remote?._serialized || '';
-                if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !msg.isStatusV3 && idRemote !== 'status@broadcast') {
-                    var _prevType = null;
-                    var _prevAttrDebug = {
-                        typeof: typeof msg.previousAttributes,
-                        hasOwn: 'previousAttributes' in (msg || {}),
-                        changed: msg.changed ? Object.keys(msg.changed).slice(0,5).join(',') : null,
-                        changedType: msg.changed?.type || null,
-                        _prev: msg._previousAttributes ? Object.keys(msg._previousAttributes).slice(0,5).join(',') : null,
-                        _prevType: msg._previousAttributes?.type || null
-                    };
-                    try { if (typeof msg.previousAttributes === 'function') _prevType = msg.previousAttributes()?.type; } catch(e) {}
-                    if (!_prevType) try { _prevType = msg.previousAttributes?.type; } catch(e) {}
-                    if (!_prevType) try { _prevType = msg._previousAttributes?.type; } catch(e) {}
-                    if (!_prevType) try { _prevType = msg.changed?.type; } catch(e) {}
+            window.Store.Msg.on('change:type', function() {
+                // Capture ALL arguments to discover what WA Web passes
+                var args = Array.prototype.slice.call(arguments);
+                var msg = args[0];
+                var arg1 = args[1]; // likely newType or prevType
+                var arg2 = args[2]; // likely prevType or options
+                var fromJid = msg?.from?._serialized || '';
+                var toJid = msg?.to?._serialized || '';
+                var idRemote = msg?.id?.remote?._serialized || '';
+                if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !(msg && msg.isStatusV3) && idRemote !== 'status@broadcast') {
                     window.onDiagLog('debug', 'change:type', JSON.stringify({
                         ...window.__wwjsDiag.diagTrace(msg),
-                        prevType: _prevType || null,
-                        newType: msg.type,
-                        _prevAttrDebug: _prevAttrDebug
+                        newType: msg?.type,
+                        argCount: args.length,
+                        arg1Type: typeof arg1,
+                        arg1Value: typeof arg1 === 'object' ? JSON.stringify(arg1).slice(0, 200) : String(arg1),
+                        arg2Type: typeof arg2,
+                        arg2Value: typeof arg2 === 'object' ? JSON.stringify(arg2).slice(0, 200) : String(arg2),
+                        allArgTypes: args.map(function(a) { return typeof a; }).join(',')
                     }));
                 }
                 window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
