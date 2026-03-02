@@ -9,6 +9,7 @@ const InterfaceController = require('./util/InterfaceController');
 const { WhatsWebURL, DefaultOptions, Events, WAState, MessageTypes } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { ExposeStore } = require('./util/Injected/Store');
+const { InjectDiagCommon } = require('./util/Injected/DiagCommon');
 const { ExposeLegacyAuthStore } = require('./util/Injected/AuthStore/LegacyAuthStore');
 const { ExposeLegacyStore } = require('./util/Injected/LegacyStore');
 const { LoadUtils } = require('./util/Injected/Utils');
@@ -232,6 +233,7 @@ class Client extends EventEmitter {
                 }
 
                 if (isCometOrAbove) {
+                    await this.pupPage.evaluate(InjectDiagCommon);
                     await this.pupPage.evaluate(ExposeStore);
                 } else {
                     // make sure all modules are ready before injection
@@ -504,7 +506,7 @@ class Client extends EventEmitter {
             // [L4] Log every onAddMessageEvent call before gp2 filter (skip status + groups)
             const msgFrom = typeof msg.from === 'object' ? msg.from?._serialized : msg.from;
             const msgTo = typeof msg.to === 'object' ? msg.to?._serialized : msg.to;
-            const _isStatusOrGroupMsg = msgFrom?.includes('@g.us') || msgTo === 'status@broadcast' || msg.isStatusV3 || msg.id?.remote === 'status@broadcast' || msg.id?._serialized?.includes('status@broadcast');
+            const _isStatusOrGroupMsg = msgFrom?.includes('@g.us') || msgFrom?.includes('@newsletter') || msgTo === 'status@broadcast' || msg.isStatusV3 || msg.id?.remote === 'status@broadcast' || msg.id?.remote?.includes?.('@newsletter') || msg.id?._serialized?.includes('status@broadcast');
             // Filter: stickers, self, no-media, status, groups
             const _shouldSkipDiagMsg = _isStatusOrGroupMsg || msg.type === 'sticker' || msg.id?.fromMe || (!msg.directPath && !msg.mediaKey);
             if (!_shouldSkipDiagMsg) {
@@ -887,30 +889,15 @@ class Client extends EventEmitter {
 
             window.Store.Msg.on('change', (msg) => { window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg)); });
             // [L10] Log all change:type events on messages
-            window.Store.Msg.on('change:type', (msg) => {
-                var fromJid = msg.from?._serialized || '';
-                var toJid = msg.to?._serialized || '';
-                var idRemote = msg.id?.remote?._serialized || '';
-                if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !msg.isStatusV3 && idRemote !== 'status@broadcast') {
-                    var _prevType = null;
-                    var _prevAttrDebug = {
-                        typeof: typeof msg.previousAttributes,
-                        hasOwn: 'previousAttributes' in (msg || {}),
-                        changed: msg.changed ? Object.keys(msg.changed).slice(0,5).join(',') : null,
-                        changedType: msg.changed?.type || null,
-                        _prev: msg._previousAttributes ? Object.keys(msg._previousAttributes).slice(0,5).join(',') : null,
-                        _prevType: msg._previousAttributes?.type || null
-                    };
-                    try { if (typeof msg.previousAttributes === 'function') _prevType = msg.previousAttributes()?.type; } catch(e) {}
-                    if (!_prevType) try { _prevType = msg.previousAttributes?.type; } catch(e) {}
-                    if (!_prevType) try { _prevType = msg._previousAttributes?.type; } catch(e) {}
-                    if (!_prevType) try { _prevType = msg.changed?.type; } catch(e) {}
-                    window.onDiagLog('debug', 'change:type', JSON.stringify({
+            window.Store.Msg.on('change:type', (...args) => {
+                var [msg] = args;
+                if (!window.__diag.isStatusOrGroup(msg?.from) && !window.__diag.isStatusOrGroup(msg?.to) && !window.__diag.isStatusOrGroup(msg?.id?.remote) && !msg?.isStatusV3) {
+                    window.__diag.safeDiagLog('debug', 'change:type', {
                         ...window.__wwjsDiag.diagTrace(msg),
-                        prevType: _prevType || null,
-                        newType: msg.type,
-                        _prevAttrDebug: _prevAttrDebug
-                    }));
+                        newType: msg?.type,
+                        argCount: args.length,
+                        args: args.map(a => window.__diag.safeStr(a))
+                    });
                 }
                 window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
             });

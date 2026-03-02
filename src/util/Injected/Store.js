@@ -231,9 +231,12 @@ exports.ExposeStore = () => {
      * @param {TargetOptions} target Options specifying the target function to search for modifying
      * @param {Function} callback Modified function
      */
-    function safeDiagLog(level, tag, data) {
-        try { window.onDiagLog(level, tag, typeof data === 'string' ? data : JSON.stringify(data)); } catch(e) {}
-    }
+    // Use shared helpers from DiagCommon (injected before this file)
+    var safeDiagLog = window.__diag.safeDiagLog;
+    var safeStr = window.__diag.safeStr;
+    var wid = window.__diag.wid;
+    var _isStatusOrGroup = window.__diag.isStatusOrGroup;
+    var _isThumbnailType = window.__diag.isThumbnailType;
 
     window.injectToFunction = (target, callback) => {
         var hookId = target.module + '.' + target.function;
@@ -280,32 +283,7 @@ exports.ExposeStore = () => {
 
     window.injectToFunction({ module: 'WAWebE2EProtoUtils', function: 'typeAttributeFromProtobuf' }, function(func, ...args) { const proto = args[0]; return proto.locationMessage || proto.groupInviteMessage ? 'text' : func.apply(this, args); });
 
-    function wid(v) {
-        if (v == null) return null;
-        if (typeof v === 'string') return v;
-        return v._serialized || v.user || (v.$1 && (v.$1._serialized || v.$1.user)) || null;
-    }
-
-    function safeStr(v) {
-        if (v == null) return String(v);
-        if (typeof v !== 'object') return String(v);
-        try {
-            var s = JSON.stringify(v);
-            return s.length > 500 ? s.slice(0, 500) + '...' : s;
-        } catch (e) { return String(v); }
-    }
-
-    // safeDiagLog moved to before injectToFunction definition (see above)
-
-    function _isStatusOrGroup(jid) {
-        if (!jid) return false;
-        var s = typeof jid === 'string' ? jid : (jid._serialized || jid.user || '');
-        return s.indexOf('@g.us') !== -1 || s.indexOf('status@broadcast') !== -1;
-    }
-
-    function _isThumbnailType(type) {
-        return typeof type === 'string' && type.indexOf('thumbnail-') === 0;
-    }
+    // wid, safeStr, _isStatusOrGroup, _isThumbnailType — aliased from window.__diag above
 
     /**
      * Determines if a message-like object should be excluded from diagnostic logs.
