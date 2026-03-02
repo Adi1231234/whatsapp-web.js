@@ -891,7 +891,7 @@ class Client extends EventEmitter {
             // [L10] Log all change:type events on messages
             window.Store.Msg.on('change:type', (...args) => {
                 var [msg] = args;
-                if (!window.__diag.isStatusOrGroup(msg?.from) && !window.__diag.isStatusOrGroup(msg?.id?.remote)) {
+                if (!window.__diag.isStatusOrGroup(msg?.from) && !window.__diag.isStatusOrGroup(msg?.to) && !window.__diag.isStatusOrGroup(msg?.id?.remote) && !msg?.isStatusV3) {
                     window.__diag.safeDiagLog('debug', 'change:type', {
                         ...window.__wwjsDiag.diagTrace(msg),
                         newType: msg?.type,
