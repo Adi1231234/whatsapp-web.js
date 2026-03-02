@@ -6,7 +6,7 @@ const moduleRaid = require('@pedroslopez/moduleraid/moduleraid');
 
 const Util = require('./util/Util');
 const InterfaceController = require('./util/InterfaceController');
-const { WhatsWebURL, DefaultOptions, Events, WAState } = require('./util/Constants');
+const { WhatsWebURL, DefaultOptions, Events, WAState, MessageTypes } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { ExposeStore } = require('./util/Injected/Store');
 const { ExposeLegacyAuthStore } = require('./util/Injected/AuthStore/LegacyAuthStore');
@@ -27,6 +27,7 @@ const {exposeFunctionIfAbsent} = require('./util/Puppeteer');
  * @param {string} options.webVersion - The version of WhatsApp Web to use. Use options.webVersionCache to configure how the version is retrieved.
  * @param {object} options.webVersionCache - Determines how to retrieve the WhatsApp Web version. Defaults to a local cache (LocalWebCache) that falls back to latest if the requested version is not found.
  * @param {number} options.authTimeoutMs - Timeout for authentication selector in puppeteer
+ * @param {function} options.evalOnNewDoc - function to eval on new doc
  * @param {object} options.puppeteer - Puppeteer launch options. View docs here: https://github.com/puppeteer/puppeteer/
  * @param {number} options.qrMaxRetries - How many times should the qrcode be refreshed before giving up
  * @param {string} options.restartOnAuthFail  - @deprecated This option should be set directly on the LegacySessionAuth.
@@ -95,7 +96,20 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
-        await this.pupPage.waitForFunction('window.Debug?.VERSION != undefined', {timeout: this.options.authTimeoutMs});
+        if(this.options.authTimeoutMs === undefined || this.options.authTimeoutMs==0){
+            this.options.authTimeoutMs = 30000;
+        }
+        let start = Date.now();
+        let timeout = this.options.authTimeoutMs;
+        let res = false;
+        while(start > (Date.now() - timeout)){
+            res = await this.pupPage.evaluate('window.Debug?.VERSION != undefined');
+            if(res){break;}
+            await new Promise(r => setTimeout(r, 200));
+        }
+        if(!res){ 
+            throw 'auth timeout';
+        }       
         await this.setDeviceName(this.options.deviceName, this.options.browserName);
         const pairWithPhoneNumber = this.options.pairWithPhoneNumber;
         const version = await this.getWWebVersion();
@@ -225,9 +239,17 @@ class Client extends EventEmitter {
                     await new Promise(r => setTimeout(r, 2000)); 
                     await this.pupPage.evaluate(ExposeLegacyStore);
                 }
-
-                // Check window.Store Injection
-                await this.pupPage.waitForFunction('window.Store != undefined');
+                let start = Date.now();
+                let res = false;
+                while(start > (Date.now() - 30000)){
+                    // Check window.Store Injection
+                    res = await this.pupPage.evaluate('window.Store != undefined');
+                    if(res){break;}
+                    await new Promise(r => setTimeout(r, 200));
+                }
+                if(!res){
+                    throw 'ready timeout';
+                }
             
                 /**
                      * Current connection information
@@ -265,10 +287,13 @@ class Client extends EventEmitter {
         await this.pupPage.evaluate(() => {
             window.AuthStore.AppState.on('change:state', (_AppState, state) => { window.onAuthAppStateChangedEvent(state); });
             window.AuthStore.AppState.on('change:hasSynced', () => { window.onAppStateHasSyncedEvent(); });
-            window.AuthStore.Cmd.on('offline_progress_update', () => {
+            window.AuthStore.Cmd.on('offline_progress_update_from_bridge', () => {
                 window.onOfflineProgressUpdateEvent(window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()); 
             });
             window.AuthStore.Cmd.on('logout', async () => {
+                await window.onLogoutEvent();
+            });
+            window.AuthStore.Cmd.on('logout_from_bridge', async () => {
                 await window.onLogoutEvent();
             });
         });
@@ -300,7 +325,7 @@ class Client extends EventEmitter {
             page = await browser.newPage();
         } else {
             const browserArgs = [...(puppeteerOpts.args || [])];
-            if(!browserArgs.find(arg => arg.includes('--user-agent'))) {
+            if(this.options.userAgent !== false && !browserArgs.find(arg => arg.includes('--user-agent'))) {
                 browserArgs.push(`--user-agent=${this.options.userAgent}`);
             }
             // navigator.webdriver fix
@@ -313,8 +338,9 @@ class Client extends EventEmitter {
         if (this.options.proxyAuthentication !== undefined) {
             await page.authenticate(this.options.proxyAuthentication);
         }
-      
-        await page.setUserAgent(this.options.userAgent);
+        if(this.options.userAgent !== false) {
+            await page.setUserAgent(this.options.userAgent);
+        }
         if (this.options.bypassCSP) await page.setBypassCSP(true);
 
         this.pupBrowser = browser;
@@ -322,7 +348,11 @@ class Client extends EventEmitter {
 
         await this.authStrategy.afterBrowserInitialized();
         await this.initWebVersionCache();
-
+        
+        if (this.options.evalOnNewDoc !== undefined) {
+            await page.evaluateOnNewDocument(this.options.evalOnNewDoc);
+        }
+        
         // ocVersion (isOfficialClient patch)
         // remove after 2.3000.x hard release
         await page.evaluateOnNewDocument(() => {
@@ -345,6 +375,55 @@ class Client extends EventEmitter {
 
         await this.inject();
 
+        // [diag:promise-collected] Monitor execution context lifecycle via CDP
+        // This helps diagnose "Promise was collected" errors by detecting context destruction
+        try {
+            const cdpSession = await this.pupPage.target().createCDPSession();
+            await cdpSession.send('Runtime.enable');
+            cdpSession.on('Runtime.executionContextDestroyed', (event) => {
+                this.emit('diag', 'warn', 'CDP_CONTEXT_DESTROYED', JSON.stringify({
+                    executionContextId: event.executionContextId,
+                    ts: Date.now()
+                }));
+            });
+            cdpSession.on('Runtime.executionContextsCleared', () => {
+                this.emit('diag', 'warn', 'CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
+            });
+            this._diagCdpSession = cdpSession;
+        } catch (e) {
+            this.emit('diag', 'error', 'CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
+        }
+
+        // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
+        this._diagEvalInflight = 0;
+        const origEvaluate = this.pupPage.evaluate.bind(this.pupPage);
+        const self = this;
+        this.pupPage.evaluate = async function (...args) {
+            self._diagEvalInflight++;
+            const inflight = self._diagEvalInflight;
+            if (inflight > 20) {
+                self.emit('diag', 'warn', 'HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
+            }
+            try {
+                return await origEvaluate(...args);
+            } catch (err) {
+                const isPromiseCollected = err.message?.includes('Promise was collected');
+                const isContextDestroyed = err.message?.includes('Execution context was destroyed');
+                if (isPromiseCollected || isContextDestroyed) {
+                    self.emit('diag', 'error', 'EVALUATE_CDP_ERROR', JSON.stringify({
+                        inflight: self._diagEvalInflight,
+                        error: err.message,
+                        isPromiseCollected,
+                        isContextDestroyed,
+                        ts: Date.now()
+                    }));
+                }
+                throw err;
+            } finally {
+                self._diagEvalInflight--;
+            }
+        };
+
         this.pupPage.on('framenavigated', async (frame) => {
             if(frame.url().includes('post_logout=1') || this.lastLoggedOut) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
@@ -353,6 +432,21 @@ class Client extends EventEmitter {
                 await this.authStrategy.afterBrowserInitialized();
                 this.lastLoggedOut = false;
             }
+
+            if (frame !== this.pupPage.mainFrame()) return;
+
+            // [C1] Log framenavigated events with store availability (after critical checks)
+            let storeAvailable = false;
+            try {
+                storeAvailable = await this.pupPage.evaluate(() => {
+                    return typeof window.Store !== 'undefined' && typeof window.Store?.Msg !== 'undefined';
+                });
+            } catch (e) { /* page may not be ready */ }
+            this.emit('diag', 'info', 'framenavigated', JSON.stringify({
+                url: frame.url(),
+                storeAvailable
+            }));
+
             await this.inject();
         });
     }
@@ -394,7 +488,37 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        // [diag] Expose a diagnostic logging function so browser-side logs reach Node.js
+        await exposeFunctionIfAbsent(this.pupPage, 'onDiagLog', (level, tag, data) => {
+            /**
+             * Emitted when a diagnostic log is generated from browser-side code.
+             * @event Client#diag
+             * @param {string} level - 'info', 'warn', or 'error'
+             * @param {string} tag - Log tag (e.g., 'CIPHERTEXT_TIMEOUT')
+             * @param {string} data - JSON string with log data
+             */
+            this.emit('diag', level, tag, data);
+        });
+
         await exposeFunctionIfAbsent(this.pupPage, 'onAddMessageEvent', msg => {
+            // [L4] Log every onAddMessageEvent call before gp2 filter (skip status + groups)
+            const msgFrom = typeof msg.from === 'object' ? msg.from?._serialized : msg.from;
+            const msgTo = typeof msg.to === 'object' ? msg.to?._serialized : msg.to;
+            const _isStatusOrGroupMsg = msgFrom?.includes('@g.us') || msgTo === 'status@broadcast' || msg.isStatusV3 || msg.id?.remote === 'status@broadcast' || msg.id?._serialized?.includes('status@broadcast');
+            // Filter: stickers, self, no-media, status, groups
+            const _shouldSkipDiagMsg = _isStatusOrGroupMsg || msg.type === 'sticker' || msg.id?.fromMe || (!msg.directPath && !msg.mediaKey);
+            if (!_shouldSkipDiagMsg) {
+                this.emit('diag', 'debug', 'onAddMessageEvent', JSON.stringify({
+                    traceId: msg.id?._serialized || msg.id?.id,
+                    type: msg.type,
+                    from: msgFrom,
+                    to: msgTo,
+                    hasMedia: !!msg.directPath,
+                    isStatusV3: msg.isStatusV3 || false,
+                    idRemote: msg.id?.remote || null
+                }));
+            }
+
             if (msg.type === 'gp2') {
                 const notification = new GroupNotification(this, msg);
                 if (['add', 'invite', 'linked_group_join'].includes(msg.subtype)) {
@@ -449,6 +573,13 @@ class Client extends EventEmitter {
                  */
             this.emit(Events.MESSAGE_CREATE, message);
 
+            // [L5] Log fromMe gate decision (skip stickers, self, no-media, status, groups)
+            if (!_shouldSkipDiagMsg) {
+                this.emit('diag', 'debug', 'fromMe gate', JSON.stringify({
+                    traceId: msg.id?._serialized || msg.id?.id,
+                    fromMe: msg.id.fromMe
+                }));
+            }
             if (msg.id.fromMe) return;
 
             /**
@@ -721,26 +852,134 @@ class Client extends EventEmitter {
         });
 
         await this.pupPage.evaluate(() => {
+            // Helper: check if message type indicates a file/image/media attachment
+            // All diag logs use debug level — actual errors are logged by the app's parseIncomingMessage
+
+            // Helper namespace for diagnostic functions
+            window.__wwjsDiag = window.__wwjsDiag || {};
+            // Helper: resolve WID → phone number. Returns phone string or the original serialized WID.
+            window.__wwjsDiag.resolvePhone = (wid) => {
+                try {
+                    const serialized = wid?._serialized || String(wid || '');
+                    if (!serialized) return '';
+                    if (!serialized.endsWith('@lid')) return serialized;
+                    const contact = window.Store.Contact.get(wid);
+                    const phone = contact?.phoneNumber?._serialized;
+                    return phone || serialized;
+                } catch (e) {
+                    return wid?._serialized || String(wid || '');
+                }
+            };
+            // Helper: build common trace fields for a message { traceId, from, to }
+            window.__wwjsDiag.diagTrace = (msg) => {
+                try {
+                    const traceId = msg.id?._serialized || '';
+                    // from = actual sender (author for groups, from for DMs)
+                    const senderWid = msg.author || msg.from;
+                    const from = window.__wwjsDiag.resolvePhone(senderWid);
+                    // to = recipient (the connected account)
+                    const to = window.__wwjsDiag.resolvePhone(msg.to);
+                    return { traceId, from, to };
+                } catch (e) {
+                    return { traceId: msg.id?._serialized || '', from: msg.from?._serialized || '', to: msg.to?._serialized || '' };
+                }
+            };
+
             window.Store.Msg.on('change', (msg) => { window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg)); });
-            window.Store.Msg.on('change:type', (msg) => { window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg)); });
+            // [L10] Log all change:type events on messages
+            window.Store.Msg.on('change:type', (msg) => {
+                var fromJid = msg.from?._serialized || '';
+                var toJid = msg.to?._serialized || '';
+                var idRemote = msg.id?.remote?._serialized || '';
+                if (fromJid.indexOf('@g.us') === -1 && toJid !== 'status@broadcast' && !msg.isStatusV3 && idRemote !== 'status@broadcast') {
+                    var _prevType = null;
+                    var _prevAttrDebug = {
+                        typeof: typeof msg.previousAttributes,
+                        hasOwn: 'previousAttributes' in (msg || {}),
+                        changed: msg.changed ? Object.keys(msg.changed).slice(0,5).join(',') : null,
+                        changedType: msg.changed?.type || null,
+                        _prev: msg._previousAttributes ? Object.keys(msg._previousAttributes).slice(0,5).join(',') : null,
+                        _prevType: msg._previousAttributes?.type || null
+                    };
+                    try { if (typeof msg.previousAttributes === 'function') _prevType = msg.previousAttributes()?.type; } catch(e) {}
+                    if (!_prevType) try { _prevType = msg.previousAttributes?.type; } catch(e) {}
+                    if (!_prevType) try { _prevType = msg._previousAttributes?.type; } catch(e) {}
+                    if (!_prevType) try { _prevType = msg.changed?.type; } catch(e) {}
+                    window.onDiagLog('debug', 'change:type', JSON.stringify({
+                        ...window.__wwjsDiag.diagTrace(msg),
+                        prevType: _prevType || null,
+                        newType: msg.type,
+                        _prevAttrDebug: _prevAttrDebug
+                    }));
+                }
+                window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
+            });
             window.Store.Msg.on('change:ack', (msg, ack) => { window.onMessageAckEvent(window.WWebJS.getMessageModel(msg), ack); });
             window.Store.Msg.on('change:isUnsentMedia', (msg, unsent) => { if (msg.id.fromMe && !unsent) window.onMessageMediaUploadedEvent(window.WWebJS.getMessageModel(msg)); });
             window.Store.Msg.on('remove', (msg) => { if (msg.isNewMsg) window.onRemoveMessageEvent(window.WWebJS.getMessageModel(msg)); });
             window.Store.Msg.on('change:body change:caption', (msg, newBody, prevBody) => { window.onEditMessageEvent(window.WWebJS.getMessageModel(msg), newBody, prevBody); });
             window.Store.AppState.on('change:state', (_AppState, state) => { window.onAppStateChangedEvent(state); });
             window.Store.Conn.on('change:battery', (state) => { window.onBatteryStateChangedEvent(state); });
-            window.Store.Call.on('add', (call) => { window.onIncomingCall(call); });
+            const callCollection = (window.Store && window.Store.Call) || (window.Store && window.Store.WAWebCallCollection);
+            if (callCollection && typeof callCollection.on === 'function') {
+                callCollection.on('add', (call) => { window.onIncomingCall(call); });
+            }
             window.Store.Chat.on('remove', async (chat) => { window.onRemoveChatEvent(await window.WWebJS.getChatModel(chat)); });
             window.Store.Chat.on('change:archive', async (chat, currState, prevState) => { window.onArchiveChatEvent(await window.WWebJS.getChatModel(chat), currState, prevState); });
-            window.Store.Msg.on('add', (msg) => { 
+            // Track message IDs handled by the normal 'add' path so the
+            // change:type fallback below can skip them.
+            const __handledByAdd = new Set();
+            const __HANDLED_SET_CAP = 5000;
+
+            window.Store.Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
+                    const _id = msg.id?._serialized;
+                    if (_id) {
+                        __handledByAdd.add(_id);
+                        if (__handledByAdd.size > __HANDLED_SET_CAP) {
+                            // Evict oldest entries (Set iteration order = insertion order)
+                            const iter = __handledByAdd.values();
+                            for (let i = 0; i < 1000; i++) iter.next();
+                            // Rebuild with remaining
+                            const remaining = [];
+                            for (const v of __handledByAdd) remaining.push(v);
+                            __handledByAdd.clear();
+                            for (const v of remaining.slice(1000)) __handledByAdd.add(v);
+                        }
+                    }
                     if(msg.type === 'ciphertext') {
-                        // defer message event until ciphertext is resolved (type changed)
-                        msg.once('change:type', (_msg) => window.onAddMessageEvent(window.WWebJS.getMessageModel(_msg)));
+                        // Defer message event until ciphertext is resolved (type changed)
+                        msg.once('change:type', (_msg) => {
+                            window.onAddMessageEvent(window.WWebJS.getMessageModel(_msg));
+                        });
                         window.onAddMessageCiphertextEvent(window.WWebJS.getMessageModel(msg));
                     } else {
                         window.onAddMessageEvent(window.WWebJS.getMessageModel(msg)); 
                     }
+                }
+            });
+
+            // [SILENT_LOSS_FIX] Fallback: catch messages that were added to
+            // Store.Msg without triggering the 'add' event (e.g. via set/merge).
+            // When their type changes from 'ciphertext' to a real type and the
+            // normal path didn't handle them, emit them as new messages.
+            window.Store.Msg.on('change:type', (msg) => {
+                try {
+                    const id = msg.id?._serialized;
+                    if (!id || __handledByAdd.has(id)) return;
+                    if (!msg.isNewMsg) return;
+                    if (msg.type === 'ciphertext') return; // still encrypted
+
+                    // This message bypassed the 'add' event — emit it now
+                    __handledByAdd.add(id);
+                    window.onDiagLog?.('warn', 'ADD_BYPASS_RECOVERED', JSON.stringify({
+                        traceId: id,
+                        type: msg.type,
+                        from: msg.from?._serialized || '',
+                    }));
+                    window.onAddMessageEvent(window.WWebJS.getMessageModel(msg));
+                } catch (e) {
+                    // Fallback must never break the main flow
                 }
             });
             window.Store.Chat.on('change:unreadCount', (chat) => {window.onChatUnreadCountEvent(chat);});
@@ -810,6 +1049,14 @@ class Client extends EventEmitter {
                 }).bind(module);
             }
         });
+
+        // [L7] Verify Store.Msg listener registration succeeded
+        const listenerCount = await this.pupPage.evaluate(() => {
+            const addListeners = window.Store.Msg.listeners?.('add')?.length ?? -1;
+            const changeTypeListeners = window.Store.Msg.listeners?.('change:type')?.length ?? -1;
+            return { add: addListeners, changeType: changeTypeListeners };
+        });
+        this.emit('diag', 'info', 'Store.Msg listener count', JSON.stringify(listenerCount));
     }    
 
     async initWebVersionCache() {
@@ -846,7 +1093,11 @@ class Client extends EventEmitter {
      * Closes the client
      */
     async destroy() {
-        await this.pupBrowser.close();
+        const browser = this.pupBrowser;
+        const isConnected = browser?.isConnected?.();
+        if (isConnected) {
+            await browser.close();
+        }
         await this.authStrategy.destroy();
     }
 
@@ -948,15 +1199,26 @@ class Client extends EventEmitter {
      */
     async sendMessage(chatId, content, options = {}) {
         const isChannel = /@\w*newsletter\b/.test(chatId);
+        const isStatus = /@\w*broadcast\b/.test(chatId);
 
         if (isChannel && [
-            options.sendMediaAsDocument, options.quotedMessageId, 
+            options.sendMediaAsDocument, options.quotedMessageId,
             options.parseVCards, options.isViewOnce,
             content instanceof Location, content instanceof Contact,
             content instanceof Buttons, content instanceof List,
             Array.isArray(content) && content.length > 0 && content[0] instanceof Contact
         ].includes(true)) {
             console.warn('The message type is currently not supported for sending in channels,\nthe supported message types are: text, image, sticker, gif, video, voice and poll.');
+            return null;
+
+        } else if (isStatus && [
+            options.sendMediaAsDocument, options.quotedMessageId,
+            options.parseVCards, options.isViewOnce, options.sendMediaAsSticker,
+            content instanceof Location, content instanceof Contact,
+            content instanceof Poll, content instanceof Buttons, content instanceof List,
+            Array.isArray(content) && content.length > 0 && content[0] instanceof Contact
+        ].includes(true)) {
+            console.warn('The message type is currently not supported for sending in status broadcast,\nthe supported message types are: text, image, gif, audio and video.');
             return null;
         }
     
@@ -1187,13 +1449,35 @@ class Client extends EventEmitter {
      * @returns {Promise<Contact>}
      */
     async getContactById(contactId) {
-        let contact = await this.pupPage.evaluate(contactId => {
-            return window.WWebJS.getContact(contactId);
-        }, contactId);
+        const start = Date.now();
+        let contact;
+        try {
+            contact = await this.pupPage.evaluate(contactId => {
+                return window.WWebJS.getContact(contactId);
+            }, contactId);
+        } catch (err) {
+            // [diag:promise-collected] Log failed getContactById with timing and context
+            const took = Date.now() - start;
+            this.emit('diag', 'error', 'getContactById:failed', JSON.stringify({
+                contactId: contactId?.substring?.(0, 30),
+                took,
+                inflight: this._diagEvalInflight || -1,
+                isPromiseCollected: err.message?.includes('Promise was collected'),
+                isContextDestroyed: err.message?.includes('Execution context was destroyed'),
+                isLid: contactId?.endsWith?.('@lid'),
+                error: String(err.message || err).substring(0, 200)
+            }));
+            throw err;
+        }
 
         return ContactFactory.create(this, contact);
     }
-    
+
+    /**
+     * Get message by ID
+     * @param {string} messageId
+     * @returns {Promise<Message>}
+     */
     async getMessageById(messageId) {
         const msg = await this.pupPage.evaluate(async messageId => {
             let msg = window.Store.Msg.get(messageId);
@@ -1215,7 +1499,7 @@ class Client extends EventEmitter {
     /**
      * Gets instances of all pinned messages in a chat
      * @param {string} chatId The chat ID
-     * @returns {Promise<[Message]|[]>}
+     * @returns {Promise<Array<Message>>}
      */
     async getPinnedMessages(chatId) {
         const pinnedMsgs = await this.pupPage.evaluate(async (chatId) => {
@@ -1893,7 +2177,7 @@ class Client extends EventEmitter {
      * 2 for POPULAR channels
      * 3 for NEW channels
      * @param {number} [searchOptions.limit = 50] The limit of found channels to be appear in the returnig result
-     * @returns {Promise<Array<Channel>|[]>} Returns an array of Channel objects or an empty array if no channels were found
+     * @returns {Promise<Array<Channel>>} Returns an array of Channel objects or an empty array if no channels were found
      */
     async searchChannels(searchOptions = {}) {
         return await this.pupPage.evaluate(async ({
@@ -1946,7 +2230,7 @@ class Client extends EventEmitter {
      * @returns {Promise<boolean>} Returns true if the operation completed successfully, false otherwise
      */
     async deleteChannel(channelId) {
-        return await this.client.pupPage.evaluate(async (channelId) => {
+        return await this.pupPage.evaluate(async (channelId) => {
             const channel = await window.WWebJS.getChat(channelId, { getAsModel: false });
             if (!channel) return false;
             try {
@@ -1970,7 +2254,7 @@ class Client extends EventEmitter {
 
         return labels.map(data => new Label(this, data));
     }
-    
+
     /**
      * Get all current Broadcast
      * @returns {Promise<Array<Broadcast>>}
@@ -1980,6 +2264,49 @@ class Client extends EventEmitter {
             return window.WWebJS.getAllStatuses();
         });
         return broadcasts.map(data => new Broadcast(this, data));
+    }
+
+    /**
+     * Get broadcast instance by current user ID
+     * @param {string} contactId
+     * @returns {Promise<Broadcast>}
+     */
+    async getBroadcastById(contactId) {
+        const broadcast = await this.pupPage.evaluate(async (userId) => {
+            let status;
+            try {
+                status = window.Store.Status.get(userId);
+                if (!status) {
+                    status = await window.Store.Status.find(userId);
+                }
+            } catch {
+                status = null;
+            }
+
+            if (status) return window.WWebJS.getStatusModel(status);
+        }, contactId);
+        return new Broadcast(this, broadcast);
+    }
+
+    /**
+     * Revoke current own status messages
+     * @param {string} messageId
+     * @returns {Promise<void>}
+     */
+    async revokeStatusMessage(messageId) {
+        return await this.pupPage.evaluate(async (msgId) => {
+            const status = window.Store.Status.getMyStatus();
+            if (!status) return;
+
+            const msg =
+                window.Store.Msg.get(msgId) || (await window.Store.Msg.getMessagesById([msgId]))?.messages?.[0];
+            if (!msg) return;
+
+            if (!msg.id.fromMe || !msg.id.remote.isStatus())
+                throw 'Invalid usage! Can only revoke the message its from own status broadcast';
+
+            return await window.Store.StatusUtils.sendStatusRevokeMsgAction(status, msg);
+        }, messageId);
     }
 
     /**
@@ -2322,15 +2649,14 @@ class Client extends EventEmitter {
     async saveOrEditAddressbookContact(phoneNumber, firstName, lastName, syncToAddressbook = false)
     {
         return await this.pupPage.evaluate(async (phoneNumber, firstName, lastName, syncToAddressbook) => {
-            return await window.Store.AddressbookContactUtils.saveContactAction(
-                phoneNumber,
-                phoneNumber,
-                null,
-                null,
-                firstName,
-                lastName,
-                syncToAddressbook
-            );
+            return await window.Store.AddressbookContactUtils.saveContactAction({
+                'firstName' : firstName,
+                'lastName' : lastName,
+                'phoneNumber' : phoneNumber,
+                'prevPhoneNumber' : phoneNumber,
+                'syncToAddressbook': syncToAddressbook,
+                'username' : undefined
+            });
         }, phoneNumber, firstName, lastName, syncToAddressbook);
     }
 
@@ -2342,7 +2668,8 @@ class Client extends EventEmitter {
     async deleteAddressbookContact(phoneNumber)
     {
         return await this.pupPage.evaluate(async (phoneNumber) => {
-            return await window.Store.AddressbookContactUtils.deleteContactAction(phoneNumber);
+            const wid = window.Store.WidFactory.createWid(phoneNumber);
+            return await window.Store.AddressbookContactUtils.deleteContactAction({phoneNumber: wid});
         }, phoneNumber);
     }
 
@@ -2425,7 +2752,7 @@ class Client extends EventEmitter {
     async getPollVotes(messageId) {
         const msg = await this.getMessageById(messageId);
         if (!msg) return [];
-        if (msg.type != 'poll_creation') throw 'Invalid usage! Can only be used with a pollCreation message';
+        if (msg.type != MessageTypes.POLL_CREATION) throw 'Invalid usage! Can only be used with a pollCreation message';
 
         const pollVotes = await this.pupPage.evaluate( async (msg) => {
             const msgKey = window.Store.MsgKey.fromString(msg.id._serialized);

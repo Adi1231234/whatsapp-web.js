@@ -48,6 +48,16 @@ class Message extends Base {
          */
         this.hasMedia = Boolean(data.directPath);
 
+        // [L11] Log when image/video/document has no directPath (hasMedia=false)
+        if (!this.hasMedia && ['image', 'video', 'document', 'ptt', 'audio', 'sticker'].includes(data.type)) {
+            this.client?.emit?.('diag', 'warn', 'Media type without directPath', JSON.stringify({
+                id: data.id?._serialized || data.id?.id,
+                type: data.type,
+                hasDirectPath: !!data.directPath,
+                hasMediaKey: !!data.mediaKey
+            }));
+        }
+
         /**
          * Message content
          * @type {string}
@@ -356,7 +366,7 @@ class Message extends Base {
     
     /**
      * Returns groups mentioned in this message
-     * @returns {Promise<GroupChat[]|[]>}
+     * @returns {Promise<Array<GroupChat>>}
      */
     async getGroupMentions() {
         return await Promise.all(this.groupMentions.map(async (m) => await this.client.getChatById(m.groupJid._serialized)));
@@ -444,28 +454,114 @@ class Message extends Base {
      */
     async downloadMedia() {
         if (!this.hasMedia) {
+            // [L12] Log when downloadMedia called but hasMedia=false
+            this.client?.emit?.('diag', 'warn', 'downloadMedia: hasMedia=false', JSON.stringify({
+                id: this.id?._serialized,
+                type: this.type
+            }));
             return undefined;
         }
 
         const result = await this.client.pupPage.evaluate(async (msgId) => {
             const msg = window.Store.Msg.get(msgId) || (await window.Store.Msg.getMessagesById([msgId]))?.messages?.[0];
-            if (!msg || !msg.mediaData) {
+
+            // REUPLOADING mediaStage means the media is expired and the download button is spinning, cannot be downloaded now
+            if (!msg || !msg.mediaData || msg.mediaData.mediaStage === 'REUPLOADING') {
+                // [L12] Log silent null return
+                if (window.onDiagLog) window.onDiagLog('warn', 'downloadMedia: returning null', JSON.stringify({
+                    id: msgId,
+                    hasMsg: !!msg,
+                    hasMediaData: !!msg?.mediaData,
+                    mediaStage: msg?.mediaData?.mediaStage
+                }));
                 return null;
             }
             if (msg.mediaData.mediaStage != 'RESOLVED') {
+                // [L13] Snapshot crypto fields BEFORE resolve attempt
+                const cryptoBefore = {
+                    directPath: msg.directPath,
+                    mediaKey: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
+                    mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                    encFilehash: msg.encFilehash,
+                    filehash: msg.filehash,
+                    mediaStage: msg.mediaData.mediaStage,
+                    mediaStageTimestamp: msg.mediaData.mediaStageTimestamp,
+                    isBackfill: !!(msg.__x_isBackfill || msg.isBackfill),
+                    protocolMessageType: msg.protocolMessageType,
+                    ephemeralDuration: msg.ephemeralDuration,
+                    messageSecret: !!msg.messageSecret,
+                };
                 // try to resolve media
-                await msg.downloadMedia({
-                    downloadEvenIfExpensive: true,
-                    rmrReason: 1
-                });
+                let resolveError = null;
+                try {
+                    await msg.downloadMedia({
+                        downloadEvenIfExpensive: true,
+                        rmrReason: 1
+                    });
+                } catch (re) {
+                    resolveError = { message: String(re?.message || re), name: re?.name };
+                }
+
+                // [L13] Snapshot AFTER resolve attempt
+                const cryptoAfter = {
+                    directPath: msg.directPath,
+                    mediaKey: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
+                    encFilehash: msg.encFilehash,
+                    filehash: msg.filehash,
+                    mediaStage: msg.mediaData.mediaStage,
+                    mediaStageTimestamp: msg.mediaData.mediaStageTimestamp,
+                };
+                const fieldsChanged = {
+                    directPath: cryptoBefore.directPath !== cryptoAfter.directPath,
+                    mediaKey: cryptoBefore.mediaKey !== cryptoAfter.mediaKey,
+                    encFilehash: cryptoBefore.encFilehash !== cryptoAfter.encFilehash,
+                    filehash: cryptoBefore.filehash !== cryptoAfter.filehash,
+                };
+
+                if (window.onDiagLog) window.onDiagLog('info', 'downloadMedia: resolve attempt', JSON.stringify({
+                    id: msgId,
+                    stageBefore: cryptoBefore.mediaStage,
+                    stageAfter: cryptoAfter.mediaStage,
+                    fieldsChanged,
+                    resolveError,
+                    cryptoBefore,
+                    cryptoAfter,
+                }));
             }
 
             if (msg.mediaData.mediaStage.includes('ERROR') || msg.mediaData.mediaStage === 'FETCHING') {
+                // [L12] Log silent undefined return (error/fetching)
+                if (window.onDiagLog) window.onDiagLog('warn', 'downloadMedia: error/fetching stage', JSON.stringify({
+                    id: msgId,
+                    mediaStage: msg.mediaData.mediaStage
+                }));
                 // media could not be downloaded
                 return undefined;
             }
 
             try {
+                const mockQpl = {
+                    addAnnotations: function() { return this; },
+                    addAnnotation: function() { return this; },
+                    addPoint: function() { return this; },
+                    start: function() { return this; },
+                    end: function() { return this; },
+                    cancel: function() { return this; },
+                    success: function() { return this; },
+                    fail: function() { return this; }
+                };
+
+                // [L13] Log the exact params going into downloadAndMaybeDecrypt
+                if (window.onDiagLog) window.onDiagLog('info', 'downloadMedia: attempting downloadAndMaybeDecrypt', JSON.stringify({
+                    id: msgId,
+                    directPath: msg.directPath,
+                    encFilehash: msg.encFilehash,
+                    filehash: msg.filehash,
+                    mediaKeyPrefix: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
+                    mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                    type: msg.type,
+                }));
+
                 const decryptedMedia = await window.Store.DownloadManager.downloadAndMaybeDecrypt({
                     directPath: msg.directPath,
                     encFilehash: msg.encFilehash,
@@ -473,7 +569,8 @@ class Message extends Base {
                     mediaKey: msg.mediaKey,
                     mediaKeyTimestamp: msg.mediaKeyTimestamp,
                     type: msg.type,
-                    signal: (new AbortController).signal
+                    signal: (new AbortController).signal,
+                    downloadQpl: mockQpl
                 });
 
                 const data = await window.WWebJS.arrayBufferToBase64Async(decryptedMedia);
@@ -485,7 +582,29 @@ class Message extends Base {
                     filesize: msg.size
                 };
             } catch (e) {
-                if(e.status && e.status === 404) return undefined;
+                // [L13] Detailed error analysis for download failures
+                const errorDetail = {
+                    id: msgId,
+                    name: e?.name,
+                    message: String(e?.message || e).substring(0, 500),
+                    status: e?.status,
+                    code: e?.code,
+                    // Extract all enumerable properties from the error
+                    props: {},
+                };
+                try {
+                    for (const k of Object.keys(e || {})) {
+                        if (!['message', 'stack', 'name'].includes(k)) {
+                            errorDetail.props[k] = typeof e[k] === 'object' ? JSON.stringify(e[k]).substring(0, 200) : String(e[k]);
+                        }
+                    }
+                } catch (_) { /* ignore */ }
+
+                if (window.onDiagLog) window.onDiagLog('error', 'downloadMedia: downloadAndMaybeDecrypt failed', JSON.stringify(errorDetail));
+
+                if(e.status && e.status === 404) {
+                    return undefined;
+                }
                 throw e;
             }
         }, this.id._serialized);
@@ -562,7 +681,7 @@ class Message extends Base {
      */
     async unpin() {
         return await this.client.pupPage.evaluate(async (msgId) => {
-            return await window.WWebJS.pinUnpinMsgAction(msgId, 2);
+            return await window.WWebJS.pinUnpinMsgAction(msgId, 2, 0);
         }, this.id._serialized);
     }
 
@@ -748,6 +867,32 @@ class Message extends Base {
      */
     async getPollVotes() {
         return await this.client.getPollVotes(this.id._serialized);
+    }
+
+    /**
+     * Send votes to the poll message
+     * @param {Array<string>} selectedOptions Array of options selected.
+     * @returns {Promise}
+     */
+    async vote(selectedOptions) {
+        if (this.type != MessageTypes.POLL_CREATION) throw 'Invalid usage! Can only be used with a pollCreation message';
+
+        await this.client.pupPage.evaluate(async (messageId, votes) => {
+            if (!messageId) return null;
+            if (!Array.isArray(votes)) votes = [votes];
+            let localIdSet = new Set();
+            const msg =
+                window.Store.Msg.get(messageId) || (await window.Store.Msg.getMessagesById([messageId]))?.messages?.[0];
+            if (!msg) return null;
+
+            msg.pollOptions.forEach(a => {
+                for (const option of votes) {
+                    if (a.name === option) localIdSet.add(a.localId);
+                }
+            });
+
+            await window.Store.PollsSendVote.sendVote(msg, localIdSet);
+        }, this.id._serialized, selectedOptions);
     }
 }
 
