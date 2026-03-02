@@ -9,6 +9,7 @@ const InterfaceController = require('./util/InterfaceController');
 const { WhatsWebURL, DefaultOptions, Events, WAState, MessageTypes } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { ExposeStore } = require('./util/Injected/Store');
+const { InjectDiagCommon } = require('./util/Injected/DiagCommon');
 const { ExposeLegacyAuthStore } = require('./util/Injected/AuthStore/LegacyAuthStore');
 const { ExposeLegacyStore } = require('./util/Injected/LegacyStore');
 const { LoadUtils } = require('./util/Injected/Utils');
@@ -232,6 +233,7 @@ class Client extends EventEmitter {
                 }
 
                 if (isCometOrAbove) {
+                    await this.pupPage.evaluate(InjectDiagCommon);
                     await this.pupPage.evaluate(ExposeStore);
                 } else {
                     // make sure all modules are ready before injection
@@ -888,22 +890,14 @@ class Client extends EventEmitter {
             window.Store.Msg.on('change', (msg) => { window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg)); });
             // [L10] Log all change:type events on messages
             window.Store.Msg.on('change:type', (...args) => {
-                // Capture ALL arguments to discover what WA Web passes
-                var [msg, arg1, arg2] = args;
-                var fromJid = msg?.from?._serialized || '';
-                var toJid = msg?.to?._serialized || '';
-                var idRemote = msg?.id?.remote?._serialized || '';
-                if (fromJid.indexOf('@g.us') === -1 && fromJid.indexOf('@newsletter') === -1 && toJid !== 'status@broadcast' && !(msg && msg.isStatusV3) && idRemote !== 'status@broadcast' && idRemote.indexOf('@newsletter') === -1) {
-                    window.onDiagLog('debug', 'change:type', JSON.stringify({
+                var [msg] = args;
+                if (!window.__diag.isStatusOrGroup(msg?.from) && !window.__diag.isStatusOrGroup(msg?.id?.remote)) {
+                    window.__diag.safeDiagLog('debug', 'change:type', {
                         ...window.__wwjsDiag.diagTrace(msg),
                         newType: msg?.type,
                         argCount: args.length,
-                        arg1Type: typeof arg1,
-                        arg1Value: typeof arg1 === 'object' ? JSON.stringify(arg1).slice(0, 200) : String(arg1),
-                        arg2Type: typeof arg2,
-                        arg2Value: typeof arg2 === 'object' ? JSON.stringify(arg2).slice(0, 200) : String(arg2),
-                        allArgTypes: args.map(a => typeof a).join(',')
-                    }));
+                        args: args.map(a => window.__diag.safeStr(a))
+                    });
                 }
                 window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
             });
