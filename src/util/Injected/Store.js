@@ -853,7 +853,7 @@ exports.ExposeStore = () => {
                             if (Object.keys(protoProps).length > 0) errorInfo.errorProtoProps = protoProps;
                         }
                     } catch(e2) {}
-                    safeDiagLog('error', 'DL_DECRYPT_FAIL', errorInfo);
+                    safeDiagLog('warn', 'DL_DECRYPT_FAIL', errorInfo);
                     throw err;
                 });
             }
@@ -918,7 +918,7 @@ exports.ExposeStore = () => {
                     });
                     return data;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'MMS_DOWNLOAD_FAIL', {
+                    safeDiagLog('warn', 'MMS_DOWNLOAD_FAIL', {
                         directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
                         errorName: err ? err.name : null,
                         errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 300) : null,
@@ -954,7 +954,7 @@ exports.ExposeStore = () => {
                     });
                     return plaintext;
                 }).catch(function(err) {
-                    safeDiagLog('error', 'DECRYPT_MEDIA_FAIL', {
+                    safeDiagLog('warn', 'DECRYPT_MEDIA_FAIL', {
                         elapsed: Date.now() - startTime,
                         errorName: err ? err.name : null,
                         errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 500) : null,
