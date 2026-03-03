@@ -63,7 +63,7 @@ function shouldSkipReceipt(receipt) {
     if (isStatusOrGroup(from) || isStatusOrGroup(to) || isStatusOrGroup(chatId)) return true;
     if (receipt.type === 'status' || receipt.type === 'other_status') return true;
     if (receipt.msgType === 'sticker') return true;
-    var nonMedia = ['text', 'e2e_notification', 'notification_template', 'chat', 'protocol', 'revoked', 'reaction'];
+    var nonMedia = ['text', 'e2e_notification', 'notification_template', 'chat', 'protocol', 'revoked', 'reaction', 'album'];
     if (receipt.msgType && nonMedia.indexOf(receipt.msgType) !== -1) return true;
     return false;
 }
