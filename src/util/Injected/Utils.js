@@ -744,10 +744,19 @@ exports.LoadUtils = () => {
             const chatWid = window.require('WAWebWidFactory').createWid(chat.id._serialized);
             const groupMetadata = (window.require('WAWebCollections')).GroupMetadata || (window.require('WAWebCollections')).WAWebGroupMetadataCollection;
             await groupMetadata.update(chatWid);
-            chat.groupMetadata.participants._models
-                .filter(x => x.id?._serialized?.endsWith('@lid'))
-                .forEach(x => x.contact?.phoneNumber && (x.id = x.contact.phoneNumber));
-            model.groupMetadata = chat.groupMetadata.serialize();
+            const serializedMetadata = chat.groupMetadata.serialize();
+            if (serializedMetadata.participants) {
+                for (const p of serializedMetadata.participants) {
+                    if (p.id?._serialized?.endsWith('@lid')) {
+                        const liveModel = chat.groupMetadata.participants._models
+                            .find(m => m.id?._serialized === p.id._serialized);
+                        if (liveModel?.contact?.phoneNumber) {
+                            p.id = liveModel.contact.phoneNumber;
+                        }
+                    }
+                }
+            }
+            model.groupMetadata = serializedMetadata;
             model.isReadOnly = chat.groupMetadata.announce;
         }
 
@@ -805,13 +814,29 @@ exports.LoadUtils = () => {
 
     window.WWebJS.getContact = async contactId => {
         const wid = window.require('WAWebWidFactory').createWid(contactId);
-        let contact = await (window.require('WAWebCollections')).Contact.find(wid);
-        if (contact.id._serialized.endsWith('@lid')) {
-            contact.id = contact.phoneNumber;
+        const contact = await (window.require('WAWebCollections')).Contact.find(wid);
+
+        if (!contact || !contact.id) {
+            throw new Error(`Contact not found or has no id for ${contactId}`);
         }
-        const bizProfile = await (window.require('WAWebCollections')).BusinessProfile.fetchBizProfile(wid);
-        bizProfile.profileOptions && (contact.businessProfile = bizProfile);
-        return window.WWebJS.getContactModel(contact);
+
+        let resolvedId = contact.id;
+        if (resolvedId._serialized && resolvedId._serialized.endsWith('@lid')) {
+            if (contact.phoneNumber) {
+                resolvedId = contact.phoneNumber;
+            }
+        }
+
+        try {
+            const bizProfile = await (window.require('WAWebCollections')).BusinessProfile.fetchBizProfile(wid);
+            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+        } catch (_) {
+            // fetchBizProfile can fail for non-business contacts
+        }
+
+        const model = window.WWebJS.getContactModel(contact);
+        model.id = resolvedId;
+        return model;
     };
 
     window.WWebJS.getContacts = () => {
