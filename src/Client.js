@@ -484,17 +484,17 @@ class Client extends EventEmitter {
             const cdpSession = await this.pupPage.target().createCDPSession();
             await cdpSession.send('Runtime.enable');
             cdpSession.on('Runtime.executionContextDestroyed', (event) => {
-                console.warn('[wwjs-diag] CDP_CONTEXT_DESTROYED', JSON.stringify({
+                this.emit('diag', 'warn', 'CDP_CONTEXT_DESTROYED', JSON.stringify({
                     executionContextId: event.executionContextId,
                     ts: Date.now()
                 }));
             });
             cdpSession.on('Runtime.executionContextsCleared', () => {
-                console.warn('[wwjs-diag] CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
+                this.emit('diag', 'warn', 'CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
             });
             this._diagCdpSession = cdpSession;
         } catch (e) {
-            console.error('[wwjs-diag] CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
+            this.emit('diag', 'error', 'CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
         }
 
         // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
@@ -505,7 +505,7 @@ class Client extends EventEmitter {
             self._diagEvalInflight++;
             const inflight = self._diagEvalInflight;
             if (inflight > 20) {
-                console.warn('[wwjs-diag] HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
+                self.emit('diag', 'warn', 'HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
             }
             try {
                 return await origEvaluate(...args);
@@ -513,7 +513,7 @@ class Client extends EventEmitter {
                 const isPromiseCollected = err.message?.includes('Promise was collected');
                 const isContextDestroyed = err.message?.includes('Execution context was destroyed');
                 if (isPromiseCollected || isContextDestroyed) {
-                    console.error('[wwjs-diag] EVALUATE_CDP_ERROR', JSON.stringify({
+                    self.emit('diag', 'error', 'EVALUATE_CDP_ERROR', JSON.stringify({
                         inflight: self._diagEvalInflight,
                         error: err.message,
                         isPromiseCollected,
