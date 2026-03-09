@@ -306,7 +306,7 @@ class Client extends EventEmitter {
             window.AuthStore.AppState.on('change:state', (_AppState, state) => { window.onAuthAppStateChangedEvent(state); });
             window.AuthStore.AppState.on('change:hasSynced', () => { window.onAppStateHasSyncedEvent(); });
             window.AuthStore.Cmd.on('offline_progress_update_from_bridge', () => {
-                window.onOfflineProgressUpdateEvent(window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()); 
+                window.onOfflineProgressUpdateEvent(window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress());
             });
             window.AuthStore.Cmd.on('logout', async () => {
                 await window.onLogoutEvent();
@@ -315,6 +315,22 @@ class Client extends EventEmitter {
                 await window.onLogoutEvent();
             });
         });
+
+        // Fix race condition: after page navigation (framenavigated), inject() re-runs
+        // and registers a new change:hasSynced listener. But if hasSynced is already true
+        // in the new context, the Backbone change event never fires (it only fires on
+        // transitions, not when the value is already at the target).
+        // Check hasSynced after all listeners are registered and trigger manually if needed.
+        try {
+            const hasSynced = await this.pupPage.evaluate(() => {
+                return window.AuthStore && window.AuthStore.AppState && window.AuthStore.AppState.hasSynced === true;
+            });
+            if (hasSynced) {
+                await this.pupPage.evaluate(() => { window.onAppStateHasSyncedEvent(); });
+            }
+        } catch (_) {
+            // Page may have navigated or closed during the check - ignore
+        }
     }
 
     /**
