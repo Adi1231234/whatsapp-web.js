@@ -249,7 +249,7 @@ class Client extends EventEmitter {
                      * Emitted when authentication is successful
                      * @event Client#authenticated
                      */
-                this.emit(Events.AUTHENTICATED);
+                this.emit(Events.AUTHENTICATED, authEventPayload);
                 console.warn('[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted');
 
                 const injected = await this.pupPage.evaluate(async () => {
@@ -494,7 +494,7 @@ class Client extends EventEmitter {
             });
             this._diagCdpSession = cdpSession;
         } catch (e) {
-            console.warn('[wwjs-diag] CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
+            console.error('[wwjs-diag] CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
         }
 
         // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
@@ -513,7 +513,7 @@ class Client extends EventEmitter {
                 const isPromiseCollected = err.message?.includes('Promise was collected');
                 const isContextDestroyed = err.message?.includes('Execution context was destroyed');
                 if (isPromiseCollected || isContextDestroyed) {
-                    console.warn('[wwjs-diag] EVALUATE_CDP_ERROR', JSON.stringify({
+                    console.error('[wwjs-diag] EVALUATE_CDP_ERROR', JSON.stringify({
                         inflight: self._diagEvalInflight,
                         error: err.message,
                         isPromiseCollected,
