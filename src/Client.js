@@ -243,67 +243,80 @@ class Client extends EventEmitter {
 
         await exposeFunctionIfAbsent(this.pupPage, 'onAppStateHasSyncedEvent', async () => {
             console.warn('[wwjs-diag] onAppStateHasSyncedEvent CALLED', JSON.stringify({ ts: Date.now() }));
-            const authEventPayload = await this.authStrategy.getAuthEventPayload();
-            /**
-                 * Emitted when authentication is successful
-                 * @event Client#authenticated
-                 */
-            this.emit(Events.AUTHENTICATED, authEventPayload);
-
-            const injected = await this.pupPage.evaluate(async () => {
-                return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
-            });
-
-            if (!injected) {
-                if (this.options.webVersionCache.type === 'local' && this.currentIndexHtml) {
-                    const { type: webCacheType, ...webCacheOptions } = this.options.webVersionCache;
-                    const webCache = WebCacheFactory.createWebCache(webCacheType, webCacheOptions);
-            
-                    await webCache.persist(this.currentIndexHtml, version);
-                }
-
-                if (isCometOrAbove) {
-                    await this.pupPage.evaluate(InjectDiagCommon);
-                    await this.pupPage.evaluate(ExposeStore);
-                } else {
-                    // make sure all modules are ready before injection
-                    // 2 second delay after authentication makes sense and does not need to be made dyanmic or removed
-                    await new Promise(r => setTimeout(r, 2000)); 
-                    await this.pupPage.evaluate(ExposeLegacyStore);
-                }
-                let start = Date.now();
-                let res = false;
-                while(start > (Date.now() - 30000)){
-                    // Check window.Store Injection
-                    res = await this.pupPage.evaluate('window.Store != undefined');
-                    if(res){break;}
-                    await new Promise(r => setTimeout(r, 200));
-                }
-                if(!res){
-                    throw 'ready timeout';
-                }
-            
+            try {
+                const authEventPayload = await this.authStrategy.getAuthEventPayload();
                 /**
-                     * Current connection information
-                     * @type {ClientInfo}
+                     * Emitted when authentication is successful
+                     * @event Client#authenticated
                      */
-                this.info = new ClientInfo(this, await this.pupPage.evaluate(() => {
-                    return { ...window.Store.Conn.serialize(), wid: window.Store.User.getMaybeMePnUser() || window.Store.User.getMaybeMeLidUser() };
+                this.emit(Events.AUTHENTICATED);
+                console.warn('[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted');
+
+                const injected = await this.pupPage.evaluate(async () => {
+                    return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
+                });
+                console.warn('[wwjs-diag] onAppStateHasSyncedEvent storeCheck', JSON.stringify({ injected, ts: Date.now() }));
+
+                if (!injected) {
+                    if (this.options.webVersionCache.type === 'local' && this.currentIndexHtml) {
+                        const { type: webCacheType, ...webCacheOptions } = this.options.webVersionCache;
+                        const webCache = WebCacheFactory.createWebCache(webCacheType, webCacheOptions);
+
+                        await webCache.persist(this.currentIndexHtml, version);
+                    }
+
+                    if (isCometOrAbove) {
+                        await this.pupPage.evaluate(InjectDiagCommon);
+                        await this.pupPage.evaluate(ExposeStore);
+                    } else {
+                        // make sure all modules are ready before injection
+                        // 2 second delay after authentication makes sense and does not need to be made dyanmic or removed
+                        await new Promise(r => setTimeout(r, 2000));
+                        await this.pupPage.evaluate(ExposeLegacyStore);
+                    }
+                    console.warn('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
+                    let start = Date.now();
+                    let res = false;
+                    while(start > (Date.now() - 30000)){
+                        // Check window.Store Injection
+                        res = await this.pupPage.evaluate('window.Store != undefined');
+                        if(res){break;}
+                        await new Promise(r => setTimeout(r, 200));
+                    }
+                    if(!res){
+                        console.warn('[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s');
+                        throw 'ready timeout';
+                    }
+                    console.warn('[wwjs-diag] onAppStateHasSyncedEvent Store ready', JSON.stringify({ durationMs: Date.now() - start }));
+
+                    /**
+                         * Current connection information
+                         * @type {ClientInfo}
+                         */
+                    this.info = new ClientInfo(this, await this.pupPage.evaluate(() => {
+                        return { ...window.Store.Conn.serialize(), wid: window.Store.User.getMaybeMePnUser() || window.Store.User.getMaybeMeLidUser() };
+                    }));
+
+                    this.interface = new InterfaceController(this);
+
+                    //Load util functions (serializers, helper functions)
+                    await this.pupPage.evaluate(LoadUtils);
+
+                    await this.attachEventListeners();
+                }
+                /**
+                     * Emitted when the client has initialized and is ready to receive messages.
+                     * @event Client#ready
+                     */
+                this.emit(Events.READY);
+                console.warn('[wwjs-diag] onAppStateHasSyncedEvent READY emitted');
+                this.authStrategy.afterAuthReady();
+            } catch (err) {
+                console.warn('[wwjs-diag] onAppStateHasSyncedEvent ERROR', JSON.stringify({
+                    error: String(err?.message || err),
+                    ts: Date.now()
                 }));
-
-                this.interface = new InterfaceController(this);
-
-                //Load util functions (serializers, helper functions)
-                await this.pupPage.evaluate(LoadUtils);
-
-                await this.attachEventListeners();
             }
-            /**
-                 * Emitted when the client has initialized and is ready to receive messages.
-                 * @event Client#ready
-                 */
-            this.emit(Events.READY);
-            this.authStrategy.afterAuthReady();
         });
         let lastPercent = null;
         await exposeFunctionIfAbsent(this.pupPage, 'onOfflineProgressUpdateEvent', async (percent) => {
@@ -471,17 +484,17 @@ class Client extends EventEmitter {
             const cdpSession = await this.pupPage.target().createCDPSession();
             await cdpSession.send('Runtime.enable');
             cdpSession.on('Runtime.executionContextDestroyed', (event) => {
-                this.emit('diag', 'warn', 'CDP_CONTEXT_DESTROYED', JSON.stringify({
+                console.warn('[wwjs-diag] CDP_CONTEXT_DESTROYED', JSON.stringify({
                     executionContextId: event.executionContextId,
                     ts: Date.now()
                 }));
             });
             cdpSession.on('Runtime.executionContextsCleared', () => {
-                this.emit('diag', 'warn', 'CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
+                console.warn('[wwjs-diag] CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
             });
             this._diagCdpSession = cdpSession;
         } catch (e) {
-            this.emit('diag', 'error', 'CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
+            console.warn('[wwjs-diag] CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
         }
 
         // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
@@ -492,7 +505,7 @@ class Client extends EventEmitter {
             self._diagEvalInflight++;
             const inflight = self._diagEvalInflight;
             if (inflight > 20) {
-                self.emit('diag', 'warn', 'HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
+                console.warn('[wwjs-diag] HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
             }
             try {
                 return await origEvaluate(...args);
@@ -500,7 +513,7 @@ class Client extends EventEmitter {
                 const isPromiseCollected = err.message?.includes('Promise was collected');
                 const isContextDestroyed = err.message?.includes('Execution context was destroyed');
                 if (isPromiseCollected || isContextDestroyed) {
-                    self.emit('diag', 'error', 'EVALUATE_CDP_ERROR', JSON.stringify({
+                    console.warn('[wwjs-diag] EVALUATE_CDP_ERROR', JSON.stringify({
                         inflight: self._diagEvalInflight,
                         error: err.message,
                         isPromiseCollected,
