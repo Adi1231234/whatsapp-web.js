@@ -19,6 +19,7 @@ async function exposeFunctionIfAbsent(page, name, fn) {
         return;
     }
     await page.exposeFunction(name, fn);
+    console.warn('[wwjs-diag] exposeFunctionIfAbsent EXPOSED', name);
 }
 
 module.exports = {exposeFunctionIfAbsent};
