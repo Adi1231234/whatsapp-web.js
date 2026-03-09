@@ -324,6 +324,7 @@ class Client extends EventEmitter {
                     error: String(err?.message || err),
                     ts: Date.now()
                 }));
+                throw err;
             }
         });
         let lastPercent = null;
