@@ -334,7 +334,7 @@ class Client extends EventEmitter {
             }
         });
         await exposeFunctionIfAbsent(this.pupPage, 'onLogoutEvent', async () => {
-            console.log('[wwjs-diag] onLogoutEvent CALLED', JSON.stringify({ ts: Date.now() }));
+            console.warn('[wwjs-diag] onLogoutEvent CALLED', JSON.stringify({ ts: Date.now() }));
             this.lastLoggedOut = true;
             await this.pupPage.waitForNavigation({waitUntil: 'load', timeout: 5000}).catch((_) => _);
         });
