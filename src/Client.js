@@ -100,7 +100,7 @@ class Client extends EventEmitter {
         const _injectStart = Date.now();
         let _injectUrl = '';
         try { _injectUrl = this.pupPage?.url?.() || ''; } catch (_) { /* page may be closed */ }
-        console.info('[wwjs-diag] inject:start', JSON.stringify({ ts: _injectStart, url: _injectUrl.slice(0, 120) }));
+        console.log('[wwjs-diag] inject:start', JSON.stringify({ ts: _injectStart, url: _injectUrl.slice(0, 120) }));
 
         // Reset guard so hasSynced fix can trigger on each inject() cycle
         this._hasSyncedTriggered = false;
@@ -148,7 +148,7 @@ class Client extends EventEmitter {
             return { need: state == 'UNPAIRED' || state == 'UNPAIRED_IDLE', state, hasSynced: window.AuthStore.AppState.hasSynced };
         });
 
-        console.info('[wwjs-diag] inject:authCheck', JSON.stringify({
+        console.log('[wwjs-diag] inject:authCheck', JSON.stringify({
             ts: Date.now(),
             needAuthentication: needAuthentication.need,
             appState: needAuthentication.state,
@@ -237,7 +237,7 @@ class Client extends EventEmitter {
         }
 
         await exposeFunctionIfAbsent(this.pupPage, 'onAuthAppStateChangedEvent', async (state) => {
-            console.info('[wwjs-diag] onAuthAppStateChangedEvent', JSON.stringify({ state, ts: Date.now() }));
+            console.log('[wwjs-diag] onAuthAppStateChangedEvent', JSON.stringify({ state, ts: Date.now() }));
             if (state == 'UNPAIRED_IDLE' && !pairWithPhoneNumber.phoneNumber) {
                 // refresh qr code
                 window.Store.Cmd.refreshQR();
@@ -250,7 +250,7 @@ class Client extends EventEmitter {
                 return;
             }
             this._hasSyncedTriggered = true;
-            console.info('[wwjs-diag] onAppStateHasSyncedEvent CALLED', JSON.stringify({ ts: Date.now() }));
+            console.log('[wwjs-diag] onAppStateHasSyncedEvent CALLED', JSON.stringify({ ts: Date.now() }));
             try {
                 const authEventPayload = await this.authStrategy.getAuthEventPayload();
                 /**
@@ -258,12 +258,12 @@ class Client extends EventEmitter {
                      * @event Client#authenticated
                      */
                 this.emit(Events.AUTHENTICATED, authEventPayload);
-                console.info('[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted');
+                console.log('[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted');
 
                 const injected = await this.pupPage.evaluate(async () => {
                     return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
                 });
-                console.info('[wwjs-diag] onAppStateHasSyncedEvent storeCheck', JSON.stringify({ injected, ts: Date.now() }));
+                console.log('[wwjs-diag] onAppStateHasSyncedEvent storeCheck', JSON.stringify({ injected, ts: Date.now() }));
 
                 if (!injected) {
                     if (this.options.webVersionCache.type === 'local' && this.currentIndexHtml) {
@@ -282,7 +282,7 @@ class Client extends EventEmitter {
                         await new Promise(r => setTimeout(r, 2000));
                         await this.pupPage.evaluate(ExposeLegacyStore);
                     }
-                    console.info('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
+                    console.log('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
                     let start = Date.now();
                     let res = false;
                     while(start > (Date.now() - 30000)){
@@ -295,7 +295,7 @@ class Client extends EventEmitter {
                         console.warn('[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s');
                         throw 'ready timeout';
                     }
-                    console.info('[wwjs-diag] onAppStateHasSyncedEvent Store ready', JSON.stringify({ durationMs: Date.now() - start }));
+                    console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready', JSON.stringify({ durationMs: Date.now() - start }));
 
                     /**
                          * Current connection information
@@ -317,7 +317,7 @@ class Client extends EventEmitter {
                      * @event Client#ready
                      */
                 this.emit(Events.READY);
-                console.info('[wwjs-diag] onAppStateHasSyncedEvent READY emitted');
+                console.log('[wwjs-diag] onAppStateHasSyncedEvent READY emitted');
                 this.authStrategy.afterAuthReady();
             } catch (err) {
                 console.warn('[wwjs-diag] onAppStateHasSyncedEvent ERROR', JSON.stringify({
@@ -334,7 +334,7 @@ class Client extends EventEmitter {
             }
         });
         await exposeFunctionIfAbsent(this.pupPage, 'onLogoutEvent', async () => {
-            console.info('[wwjs-diag] onLogoutEvent CALLED', JSON.stringify({ ts: Date.now() }));
+            console.log('[wwjs-diag] onLogoutEvent CALLED', JSON.stringify({ ts: Date.now() }));
             this.lastLoggedOut = true;
             await this.pupPage.waitForNavigation({waitUntil: 'load', timeout: 5000}).catch((_) => _);
         });
@@ -394,7 +394,7 @@ class Client extends EventEmitter {
                     fnExists: typeof window.onAppStateHasSyncedEvent === 'function'
                 };
             });
-            console.info('[wwjs-diag] inject:hasSyncedCheck', JSON.stringify({ ts: Date.now(), ...syncCheck }));
+            console.log('[wwjs-diag] inject:hasSyncedCheck', JSON.stringify({ ts: Date.now(), ...syncCheck }));
 
             if (syncCheck.appStateAvailable && syncCheck.hasSynced === true) {
                 console.warn('[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent');
@@ -405,7 +405,7 @@ class Client extends EventEmitter {
             console.warn('[wwjs-diag] inject:hasSyncedCheck FAILED', String(err?.message || err));
         }
 
-        console.info('[wwjs-diag] inject:end', JSON.stringify({ ts: Date.now(), durationMs: Date.now() - _injectStart }));
+        console.log('[wwjs-diag] inject:end', JSON.stringify({ ts: Date.now(), durationMs: Date.now() - _injectStart }));
     }
 
     /**
@@ -482,9 +482,9 @@ class Client extends EventEmitter {
             referer: 'https://whatsapp.com/'
         });
 
-        console.info('[wwjs-diag] initialize:inject START (first call)');
+        console.log('[wwjs-diag] initialize:inject START (first call)');
         await this.inject();
-        console.info('[wwjs-diag] initialize:inject END (first call)');
+        console.log('[wwjs-diag] initialize:inject END (first call)');
 
         // [diag:promise-collected] Monitor execution context lifecycle via CDP
         // This helps diagnose "Promise was collected" errors by detecting context destruction
@@ -540,7 +540,7 @@ class Client extends EventEmitter {
             const isMainFrame = frame === this.pupPage.mainFrame();
             const isLogout = frameUrl.includes('post_logout=1') || this.lastLoggedOut;
 
-            console.info('[wwjs-diag] framenavigated', JSON.stringify({
+            console.log('[wwjs-diag] framenavigated', JSON.stringify({
                 ts: Date.now(),
                 url: frameUrl.slice(0, 150),
                 isMainFrame,
@@ -565,7 +565,7 @@ class Client extends EventEmitter {
                 });
             } catch (e) { /* page may not be ready */ }
 
-            console.info('[wwjs-diag] framenavigated:inject START', JSON.stringify({
+            console.log('[wwjs-diag] framenavigated:inject START', JSON.stringify({
                 ts: Date.now(),
                 url: frameUrl.slice(0, 150),
                 storeAvailable
@@ -573,7 +573,7 @@ class Client extends EventEmitter {
 
             try {
                 await this.inject();
-                console.info('[wwjs-diag] framenavigated:inject END (success)');
+                console.log('[wwjs-diag] framenavigated:inject END (success)');
             } catch (err) {
                 console.warn('[wwjs-diag] framenavigated:inject END (error)', String(err?.message || err));
             }
