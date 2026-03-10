@@ -102,9 +102,6 @@ class Client extends EventEmitter {
         try { _injectUrl = this.pupPage?.url?.() || ''; } catch (_) { /* page may be closed */ }
         console.log('[wwjs-diag] inject:start', JSON.stringify({ ts: _injectStart, url: _injectUrl.slice(0, 120) }));
 
-        // Reset guard so hasSynced fix can trigger on each inject() cycle
-        this._hasSyncedTriggered = false;
-
         if(this.options.authTimeoutMs === undefined || this.options.authTimeoutMs==0){
             this.options.authTimeoutMs = 30000;
         }
@@ -245,11 +242,6 @@ class Client extends EventEmitter {
         });
 
         await exposeFunctionIfAbsent(this.pupPage, 'onAppStateHasSyncedEvent', async () => {
-            if (this._hasSyncedTriggered) {
-                console.warn('[wwjs-diag] onAppStateHasSyncedEvent SKIPPED (already handled)');
-                return;
-            }
-            this._hasSyncedTriggered = true;
             console.log('[wwjs-diag] onAppStateHasSyncedEvent CALLED', JSON.stringify({ ts: Date.now() }));
             try {
                 const authEventPayload = await this.authStrategy.getAuthEventPayload();
@@ -582,7 +574,6 @@ class Client extends EventEmitter {
                 await this.authStrategy.beforeBrowserInitialized();
                 await this.authStrategy.afterBrowserInitialized();
                 this.lastLoggedOut = false;
-                this._hasSyncedTriggered = false;
             }
 
             if (!isMainFrame) return;
