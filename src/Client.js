@@ -89,6 +89,7 @@ class Client extends EventEmitter {
 
         this.currentIndexHtml = null;
         this.lastLoggedOut = false;
+        this._readyEmitted = false;
 
         Util.setFfmpegPath(this.options.ffmpegPath);
     }
@@ -102,7 +103,9 @@ class Client extends EventEmitter {
         try { _injectUrl = this.pupPage?.url?.() || ''; } catch (_) { /* page may be closed */ }
         console.log('[wwjs-diag] inject:start', JSON.stringify({ ts: _injectStart, url: _injectUrl.slice(0, 120) }));
 
-        // Reset guard so hasSynced fix can trigger on each inject() cycle
+        // Reset per-inject guard so the natural change:hasSynced listener
+        // can still trigger within this inject cycle.  The permanent
+        // _readyEmitted flag prevents re-triggering after READY.
         this._hasSyncedTriggered = false;
 
         if(this.options.authTimeoutMs === undefined || this.options.authTimeoutMs==0){
@@ -245,8 +248,12 @@ class Client extends EventEmitter {
         });
 
         await exposeFunctionIfAbsent(this.pupPage, 'onAppStateHasSyncedEvent', async () => {
+            if (this._readyEmitted) {
+                console.warn('[wwjs-diag] onAppStateHasSyncedEvent SKIPPED (already ready)');
+                return;
+            }
             if (this._hasSyncedTriggered) {
-                console.warn('[wwjs-diag] onAppStateHasSyncedEvent SKIPPED (already handled)');
+                console.warn('[wwjs-diag] onAppStateHasSyncedEvent SKIPPED (already handled in this inject cycle)');
                 return;
             }
             this._hasSyncedTriggered = true;
@@ -317,6 +324,7 @@ class Client extends EventEmitter {
                      * @event Client#ready
                      */
                 this.emit(Events.READY);
+                this._readyEmitted = true;
                 console.log('[wwjs-diag] onAppStateHasSyncedEvent READY emitted');
                 this.authStrategy.afterAuthReady();
             } catch (err) {
@@ -346,6 +354,16 @@ class Client extends EventEmitter {
                 state: window.AuthStore.AppState.state,
                 ts: Date.now()
             };
+
+            // Guard: only register listeners once per page context to prevent
+            // duplicate events when inject() is called multiple times (e.g.
+            // from repeated framenavigated events).
+            if (window._wwjsAuthListenersRegistered) {
+                console.error('[wwjs-diag] listeners:SKIPPED (already registered) ' + JSON.stringify(_diagState));
+                return;
+            }
+            window._wwjsAuthListenersRegistered = true;
+
             console.error('[wwjs-diag] listeners:registering ' + JSON.stringify(_diagState));
 
             // Store AppState reference to detect replacement
@@ -397,10 +415,12 @@ class Client extends EventEmitter {
             });
             console.log('[wwjs-diag] inject:hasSyncedCheck', JSON.stringify({ ts: Date.now(), ...syncCheck }));
 
-            if (syncCheck.appStateAvailable && syncCheck.hasSynced === true) {
+            if (syncCheck.appStateAvailable && syncCheck.hasSynced === true && !this._readyEmitted) {
                 console.warn('[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent');
                 await this.pupPage.evaluate(() => { window.onAppStateHasSyncedEvent(); });
                 console.warn('[wwjs-diag] inject:hasSyncedFix TRIGGERED successfully');
+            } else if (syncCheck.appStateAvailable && syncCheck.hasSynced === true && this._readyEmitted) {
+                console.log('[wwjs-diag] inject:hasSyncedFix SKIPPED (already ready)');
             }
         } catch (err) {
             console.warn('[wwjs-diag] inject:hasSyncedCheck FAILED', String(err?.message || err));
@@ -1222,6 +1242,7 @@ class Client extends EventEmitter {
      * Closes the client
      */
     async destroy() {
+        this._readyEmitted = false;
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
         if (isConnected) {
