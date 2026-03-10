@@ -109,20 +109,11 @@ class Client extends EventEmitter {
 
         try {
 
-            if(this.options.authTimeoutMs === undefined || this.options.authTimeoutMs==0){
-                this.options.authTimeoutMs = 30000;
-            }
-            let start = Date.now();
-            let timeout = this.options.authTimeoutMs;
-            let res = false;
-            while(start > (Date.now() - timeout)){
-                res = await this.pupPage.evaluate('window.Debug?.VERSION != undefined');
-                if(res){break;}
-                await new Promise(r => setTimeout(r, 200));
-            }
-            if(!res){ 
-                throw 'auth timeout';
-            }       
+            const authTimeout = this.options.authTimeoutMs || 30000;
+            await this.pupPage.waitForFunction(
+                'window.Debug?.VERSION != undefined',
+                { timeout: authTimeout }
+            ).catch(() => { throw 'auth timeout'; });
             await this.setDeviceName(this.options.deviceName, this.options.browserName);
             const pairWithPhoneNumber = this.options.pairWithPhoneNumber;
             const version = await this.getWWebVersion();
@@ -152,7 +143,7 @@ class Client extends EventEmitter {
                     state = window.AuthStore.AppState.state;
                     return { need: state == 'UNPAIRED' || state == 'UNPAIRED_IDLE', state, hasSynced: window.AuthStore.AppState.hasSynced };
                 }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('needAuthentication timeout')), timeout))
+                new Promise((_, reject) => setTimeout(() => reject(new Error('needAuthentication timeout')), authTimeout))
             ]);
 
             console.log('[wwjs-diag] inject:authCheck', JSON.stringify({
@@ -285,19 +276,11 @@ class Client extends EventEmitter {
                             await this.pupPage.evaluate(ExposeLegacyStore);
                         }
                         console.log('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
-                        let start = Date.now();
-                        let res = false;
-                        while(start > (Date.now() - 30000)){
-                        // Check window.Store Injection
-                            res = await this.pupPage.evaluate('window.Store != undefined');
-                            if(res){break;}
-                            await new Promise(r => setTimeout(r, 200));
-                        }
-                        if(!res){
-                            console.warn('[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s');
-                            throw 'ready timeout';
-                        }
-                        console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready', JSON.stringify({ durationMs: Date.now() - start }));
+                        await this.pupPage.waitForFunction(
+                            'window.Store != undefined',
+                            { timeout: 30000 }
+                        ).catch(() => { throw 'ready timeout'; });
+                        console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready');
 
                         /**
                          * Current connection information
@@ -508,6 +491,65 @@ class Client extends EventEmitter {
             referer: 'https://whatsapp.com/'
         });
 
+        // Register framenavigated BEFORE inject() so the recovery mechanism
+        // is in place from the start (if inject fails, framenavigated can retry).
+        this.pupPage.on('framenavigated', async (frame) => {
+            const frameUrl = frame.url();
+            const isMainFrame = frame === this.pupPage.mainFrame();
+            const isLogout = frameUrl.includes('post_logout=1') || this.lastLoggedOut;
+
+            console.log('[wwjs-diag] framenavigated', JSON.stringify({
+                ts: Date.now(),
+                url: frameUrl.slice(0, 150),
+                isMainFrame,
+                isLogout,
+                lastLoggedOut: this.lastLoggedOut
+            }));
+
+            if (!isMainFrame) return;
+
+            if(isLogout) {
+                this.emit(Events.DISCONNECTED, 'LOGOUT');
+                await this.authStrategy.logout();
+                await this.authStrategy.beforeBrowserInitialized();
+                await this.authStrategy.afterBrowserInitialized();
+                this.lastLoggedOut = false;
+            }
+
+            let storeAvailable = false;
+            try {
+                storeAvailable = await this.pupPage.evaluate(() => {
+                    return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
+                });
+            } catch (e) { /* page may not be ready */ }
+
+            // On SPA navigations the JS context is preserved - Store, listeners,
+            // and exposed functions are all still alive. Re-running inject() would
+            // re-register Backbone listeners and re-trigger the hasSynced fix,
+            // causing duplicate AUTHENTICATED/READY/afterAuthReady().
+            // Only re-inject when the context is actually gone (full navigation)
+            // or after logout (even if Store lingers).
+            if (!isLogout && storeAvailable) {
+                console.log('[wwjs-diag] framenavigated:inject SKIPPED (client already connected)', JSON.stringify({
+                    ts: Date.now(), url: frameUrl.slice(0, 150), storeAvailable
+                }));
+                return;
+            }
+
+            console.log('[wwjs-diag] framenavigated:inject START', JSON.stringify({
+                ts: Date.now(),
+                url: frameUrl.slice(0, 150),
+                storeAvailable
+            }));
+
+            try {
+                await this.inject();
+                console.log('[wwjs-diag] framenavigated:inject END (success)');
+            } catch (err) {
+                console.warn('[wwjs-diag] framenavigated:inject END (error)', String(err?.message || err));
+            }
+        });
+
         console.log('[wwjs-diag] initialize:inject START (first call)');
         await this.inject();
         console.log('[wwjs-diag] initialize:inject END (first call)');
@@ -560,63 +602,6 @@ class Client extends EventEmitter {
                 self._diagEvalInflight--;
             }
         };
-
-        this.pupPage.on('framenavigated', async (frame) => {
-            const frameUrl = frame.url();
-            const isMainFrame = frame === this.pupPage.mainFrame();
-            const isLogout = frameUrl.includes('post_logout=1') || this.lastLoggedOut;
-
-            console.log('[wwjs-diag] framenavigated', JSON.stringify({
-                ts: Date.now(),
-                url: frameUrl.slice(0, 150),
-                isMainFrame,
-                isLogout,
-                lastLoggedOut: this.lastLoggedOut
-            }));
-
-            if (!isMainFrame) return;
-
-            if(isLogout) {
-                this.emit(Events.DISCONNECTED, 'LOGOUT');
-                await this.authStrategy.logout();
-                await this.authStrategy.beforeBrowserInitialized();
-                await this.authStrategy.afterBrowserInitialized();
-                this.lastLoggedOut = false;
-            }
-
-            let storeAvailable = false;
-            try {
-                storeAvailable = await this.pupPage.evaluate(() => {
-                    return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
-                });
-            } catch (e) { /* page may not be ready */ }
-
-            // On SPA navigations the JS context is preserved — Store, listeners,
-            // and exposed functions are all still alive. Re-running inject() would
-            // re-register Backbone listeners and re-trigger the hasSynced fix,
-            // causing duplicate AUTHENTICATED/READY/afterAuthReady().
-            // Only re-inject when the context is actually gone (full navigation)
-            // or after logout (even if Store lingers).
-            if (!isLogout && storeAvailable) {
-                console.log('[wwjs-diag] framenavigated:inject SKIPPED (client already connected)', JSON.stringify({
-                    ts: Date.now(), url: frameUrl.slice(0, 150), storeAvailable
-                }));
-                return;
-            }
-
-            console.log('[wwjs-diag] framenavigated:inject START', JSON.stringify({
-                ts: Date.now(),
-                url: frameUrl.slice(0, 150),
-                storeAvailable
-            }));
-
-            try {
-                await this.inject();
-                console.log('[wwjs-diag] framenavigated:inject END (success)');
-            } catch (err) {
-                console.warn('[wwjs-diag] framenavigated:inject END (error)', String(err?.message || err));
-            }
-        });
     }
 
     /**
