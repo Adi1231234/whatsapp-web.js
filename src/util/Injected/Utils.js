@@ -145,7 +145,7 @@ exports.LoadUtils = () => {
 
         let vcardOptions = {};
         if (options.contactCard) {
-            let contact = window.Store.Contact.get(options.contactCard);
+            let contact = await window.WWebJS.findContact(options.contactCard);
             vcardOptions = {
                 body: window.Store.VCard.vcardFromContactModel(contact).vcard,
                 type: 'vcard',
@@ -153,7 +153,7 @@ exports.LoadUtils = () => {
             };
             delete options.contactCard;
         } else if (options.contactCardList) {
-            let contacts = options.contactCardList.map(c => window.Store.Contact.get(c));
+            let contacts = await Promise.all(options.contactCardList.map(c => window.WWebJS.findContact(c)));
             let vcards = contacts.map(c => window.Store.VCard.vcardFromContactModel(c));
             vcardOptions = {
                 type: 'multi_vcard',
@@ -666,10 +666,14 @@ exports.LoadUtils = () => {
             const chatWid = window.Store.WidFactory.createWid(chat.id._serialized);
             const groupMetadata = window.Store.GroupMetadata || window.Store.WAWebGroupMetadataCollection;
             await groupMetadata.update(chatWid);
-            chat.groupMetadata.participants._models
-                .filter(x => x.id?._serialized?.endsWith('@lid'))
-                .forEach(x => x.contact?.phoneNumber && (x.id = x.contact.phoneNumber));
-            model.groupMetadata = chat.groupMetadata.serialize();
+            const serializedMetadata = chat.groupMetadata.serialize();
+            const participantModels = chat.groupMetadata.participants._models;
+            for (const p of serializedMetadata.participants || []) {
+                if (!p.id?._serialized?.endsWith('@lid')) continue;
+                const phone = participantModels.find(m => m.id?._serialized === p.id._serialized)?.contact?.phoneNumber;
+                if (phone) p.id = phone;
+            }
+            model.groupMetadata = serializedMetadata;
             model.isReadOnly = chat.groupMetadata.announce;
         }
 
@@ -695,8 +699,17 @@ exports.LoadUtils = () => {
         return model;
     };
 
+    window.WWebJS.findContact = async id => {
+        const wid = window.Store.WidFactory.createWid(id);
+        return window.Store.Contact.find(wid);
+    };
+
     window.WWebJS.getContactModel = contact => {
         let res = contact.serialize();
+
+        if (res.id?._serialized?.endsWith('@lid') && contact.phoneNumber) {
+            res.id = contact.phoneNumber;
+        }
         res.isBusiness = contact.isBusiness === undefined ? false : contact.isBusiness;
 
         if (contact.businessProfile) {
@@ -728,15 +741,14 @@ exports.LoadUtils = () => {
         let bizTook = -1;
         try {
             const wid = window.Store.WidFactory.createWid(contactId);
-            let contact = await window.Store.Contact.find(wid);
+            const contact = await window.Store.Contact.find(wid);
             findTook = Date.now() - start;
-            if (contact.id._serialized.endsWith('@lid')) {
-                contact.id = contact.phoneNumber;
-            }
-            const bizStart = Date.now();
-            const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
-            bizTook = Date.now() - bizStart;
-            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+            try {
+                const bizStart = Date.now();
+                const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
+                bizTook = Date.now() - bizStart;
+                bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+            } catch (_) {}
             const totalTook = Date.now() - start;
             if (totalTook > 200) {
                 if (window.onDiagLog) window.onDiagLog('warn', 'getContact:slow', JSON.stringify({

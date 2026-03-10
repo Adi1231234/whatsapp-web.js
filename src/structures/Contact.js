@@ -155,7 +155,7 @@ class Contact extends Base {
         if(this.isGroup) return false;
 
         await this.client.pupPage.evaluate(async (contactId) => {
-            const contact = window.Store.Contact.get(contactId);
+            const contact = await window.WWebJS.findContact(contactId);
             await window.Store.BlockContact.blockContact({contact});
         }, this.id._serialized);
 
@@ -171,7 +171,7 @@ class Contact extends Base {
         if(this.isGroup) return false;
 
         await this.client.pupPage.evaluate(async (contactId) => {
-            const contact = window.Store.Contact.get(contactId);
+            const contact = await window.WWebJS.findContact(contactId);
             await window.Store.BlockContact.unblockContact(contact);
         }, this.id._serialized);
 
