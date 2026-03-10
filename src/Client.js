@@ -97,316 +97,341 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
+        if (this._injectInProgress) {
+            console.warn('[wwjs-diag] inject:SKIPPED (already in progress)');
+            return;
+        }
+        this._injectInProgress = true;
         const _injectStart = Date.now();
         let _injectUrl = '';
         try { _injectUrl = this.pupPage?.url?.() || ''; } catch (_) { /* page may be closed */ }
         console.log('[wwjs-diag] inject:start', JSON.stringify({ ts: _injectStart, url: _injectUrl.slice(0, 120) }));
 
-        // Reset guard so hasSynced fix can trigger on each inject() cycle
-        this._hasSyncedTriggered = false;
+        try {
 
-        if(this.options.authTimeoutMs === undefined || this.options.authTimeoutMs==0){
-            this.options.authTimeoutMs = 30000;
-        }
-        let start = Date.now();
-        let timeout = this.options.authTimeoutMs;
-        let res = false;
-        while(start > (Date.now() - timeout)){
-            res = await this.pupPage.evaluate('window.Debug?.VERSION != undefined');
-            if(res){break;}
-            await new Promise(r => setTimeout(r, 200));
-        }
-        if(!res){ 
-            throw 'auth timeout';
-        }       
-        await this.setDeviceName(this.options.deviceName, this.options.browserName);
-        const pairWithPhoneNumber = this.options.pairWithPhoneNumber;
-        const version = await this.getWWebVersion();
-        const isCometOrAbove = parseInt(version.split('.')?.[1]) >= 3000;
-
-        if (isCometOrAbove) {
-            await this.pupPage.evaluate(ExposeAuthStore);
-        } else {
-            await this.pupPage.evaluate(ExposeLegacyAuthStore, moduleRaid.toString());
-        }
-
-        const needAuthentication = await this.pupPage.evaluate(async () => {
-            let state = window.AuthStore.AppState.state;
-
-            if (state === 'OPENING' || state === 'UNLAUNCHED' || state === 'PAIRING') {
-                // wait till state changes
-                await new Promise(r => {
-                    window.AuthStore.AppState.on('change:state', function waitTillInit(_AppState, state) {
-                        if (state !== 'OPENING' && state !== 'UNLAUNCHED' && state !== 'PAIRING') {
-                            window.AuthStore.AppState.off('change:state', waitTillInit);
-                            r();
-                        } 
-                    });
-                }); 
+            if(this.options.authTimeoutMs === undefined || this.options.authTimeoutMs==0){
+                this.options.authTimeoutMs = 30000;
             }
-            state = window.AuthStore.AppState.state;
-            return { need: state == 'UNPAIRED' || state == 'UNPAIRED_IDLE', state, hasSynced: window.AuthStore.AppState.hasSynced };
-        });
+            let start = Date.now();
+            let timeout = this.options.authTimeoutMs;
+            let res = false;
+            while(start > (Date.now() - timeout)){
+                res = await this.pupPage.evaluate('window.Debug?.VERSION != undefined');
+                if(res){break;}
+                await new Promise(r => setTimeout(r, 200));
+            }
+            if(!res){ 
+                throw 'auth timeout';
+            }       
+            await this.setDeviceName(this.options.deviceName, this.options.browserName);
+            const pairWithPhoneNumber = this.options.pairWithPhoneNumber;
+            const version = await this.getWWebVersion();
+            const isCometOrAbove = parseInt(version.split('.')?.[1]) >= 3000;
 
-        console.log('[wwjs-diag] inject:authCheck', JSON.stringify({
-            ts: Date.now(),
-            needAuthentication: needAuthentication.need,
-            appState: needAuthentication.state,
-            hasSynced: needAuthentication.hasSynced
-        }));
+            if (isCometOrAbove) {
+                await this.pupPage.evaluate(ExposeAuthStore);
+            } else {
+                await this.pupPage.evaluate(ExposeLegacyAuthStore, moduleRaid.toString());
+            }
 
-        if (needAuthentication.need) {
-            const { failed, failureEventPayload, restart } = await this.authStrategy.onAuthenticationNeeded();
+            const needAuthentication = await Promise.race([
+                this.pupPage.evaluate(async () => {
+                    let state = window.AuthStore.AppState.state;
 
-            if(failed) {
+                    if (state === 'OPENING' || state === 'UNLAUNCHED' || state === 'PAIRING') {
+                        await new Promise(resolve => {
+                            function waitTillInit(_AppState, state) {
+                                if (state !== 'OPENING' && state !== 'UNLAUNCHED' && state !== 'PAIRING') {
+                                    window.AuthStore.AppState.off('change:state', waitTillInit);
+                                    resolve();
+                                }
+                            }
+                            window.AuthStore.AppState.on('change:state', waitTillInit);
+                        });
+                    }
+                    state = window.AuthStore.AppState.state;
+                    return { need: state == 'UNPAIRED' || state == 'UNPAIRED_IDLE', state, hasSynced: window.AuthStore.AppState.hasSynced };
+                }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('needAuthentication timeout')), timeout))
+            ]);
+
+            console.log('[wwjs-diag] inject:authCheck', JSON.stringify({
+                ts: Date.now(),
+                needAuthentication: needAuthentication.need,
+                appState: needAuthentication.state,
+                hasSynced: needAuthentication.hasSynced
+            }));
+
+            if (needAuthentication.need) {
+                const { failed, failureEventPayload, restart } = await this.authStrategy.onAuthenticationNeeded();
+
+                if(failed) {
                 /**
                  * Emitted when there has been an error while trying to restore an existing session
                  * @event Client#auth_failure
                  * @param {string} message
                  */
-                this.emit(Events.AUTHENTICATION_FAILURE, failureEventPayload);
-                await this.destroy();
-                if (restart) {
+                    this.emit(Events.AUTHENTICATION_FAILURE, failureEventPayload);
+                    await this.destroy();
+                    if (restart) {
                     // session restore failed so try again but without session to force new authentication
-                    return this.initialize();
+                        return this.initialize();
+                    }
+                    return;
                 }
-                return;
-            }
 
-            // Register qr/code events
-            if (pairWithPhoneNumber.phoneNumber) {
-                await exposeFunctionIfAbsent(this.pupPage, 'onCodeReceivedEvent', async (code) => {
+                // Register qr/code events
+                if (pairWithPhoneNumber.phoneNumber) {
+                    await exposeFunctionIfAbsent(this.pupPage, 'onCodeReceivedEvent', async (code) => {
                     /**
                     * Emitted when a pairing code is received
                     * @event Client#code
                     * @param {string} code Code
                     * @returns {string} Code that was just received
                     */
-                    this.emit(Events.CODE_RECEIVED, code);
-                    return code;
-                });
-                this.requestPairingCode(pairWithPhoneNumber.phoneNumber, pairWithPhoneNumber.showNotification, pairWithPhoneNumber.intervalMs);
-            } else {
-                let qrRetries = 0;
+                        this.emit(Events.CODE_RECEIVED, code);
+                        return code;
+                    });
+                    this.requestPairingCode(pairWithPhoneNumber.phoneNumber, pairWithPhoneNumber.showNotification, pairWithPhoneNumber.intervalMs);
+                } else {
+                    let qrRetries = 0;
 
-                this.on(Events.LOADING_SCREEN, () => {
-                    qrRetries = 0;
-                });
+                    this.on(Events.LOADING_SCREEN, () => {
+                        qrRetries = 0;
+                    });
 
-                await exposeFunctionIfAbsent(this.pupPage, 'onQRChangedEvent', async (qr) => {
+                    await exposeFunctionIfAbsent(this.pupPage, 'onQRChangedEvent', async (qr) => {
                     /**
                     * Emitted when a QR code is received
                     * @event Client#qr
                     * @param {string} qr QR Code
                     */
-                    this.emit(Events.QR_RECEIVED, qr);
-                    if (this.options.qrMaxRetries > 0) {
-                        qrRetries++;
-                        if (qrRetries > this.options.qrMaxRetries) {
-                            this.emit(Events.DISCONNECTED, 'Max qrcode retries reached');
-                            await this.destroy();
+                        this.emit(Events.QR_RECEIVED, qr);
+                        if (this.options.qrMaxRetries > 0) {
+                            qrRetries++;
+                            if (qrRetries > this.options.qrMaxRetries) {
+                                this.emit(Events.DISCONNECTED, 'Max qrcode retries reached');
+                                await this.destroy();
+                            }
                         }
-                    }
-                });
-
-
-                await this.pupPage.evaluate(async () => {
-                    const registrationInfo = await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-                    const noiseKeyPair = await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-                    const staticKeyB64 = window.AuthStore.Base64Tools.encodeB64(noiseKeyPair.staticKeyPair.pubKey);
-                    const identityKeyB64 = window.AuthStore.Base64Tools.encodeB64(registrationInfo.identityKeyPair.pubKey);
-                    const advSecretKey = await window.AuthStore.RegistrationUtils.getADVSecretKey();
-                    const platform = window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
-                    const getQR = (ref) => ref + ',' + staticKeyB64 + ',' + identityKeyB64 + ',' + advSecretKey + ',' + platform;
-                    window.getQR = getQR;
-
-                    const onRefChange = (_, ref) => {
-                        if (ref == null) return;
-                        window.onQRChangedEvent(getQR(ref));
-                    };
-
-                    window.onQRChangedEvent(getQR(window.AuthStore.Conn.ref)); // initial qr
-                    window.AuthStore.Conn.on('change:ref', onRefChange); // future QR changes
-
-                    // Remove QR listener once authentication succeeds
-                    window.AuthStore.AppState.on('change:hasSynced', () => {
-                        window.AuthStore.Conn.off('change:ref', onRefChange);
                     });
-                });
-            }
-        }
 
-        await exposeFunctionIfAbsent(this.pupPage, 'onAuthAppStateChangedEvent', async (state) => {
-            console.log('[wwjs-diag] onAuthAppStateChangedEvent', JSON.stringify({ state, ts: Date.now() }));
-            if (state == 'UNPAIRED_IDLE' && !pairWithPhoneNumber.phoneNumber) {
+
+                    await this.pupPage.evaluate(async () => {
+                        const registrationInfo = await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
+                        const noiseKeyPair = await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
+                        const staticKeyB64 = window.AuthStore.Base64Tools.encodeB64(noiseKeyPair.staticKeyPair.pubKey);
+                        const identityKeyB64 = window.AuthStore.Base64Tools.encodeB64(registrationInfo.identityKeyPair.pubKey);
+                        const advSecretKey = await window.AuthStore.RegistrationUtils.getADVSecretKey();
+                        const platform = window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
+                        const getQR = (ref) => ref + ',' + staticKeyB64 + ',' + identityKeyB64 + ',' + advSecretKey + ',' + platform;
+                        window.getQR = getQR;
+
+                        const onRefChange = (_, ref) => {
+                            if (ref == null) return;
+                            window.onQRChangedEvent(getQR(ref));
+                        };
+
+                        window.onQRChangedEvent(getQR(window.AuthStore.Conn.ref)); // initial qr
+                        window.AuthStore.Conn.on('change:ref', onRefChange); // future QR changes
+
+                        // Remove QR listener once authentication succeeds
+                        window.AuthStore.AppState.on('change:hasSynced', () => {
+                            window.AuthStore.Conn.off('change:ref', onRefChange);
+                        });
+                    });
+                }
+            }
+
+            await exposeFunctionIfAbsent(this.pupPage, 'onAuthAppStateChangedEvent', async (state) => {
+                console.log('[wwjs-diag] onAuthAppStateChangedEvent', JSON.stringify({ state, ts: Date.now() }));
+                if (state == 'UNPAIRED_IDLE' && !pairWithPhoneNumber.phoneNumber) {
                 // refresh qr code
-                window.Store.Cmd.refreshQR();
-            }
-        });
+                    window.Store.Cmd.refreshQR();
+                }
+            });
 
-        await exposeFunctionIfAbsent(this.pupPage, 'onAppStateHasSyncedEvent', async () => {
-            if (this._hasSyncedTriggered) {
-                console.warn('[wwjs-diag] onAppStateHasSyncedEvent SKIPPED (already handled)');
-                return;
-            }
-            this._hasSyncedTriggered = true;
-            console.log('[wwjs-diag] onAppStateHasSyncedEvent CALLED', JSON.stringify({ ts: Date.now() }));
-            try {
-                const authEventPayload = await this.authStrategy.getAuthEventPayload();
-                /**
+            await exposeFunctionIfAbsent(this.pupPage, 'onAppStateHasSyncedEvent', async () => {
+                console.log('[wwjs-diag] onAppStateHasSyncedEvent CALLED', JSON.stringify({ ts: Date.now() }));
+                try {
+                    const authEventPayload = await this.authStrategy.getAuthEventPayload();
+                    /**
                      * Emitted when authentication is successful
                      * @event Client#authenticated
                      */
-                this.emit(Events.AUTHENTICATED, authEventPayload);
-                console.log('[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted');
+                    this.emit(Events.AUTHENTICATED, authEventPayload);
+                    console.log('[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted');
 
-                const injected = await this.pupPage.evaluate(async () => {
-                    return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
-                });
-                console.log('[wwjs-diag] onAppStateHasSyncedEvent storeCheck', JSON.stringify({ injected, ts: Date.now() }));
+                    const injected = await this.pupPage.evaluate(async () => {
+                        return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
+                    });
+                    console.log('[wwjs-diag] onAppStateHasSyncedEvent storeCheck', JSON.stringify({ injected, ts: Date.now() }));
 
-                if (!injected) {
-                    if (this.options.webVersionCache.type === 'local' && this.currentIndexHtml) {
-                        const { type: webCacheType, ...webCacheOptions } = this.options.webVersionCache;
-                        const webCache = WebCacheFactory.createWebCache(webCacheType, webCacheOptions);
+                    if (!injected) {
+                        if (this.options.webVersionCache.type === 'local' && this.currentIndexHtml) {
+                            const { type: webCacheType, ...webCacheOptions } = this.options.webVersionCache;
+                            const webCache = WebCacheFactory.createWebCache(webCacheType, webCacheOptions);
 
-                        await webCache.persist(this.currentIndexHtml, version);
-                    }
+                            await webCache.persist(this.currentIndexHtml, version);
+                        }
 
-                    if (isCometOrAbove) {
-                        await this.pupPage.evaluate(InjectDiagCommon);
-                        await this.pupPage.evaluate(ExposeStore);
-                    } else {
+                        if (isCometOrAbove) {
+                            await this.pupPage.evaluate(InjectDiagCommon);
+                            await this.pupPage.evaluate(ExposeStore);
+                        } else {
                         // make sure all modules are ready before injection
                         // 2 second delay after authentication makes sense and does not need to be made dyanmic or removed
-                        await new Promise(r => setTimeout(r, 2000));
-                        await this.pupPage.evaluate(ExposeLegacyStore);
-                    }
-                    console.log('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
-                    let start = Date.now();
-                    let res = false;
-                    while(start > (Date.now() - 30000)){
+                            await new Promise(r => setTimeout(r, 2000));
+                            await this.pupPage.evaluate(ExposeLegacyStore);
+                        }
+                        console.log('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
+                        let start = Date.now();
+                        let res = false;
+                        while(start > (Date.now() - 30000)){
                         // Check window.Store Injection
-                        res = await this.pupPage.evaluate('window.Store != undefined');
-                        if(res){break;}
-                        await new Promise(r => setTimeout(r, 200));
-                    }
-                    if(!res){
-                        console.warn('[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s');
-                        throw 'ready timeout';
-                    }
-                    console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready', JSON.stringify({ durationMs: Date.now() - start }));
+                            res = await this.pupPage.evaluate('window.Store != undefined');
+                            if(res){break;}
+                            await new Promise(r => setTimeout(r, 200));
+                        }
+                        if(!res){
+                            console.warn('[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s');
+                            throw 'ready timeout';
+                        }
+                        console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready', JSON.stringify({ durationMs: Date.now() - start }));
 
-                    /**
+                        /**
                          * Current connection information
                          * @type {ClientInfo}
                          */
-                    this.info = new ClientInfo(this, await this.pupPage.evaluate(() => {
-                        return { ...window.Store.Conn.serialize(), wid: window.Store.User.getMaybeMePnUser() || window.Store.User.getMaybeMeLidUser() };
-                    }));
+                        this.info = new ClientInfo(this, await this.pupPage.evaluate(() => {
+                            return { ...window.Store.Conn.serialize(), wid: window.Store.User.getMaybeMePnUser() || window.Store.User.getMaybeMeLidUser() };
+                        }));
 
-                    this.interface = new InterfaceController(this);
+                        this.interface = new InterfaceController(this);
 
-                    //Load util functions (serializers, helper functions)
-                    await this.pupPage.evaluate(LoadUtils);
+                        //Load util functions (serializers, helper functions)
+                        await this.pupPage.evaluate(LoadUtils);
 
-                    await this.attachEventListeners();
-                }
-                /**
+                        await this.attachEventListeners();
+                    }
+                    /**
                      * Emitted when the client has initialized and is ready to receive messages.
                      * @event Client#ready
                      */
-                this.emit(Events.READY);
-                console.log('[wwjs-diag] onAppStateHasSyncedEvent READY emitted');
-                this.authStrategy.afterAuthReady();
-            } catch (err) {
-                console.warn('[wwjs-diag] onAppStateHasSyncedEvent ERROR', JSON.stringify({
-                    error: String(err?.message || err),
-                    ts: Date.now()
-                }));
-                throw err;
-            }
-        });
-        let lastPercent = null;
-        await exposeFunctionIfAbsent(this.pupPage, 'onOfflineProgressUpdateEvent', async (percent) => {
-            if (lastPercent !== percent) {
-                lastPercent = percent;
-                this.emit(Events.LOADING_SCREEN, percent, 'WhatsApp'); // Message is hardcoded as "WhatsApp" for now
-            }
-        });
-        await exposeFunctionIfAbsent(this.pupPage, 'onLogoutEvent', async () => {
-            console.warn('[wwjs-diag] onLogoutEvent CALLED', JSON.stringify({ ts: Date.now() }));
-            this.lastLoggedOut = true;
-            await this.pupPage.waitForNavigation({waitUntil: 'load', timeout: 5000}).catch((_) => _);
-        });
-        await this.pupPage.evaluate(() => {
-            // [diag] Log state BEFORE registering listeners
-            const _diagState = {
-                hasSynced: window.AuthStore.AppState.hasSynced,
-                state: window.AuthStore.AppState.state,
-                ts: Date.now()
-            };
-            console.error('[wwjs-diag] listeners:registering ' + JSON.stringify(_diagState));
-
-            // Store AppState reference to detect replacement
-            window._wwjsDiagAppState = window.AuthStore.AppState;
-
-            window.AuthStore.AppState.on('change:state', (_AppState, state) => {
-                console.error('[wwjs-diag] change:state FIRED ' + JSON.stringify({ state, ts: Date.now() }));
-                window.onAuthAppStateChangedEvent(state);
+                    this.emit(Events.READY);
+                    console.log('[wwjs-diag] onAppStateHasSyncedEvent READY emitted');
+                    this.authStrategy.afterAuthReady();
+                } catch (err) {
+                    console.warn('[wwjs-diag] onAppStateHasSyncedEvent ERROR', JSON.stringify({
+                        error: String(err?.message || err),
+                        ts: Date.now()
+                    }));
+                    throw err;
+                }
             });
-            window.AuthStore.AppState.on('change:hasSynced', () => {
-                console.error('[wwjs-diag] change:hasSynced FIRED ' + JSON.stringify({
+            let lastPercent = null;
+            await exposeFunctionIfAbsent(this.pupPage, 'onOfflineProgressUpdateEvent', async (percent) => {
+                if (lastPercent !== percent) {
+                    lastPercent = percent;
+                    this.emit(Events.LOADING_SCREEN, percent, 'WhatsApp'); // Message is hardcoded as "WhatsApp" for now
+                }
+            });
+            await exposeFunctionIfAbsent(this.pupPage, 'onLogoutEvent', async () => {
+                console.warn('[wwjs-diag] onLogoutEvent CALLED', JSON.stringify({ ts: Date.now() }));
+                this.lastLoggedOut = true;
+                await this.pupPage.waitForNavigation({waitUntil: 'load', timeout: 5000}).catch((_) => _);
+            });
+            const syncCheck = await this.pupPage.evaluate(() => {
+            // Clean up old listeners to prevent accumulation on SPA navigations
+                if (window._wwjsListeners) {
+                    try {
+                        window.AuthStore.AppState.off('change:state', window._wwjsListeners.onStateChange);
+                        window.AuthStore.AppState.off('change:hasSynced', window._wwjsListeners.onHasSynced);
+                        window.AuthStore.Cmd.off('offline_progress_update_from_bridge', window._wwjsListeners.onOfflineProgress);
+                        window.AuthStore.Cmd.off('logout', window._wwjsListeners.onLogout);
+                        window.AuthStore.Cmd.off('logout_from_bridge', window._wwjsListeners.onLogoutFromBridge);
+                        console.error('[wwjs-diag] listeners:cleaned ' + JSON.stringify({ ts: Date.now() }));
+                    } catch (e) {
+                        console.error('[wwjs-diag] listeners:cleanup-failed ' + JSON.stringify({ error: String(e), ts: Date.now() }));
+                    }
+                }
+
+                // [diag] Log state BEFORE registering listeners
+                const _diagState = {
                     hasSynced: window.AuthStore.AppState.hasSynced,
                     state: window.AuthStore.AppState.state,
-                    sameAppState: window.AuthStore.AppState === window._wwjsDiagAppState,
+                    isReRegister: !!window._wwjsListeners,
                     ts: Date.now()
-                }));
-                window.onAppStateHasSyncedEvent();
-            });
-            window.AuthStore.Cmd.on('offline_progress_update_from_bridge', () => {
-                window.onOfflineProgressUpdateEvent(window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress());
-            });
-            window.AuthStore.Cmd.on('logout', async () => {
-                console.error('[wwjs-diag] Cmd:logout FIRED ' + JSON.stringify({ ts: Date.now() }));
-                await window.onLogoutEvent();
-            });
-            window.AuthStore.Cmd.on('logout_from_bridge', async () => {
-                console.error('[wwjs-diag] Cmd:logout_from_bridge FIRED ' + JSON.stringify({ ts: Date.now() }));
-                await window.onLogoutEvent();
-            });
+                };
+                console.error('[wwjs-diag] listeners:registering ' + JSON.stringify(_diagState));
 
-            console.error('[wwjs-diag] listeners:registered ' + JSON.stringify({ ts: Date.now() }));
-        });
+                // Store AppState reference to detect replacement
+                window._wwjsDiagAppState = window.AuthStore.AppState;
 
-        // Fix race condition: after page navigation (framenavigated), inject() re-runs
-        // and registers a new change:hasSynced listener. But if hasSynced is already true
-        // in the new context, the Backbone change event never fires (it only fires on
-        // transitions, not when the value is already at the target).
-        // Check hasSynced after all listeners are registered and trigger manually if needed.
-        try {
-            const syncCheck = await this.pupPage.evaluate(() => {
-                return {
-                    authStoreAvailable: !!window.AuthStore,
-                    appStateAvailable: !!(window.AuthStore && window.AuthStore.AppState),
-                    hasSynced: window.AuthStore && window.AuthStore.AppState && window.AuthStore.AppState.hasSynced,
-                    state: window.AuthStore && window.AuthStore.AppState && window.AuthStore.AppState.state,
-                    sameAppState: window.AuthStore && window.AuthStore.AppState === window._wwjsDiagAppState,
+                const onStateChange = (_AppState, state) => {
+                    console.error('[wwjs-diag] change:state FIRED ' + JSON.stringify({ state, ts: Date.now() }));
+                    window.onAuthAppStateChangedEvent(state);
+                };
+                const onHasSynced = () => {
+                    console.error('[wwjs-diag] change:hasSynced FIRED ' + JSON.stringify({
+                        hasSynced: window.AuthStore.AppState.hasSynced,
+                        state: window.AuthStore.AppState.state,
+                        sameAppState: window.AuthStore.AppState === window._wwjsDiagAppState,
+                        ts: Date.now()
+                    }));
+                    window.onAppStateHasSyncedEvent();
+                };
+                const onOfflineProgress = () => {
+                    window.onOfflineProgressUpdateEvent(window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress());
+                };
+                const onLogout = async () => {
+                    console.error('[wwjs-diag] Cmd:logout FIRED ' + JSON.stringify({ ts: Date.now() }));
+                    await window.onLogoutEvent();
+                };
+                const onLogoutFromBridge = async () => {
+                    console.error('[wwjs-diag] Cmd:logout_from_bridge FIRED ' + JSON.stringify({ ts: Date.now() }));
+                    await window.onLogoutEvent();
+                };
+
+                // Store references for cleanup on next inject
+                window._wwjsListeners = { onStateChange, onHasSynced, onOfflineProgress, onLogout, onLogoutFromBridge };
+
+                window.AuthStore.AppState.on('change:state', onStateChange);
+                window.AuthStore.AppState.on('change:hasSynced', onHasSynced);
+                window.AuthStore.Cmd.on('offline_progress_update_from_bridge', onOfflineProgress);
+                window.AuthStore.Cmd.on('logout', onLogout);
+                window.AuthStore.Cmd.on('logout_from_bridge', onLogoutFromBridge);
+
+                console.error('[wwjs-diag] listeners:registered ' + JSON.stringify({ ts: Date.now() }));
+
+                // Atomic hasSynced check — same synchronous block as listener registration.
+                // If hasSynced is already true, Backbone won't fire change:hasSynced (no transition).
+                // If hasSynced is false, the listener above will catch the future transition.
+                // Being in the same evaluate eliminates any race between the two paths.
+                const _syncCheck = {
+                    hasSynced: window.AuthStore.AppState.hasSynced,
+                    state: window.AuthStore.AppState.state,
+                    storeInjected: typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined',
+                    sameAppState: window.AuthStore.AppState === window._wwjsDiagAppState,
                     fnExists: typeof window.onAppStateHasSyncedEvent === 'function'
                 };
+                if (_syncCheck.hasSynced === true && !_syncCheck.storeInjected) {
+                    console.error('[wwjs-diag] hasSyncedFix TRIGGERING (atomic) ' + JSON.stringify(_syncCheck));
+                    window.onAppStateHasSyncedEvent();
+                } else if (_syncCheck.hasSynced === true && _syncCheck.storeInjected) {
+                    console.error('[wwjs-diag] hasSyncedFix SKIPPED (Store already injected) ' + JSON.stringify(_syncCheck));
+                }
+                return _syncCheck;
             });
-            console.log('[wwjs-diag] inject:hasSyncedCheck', JSON.stringify({ ts: Date.now(), ...syncCheck }));
-
-            if (syncCheck.appStateAvailable && syncCheck.hasSynced === true) {
-                console.warn('[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent');
-                await this.pupPage.evaluate(() => { window.onAppStateHasSyncedEvent(); });
-                console.warn('[wwjs-diag] inject:hasSyncedFix TRIGGERED successfully');
+            if (syncCheck) {
+                console.log('[wwjs-diag] inject:hasSyncedCheck', JSON.stringify({ ts: Date.now(), ...syncCheck }));
             }
-        } catch (err) {
-            console.warn('[wwjs-diag] inject:hasSyncedCheck FAILED', String(err?.message || err));
-        }
 
-        console.log('[wwjs-diag] inject:end', JSON.stringify({ ts: Date.now(), durationMs: Date.now() - _injectStart }));
+            console.log('[wwjs-diag] inject:end', JSON.stringify({ ts: Date.now(), durationMs: Date.now() - _injectStart }));
+
+        } finally {
+            this._injectInProgress = false;
+        }
     }
 
     /**
@@ -549,6 +574,8 @@ class Client extends EventEmitter {
                 lastLoggedOut: this.lastLoggedOut
             }));
 
+            if (!isMainFrame) return;
+
             if(isLogout) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
                 await this.authStrategy.logout();
@@ -557,14 +584,25 @@ class Client extends EventEmitter {
                 this.lastLoggedOut = false;
             }
 
-            if (!isMainFrame) return;
-
             let storeAvailable = false;
             try {
                 storeAvailable = await this.pupPage.evaluate(() => {
-                    return typeof window.Store !== 'undefined' && typeof window.Store?.Msg !== 'undefined';
+                    return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
                 });
             } catch (e) { /* page may not be ready */ }
+
+            // On SPA navigations the JS context is preserved — Store, listeners,
+            // and exposed functions are all still alive. Re-running inject() would
+            // re-register Backbone listeners and re-trigger the hasSynced fix,
+            // causing duplicate AUTHENTICATED/READY/afterAuthReady().
+            // Only re-inject when the context is actually gone (full navigation)
+            // or after logout (even if Store lingers).
+            if (!isLogout && storeAvailable) {
+                console.log('[wwjs-diag] framenavigated:inject SKIPPED (client already connected)', JSON.stringify({
+                    ts: Date.now(), url: frameUrl.slice(0, 150), storeAvailable
+                }));
+                return;
+            }
 
             console.log('[wwjs-diag] framenavigated:inject START', JSON.stringify({
                 ts: Date.now(),
