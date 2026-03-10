@@ -340,10 +340,25 @@ class Client extends EventEmitter {
             await this.pupPage.waitForNavigation({waitUntil: 'load', timeout: 5000}).catch((_) => _);
         });
         await this.pupPage.evaluate(() => {
+            // Clean up old listeners to prevent accumulation on SPA navigations
+            if (window._wwjsListeners) {
+                try {
+                    window.AuthStore.AppState.off('change:state', window._wwjsListeners.onStateChange);
+                    window.AuthStore.AppState.off('change:hasSynced', window._wwjsListeners.onHasSynced);
+                    window.AuthStore.Cmd.off('offline_progress_update_from_bridge', window._wwjsListeners.onOfflineProgress);
+                    window.AuthStore.Cmd.off('logout', window._wwjsListeners.onLogout);
+                    window.AuthStore.Cmd.off('logout_from_bridge', window._wwjsListeners.onLogoutFromBridge);
+                    console.error('[wwjs-diag] listeners:cleaned ' + JSON.stringify({ ts: Date.now() }));
+                } catch (e) {
+                    console.error('[wwjs-diag] listeners:cleanup-failed ' + JSON.stringify({ error: String(e), ts: Date.now() }));
+                }
+            }
+
             // [diag] Log state BEFORE registering listeners
             const _diagState = {
                 hasSynced: window.AuthStore.AppState.hasSynced,
                 state: window.AuthStore.AppState.state,
+                isReRegister: !!window._wwjsListeners,
                 ts: Date.now()
             };
             console.error('[wwjs-diag] listeners:registering ' + JSON.stringify(_diagState));
@@ -351,11 +366,11 @@ class Client extends EventEmitter {
             // Store AppState reference to detect replacement
             window._wwjsDiagAppState = window.AuthStore.AppState;
 
-            window.AuthStore.AppState.on('change:state', (_AppState, state) => {
+            const onStateChange = (_AppState, state) => {
                 console.error('[wwjs-diag] change:state FIRED ' + JSON.stringify({ state, ts: Date.now() }));
                 window.onAuthAppStateChangedEvent(state);
-            });
-            window.AuthStore.AppState.on('change:hasSynced', () => {
+            };
+            const onHasSynced = () => {
                 console.error('[wwjs-diag] change:hasSynced FIRED ' + JSON.stringify({
                     hasSynced: window.AuthStore.AppState.hasSynced,
                     state: window.AuthStore.AppState.state,
@@ -363,18 +378,27 @@ class Client extends EventEmitter {
                     ts: Date.now()
                 }));
                 window.onAppStateHasSyncedEvent();
-            });
-            window.AuthStore.Cmd.on('offline_progress_update_from_bridge', () => {
+            };
+            const onOfflineProgress = () => {
                 window.onOfflineProgressUpdateEvent(window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress());
-            });
-            window.AuthStore.Cmd.on('logout', async () => {
+            };
+            const onLogout = async () => {
                 console.error('[wwjs-diag] Cmd:logout FIRED ' + JSON.stringify({ ts: Date.now() }));
                 await window.onLogoutEvent();
-            });
-            window.AuthStore.Cmd.on('logout_from_bridge', async () => {
+            };
+            const onLogoutFromBridge = async () => {
                 console.error('[wwjs-diag] Cmd:logout_from_bridge FIRED ' + JSON.stringify({ ts: Date.now() }));
                 await window.onLogoutEvent();
-            });
+            };
+
+            // Store references for cleanup on next inject
+            window._wwjsListeners = { onStateChange, onHasSynced, onOfflineProgress, onLogout, onLogoutFromBridge };
+
+            window.AuthStore.AppState.on('change:state', onStateChange);
+            window.AuthStore.AppState.on('change:hasSynced', onHasSynced);
+            window.AuthStore.Cmd.on('offline_progress_update_from_bridge', onOfflineProgress);
+            window.AuthStore.Cmd.on('logout', onLogout);
+            window.AuthStore.Cmd.on('logout_from_bridge', onLogoutFromBridge);
 
             console.error('[wwjs-diag] listeners:registered ' + JSON.stringify({ ts: Date.now() }));
         });
@@ -392,15 +416,18 @@ class Client extends EventEmitter {
                     hasSynced: window.AuthStore && window.AuthStore.AppState && window.AuthStore.AppState.hasSynced,
                     state: window.AuthStore && window.AuthStore.AppState && window.AuthStore.AppState.state,
                     sameAppState: window.AuthStore && window.AuthStore.AppState === window._wwjsDiagAppState,
-                    fnExists: typeof window.onAppStateHasSyncedEvent === 'function'
+                    fnExists: typeof window.onAppStateHasSyncedEvent === 'function',
+                    storeInjected: typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined'
                 };
             });
             console.log('[wwjs-diag] inject:hasSyncedCheck', JSON.stringify({ ts: Date.now(), ...syncCheck }));
 
-            if (syncCheck.appStateAvailable && syncCheck.hasSynced === true) {
+            if (syncCheck.appStateAvailable && syncCheck.hasSynced === true && !syncCheck.storeInjected) {
                 console.warn('[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent');
                 await this.pupPage.evaluate(() => { window.onAppStateHasSyncedEvent(); });
                 console.warn('[wwjs-diag] inject:hasSyncedFix TRIGGERED successfully');
+            } else if (syncCheck.appStateAvailable && syncCheck.hasSynced === true && syncCheck.storeInjected) {
+                console.log('[wwjs-diag] inject:hasSyncedFix SKIPPED (Store already injected — client already ready)');
             }
         } catch (err) {
             console.warn('[wwjs-diag] inject:hasSyncedCheck FAILED', String(err?.message || err));
@@ -555,6 +582,7 @@ class Client extends EventEmitter {
                 await this.authStrategy.beforeBrowserInitialized();
                 await this.authStrategy.afterBrowserInitialized();
                 this.lastLoggedOut = false;
+                this._hasSyncedTriggered = false;
             }
 
             if (!isMainFrame) return;
