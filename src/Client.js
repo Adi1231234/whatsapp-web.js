@@ -957,7 +957,7 @@ class Client extends EventEmitter {
             'onAddMessageCiphertextEvent',
             (msg) => {
                 /**
-                 * Emitted when messages are edited
+                 * Emitted when a message is received as ciphertext (not yet decrypted)
                  * @event Client#message_ciphertext
                  * @param {Message} message
                  */
