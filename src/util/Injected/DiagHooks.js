@@ -1,224 +1,22 @@
 'use strict';
 
-exports.ExposeStore = () => {
-    /**
-     * Helper function that compares between two WWeb versions. Its purpose is to help the developer to choose the correct code implementation depending on the comparison value and the WWeb version.
-     * @param {string} lOperand The left operand for the WWeb version string to compare with
-     * @param {string} operator The comparison operator
-     * @param {string} rOperand The right operand for the WWeb version string to compare with
-     * @returns {boolean} Boolean value that indicates the result of the comparison
-     */
-    window.compareWwebVersions = (lOperand, operator, rOperand) => {
-        if (!['>', '>=', '<', '<=', '='].includes(operator)) {
-            throw new class _ extends Error {
-                constructor(m) { super(m); this.name = 'CompareWwebVersionsError'; }
-            }('Invalid comparison operator is provided');
-
-        }
-        if (typeof lOperand !== 'string' || typeof rOperand !== 'string') {
-            throw new class _ extends Error {
-                constructor(m) { super(m); this.name = 'CompareWwebVersionsError'; }
-            }('A non-string WWeb version type is provided');
-        }
-
-        lOperand = lOperand.replace(/-beta$/, '');
-        rOperand = rOperand.replace(/-beta$/, '');
-
-        while (lOperand.length !== rOperand.length) {
-            lOperand.length > rOperand.length
-                ? rOperand = rOperand.concat('0')
-                : lOperand = lOperand.concat('0');
-        }
-
-        lOperand = Number(lOperand.replace(/\./g, ''));
-        rOperand = Number(rOperand.replace(/\./g, ''));
-
-        return (
-            operator === '>' ? lOperand > rOperand :
-                operator === '>=' ? lOperand >= rOperand :
-                    operator === '<' ? lOperand < rOperand :
-                        operator === '<=' ? lOperand <= rOperand :
-                            operator === '=' ? lOperand === rOperand :
-                                false
-        );
-    };
-
-    window.Store = Object.assign({}, window.require('WAWebCollections'));
-    window.Store.AppState = window.require('WAWebSocketModel').Socket;
-    window.Store.BlockContact = window.require('WAWebBlockContactAction');
-    window.Store.Conn = window.require('WAWebConnModel').Conn;
-    window.Store.Cmd = window.require('WAWebCmd').Cmd;
-    window.Store.DownloadManager = window.require('WAWebDownloadManager').downloadManager;
-    window.Store.GroupQueryAndUpdate = window.require('WAWebGroupQueryJob').queryAndUpdateGroupMetadataById;
-    window.Store.MediaPrep = window.require('WAWebPrepRawMedia');
-    window.Store.MediaObject = window.require('WAWebMediaStorage');
-    window.Store.MediaTypes = window.require('WAWebMmsMediaTypes');
-    window.Store.MediaUpload = {
-        ...window.require('WAWebMediaMmsV4Upload'),
-        ...window.require('WAWebStartMediaUploadQpl')
-    };
-    window.Store.MediaUpdate = window.require('WAWebMediaUpdateMsg');
-    window.Store.MsgKey = window.require('WAWebMsgKey');
-    window.Store.OpaqueData = window.require('WAWebMediaOpaqueData');
-    window.Store.QueryProduct = window.require('WAWebBizProductCatalogBridge');
-    window.Store.QueryOrder = window.require('WAWebBizOrderBridge');
-    window.Store.SendClear = window.require('WAWebChatClearBridge');
-    window.Store.SendDelete = window.require('WAWebDeleteChatAction');
-    window.Store.SendMessage = window.require('WAWebSendMsgChatAction');
-    window.Store.EditMessage = window.require('WAWebSendMessageEditAction');
-    window.Store.MediaDataUtils = window.require('WAWebMediaDataUtils');
-    window.Store.BlobCache = window.require('WAWebMediaInMemoryBlobCache');
-    window.Store.SendSeen = window.require('WAWebUpdateUnreadChatAction');
-    window.Store.User = window.require('WAWebUserPrefsMeUser');
-    window.Store.ContactMethods = {
-        ...window.require('WAWebContactGetters'),
-        ...window.require('WAWebFrontendContactGetters')
-    };
-    window.Store.UserConstructor = window.require('WAWebWid');
-    window.Store.Validators = window.require('WALinkify');
-    window.Store.WidFactory = window.require('WAWebWidFactory');
-    window.Store.ProfilePic = window.require('WAWebContactProfilePicThumbBridge');
-    window.Store.PresenceUtils = window.require('WAWebPresenceChatAction');
-    window.Store.ChatState = window.require('WAWebChatStateBridge');
-    window.Store.findCommonGroups = window.require('WAWebFindCommonGroupsContactAction').findCommonGroups;
-    window.Store.ConversationMsgs = window.require('WAWebChatLoadMessages');
-    window.Store.sendReactionToMsg = window.require('WAWebSendReactionMsgAction').sendReactionToMsg;
-    window.Store.createOrUpdateReactionsModule = window.require('WAWebDBCreateOrUpdateReactions');
-    window.Store.EphemeralFields = window.require('WAWebGetEphemeralFieldsMsgActionsUtils');
-    window.Store.MsgActionChecks = window.require('WAWebMsgActionCapability');
-    window.Store.QuotedMsg = window.require('WAWebQuotedMsgModelUtils');
-    window.Store.LinkPreview = window.require('WAWebLinkPreviewChatAction');
-    window.Store.Socket = window.require('WADeprecatedSendIq');
-    window.Store.SocketWap = window.require('WAWap');
-    window.Store.SearchContext = window.require('WAWebChatMessageSearch');
-    window.Store.DrawerManager = window.require('WAWebDrawerManager').DrawerManager;
-    window.Store.LidUtils = window.require('WAWebApiContact');
-    window.Store.WidToJid = window.require('WAWebWidToJid');
-    window.Store.JidToWid = window.require('WAWebJidToWid');
-    window.Store.getMsgInfo = window.require('WAWebApiMessageInfoStore').queryMsgInfo;
-    window.Store.QueryExist = window.require('WAWebQueryExistsJob').queryWidExists;
-    window.Store.ReplyUtils = window.require('WAWebMsgReply');
-    window.Store.BotSecret = window.require('WAWebBotMessageSecret');
-    window.Store.BotProfiles = window.require('WAWebBotProfileCollection');
-    window.Store.ContactCollection = window.require('WAWebContactCollection').ContactCollection;
-    window.Store.DeviceList = window.require('WAWebApiDeviceList');
-    window.Store.HistorySync = window.require('WAWebSendNonMessageDataRequest');
-    window.Store.AddonReactionTable = window.require('WAWebAddonReactionTableMode').reactionTableMode;
-    window.Store.AddonPollVoteTable = window.require('WAWebAddonPollVoteTableMode').pollVoteTableMode;
-    window.Store.ChatGetters = window.require('WAWebChatGetters');
-    window.Store.UploadUtils = window.require('WAWebUploadManager');
-    window.Store.WAWebStreamModel = window.require('WAWebStreamModel');
-    window.Store.FindOrCreateChat = window.require('WAWebFindChatAction');
-    window.Store.CustomerNoteUtils = window.require('WAWebNoteAction');
-    window.Store.BusinessGatingUtils = window.require('WAWebBizGatingUtils');
-    window.Store.PollsVotesSchema = window.require('WAWebPollsVotesSchema');
-    window.Store.PollsSendVote = window.require('WAWebPollsSendVoteMsgAction');
-
-    window.Store.Settings = {
-        ...window.require('WAWebUserPrefsGeneral'),
-        ...window.require('WAWebUserPrefsNotifications'),
-        setPushname: window.require('WAWebSetPushnameConnAction').setPushname
-    };
-    window.Store.NumberInfo = {
-        ...window.require('WAPhoneUtils'),
-        ...window.require('WAPhoneFindCC'),
-        ...window.require('WAWebPhoneUtils')
-    };
-    window.Store.ForwardUtils = {
-        ...window.require('WAWebChatForwardMessage')
-    };
-    window.Store.PinnedMsgUtils = {
-        ...window.require('WAWebPinInChatSchema'),
-        ...window.require('WAWebSendPinMessageAction')
-    };
-    window.Store.ScheduledEventMsgUtils = {
-        ...window.require('WAWebGenerateEventCallLink'),
-        ...window.require('WAWebSendEventEditMsgAction'),
-        ...window.require('WAWebSendEventResponseMsgAction')
-    };
-    window.Store.VCard = {
-        ...window.require('WAWebFrontendVcardUtils'),
-        ...window.require('WAWebVcardParsingUtils'),
-        ...window.require('WAWebVcardGetNameFromParsed')
-    };
-    window.Store.StickerTools = {
-        ...window.require('WAWebImageUtils'),
-        ...window.require('WAWebAddWebpMetadata')
-    };
-    window.Store.GroupUtils = {
-        ...window.require('WAWebGroupCreateJob'),
-        ...window.require('WAWebGroupModifyInfoJob'),
-        ...window.require('WAWebExitGroupAction'),
-        ...window.require('WAWebContactProfilePicThumbBridge'),
-        ...window.require('WAWebSetPropertyGroupAction')
-    };
-    window.Store.GroupParticipants = {
-        ...window.require('WAWebModifyParticipantsGroupAction'),
-        ...window.require('WASmaxGroupsAddParticipantsRPC')
-    };
-    window.Store.GroupInvite = {
-        ...window.require('WAWebGroupInviteJob'),
-        ...window.require('WAWebGroupQueryJob'),
-        ...window.require('WAWebMexFetchGroupInviteCodeJob')
-    };
-    window.Store.GroupInviteV4 = {
-        ...window.require('WAWebGroupInviteV4Job'),
-        ...window.require('WAWebChatSendMessages')
-    };
-    window.Store.MembershipRequestUtils = {
-        ...window.require('WAWebApiMembershipApprovalRequestStore'),
-        ...window.require('WASmaxGroupsMembershipRequestsActionRPC')
-    };
-    window.Store.ChannelUtils = {
-        ...window.require('WAWebLoadNewsletterPreviewChatAction'),
-        ...window.require('WAWebNewsletterMetadataQueryJob'),
-        ...window.require('WAWebNewsletterCreateQueryJob'),
-        ...window.require('WAWebEditNewsletterMetadataAction'),
-        ...window.require('WAWebNewsletterDeleteAction'),
-        ...window.require('WAWebNewsletterSubscribeAction'),
-        ...window.require('WAWebNewsletterUnsubscribeAction'),
-        ...window.require('WAWebNewsletterDirectorySearchAction'),
-        ...window.require('WAWebNewsletterGatingUtils'),
-        ...window.require('WAWebNewsletterModelUtils'),
-        ...window.require('WAWebMexAcceptNewsletterAdminInviteJob'),
-        ...window.require('WAWebMexRevokeNewsletterAdminInviteJob'),
-        ...window.require('WAWebChangeNewsletterOwnerAction'),
-        ...window.require('WAWebDemoteNewsletterAdminAction'),
-        ...window.require('WAWebNewsletterDemoteAdminJob'),
-        countryCodesIso: window.require('WAWebCountriesNativeCountryNames'),
-        currentRegion: window.require('WAWebL10N').getRegion(),
-    };
-    window.Store.SendChannelMessage = {
-        ...window.require('WAWebNewsletterUpdateMsgsRecordsJob'),
-        ...window.require('WAWebMsgDataFromModel'),
-        ...window.require('WAWebNewsletterSendMessageJob'),
-        ...window.require('WAWebNewsletterSendMsgAction'),
-        ...window.require('WAMediaCalculateFilehash')
-    };
-    window.Store.ChannelSubscribers = {
-        ...window.require('WAWebMexFetchNewsletterSubscribersJob'),
-        ...window.require('WAWebNewsletterSubscriberListAction')
-    };
-    window.Store.AddressbookContactUtils = {
-        ...window.require('WAWebSaveContactAction'),
-        ...window.require('WAWebDeleteContactAction')
-    };
-    window.Store.StatusUtils = {
-        ...window.require('WAWebContactStatusBridge'),
-        ...window.require('WAWebSendStatusMsgAction'),
-        ...window.require('WAWebRevokeStatusAction'),
-        ...window.require('WAWebStatusGatingUtils')
-    };
-
-    if (!window.Store.Chat._find || !window.Store.Chat.findImpl) {
-        window.Store.Chat._find = e => {
-            const target = window.Store.Chat.get(e);
-            return target ? Promise.resolve(target) : Promise.resolve({
-                id: e
-            });
-        };
-        window.Store.Chat.findImpl = window.Store.Chat._find;
-    }
+/**
+ * Diagnostic hooks for monitoring WhatsApp Web internals.
+ *
+ * Requires DiagCommon to be injected first (sets up window.__diag).
+ *
+ * This file is injected via page.evaluate() after the upstream module loader
+ * is ready, so window.require() is available.
+ */
+exports.InjectDiagHooks = () => {
+    // Use shared helpers from DiagCommon (injected before this file)
+    var safeDiagLog = window.__diag.safeDiagLog;
+    var safeStr = window.__diag.safeStr;
+    var wid = window.__diag.wid;
+    var _isStatusOrGroup = window.__diag.isStatusOrGroup;
+    var _isThumbnailType = window.__diag.isThumbnailType;
+    var _shouldSkipDiag = window.__diag.shouldSkipMsg;
+    var _shouldSkipReceipt = window.__diag.shouldSkipReceipt;
 
     /**
      * Target options object description
@@ -229,17 +27,8 @@ exports.ExposeStore = () => {
     /**
      * Function to modify functions
      * @param {TargetOptions} target Options specifying the target function to search for modifying
-     * @param {Function} callback Modified function
+     * @param {Function} callback Modified function — receives (func, ...args) where func is already bound to `this`
      */
-    // Use shared helpers from DiagCommon (injected before this file)
-    var safeDiagLog = window.__diag.safeDiagLog;
-    var safeStr = window.__diag.safeStr;
-    var wid = window.__diag.wid;
-    var _isStatusOrGroup = window.__diag.isStatusOrGroup;
-    var _isThumbnailType = window.__diag.isThumbnailType;
-    var _shouldSkipDiag = window.__diag.shouldSkipMsg;
-    var _shouldSkipReceipt = window.__diag.shouldSkipReceipt;
-
     window.injectToFunction = (target, callback) => {
         var hookId = target.module + '.' + target.function;
         try {
@@ -281,13 +70,7 @@ exports.ExposeStore = () => {
         }
     };
 
-    window.injectToFunction({ module: 'WAWebBackendJobsCommon', function: 'mediaTypeFromProtobuf' }, function(func, ...args) { const proto = args[0]; return proto.locationMessage ? null : func.apply(this, args); });
-
-    window.injectToFunction({ module: 'WAWebE2EProtoUtils', function: 'typeAttributeFromProtobuf' }, function(func, ...args) { const proto = args[0]; return proto.locationMessage || proto.groupInviteMessage ? 'text' : func.apply(this, args); });
-
-    // wid, safeStr, _isStatusOrGroup, _isThumbnailType — aliased from window.__diag above
-
-    // _shouldSkipDiag aliased from window.__diag.shouldSkipMsg above
+    // --- Retry receipts ---
 
     window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, function(func, ...args) {
         var params = args[0] || {};
@@ -301,6 +84,8 @@ exports.ExposeStore = () => {
         });
         return func.apply(this, args);
     });
+
+    // --- Decrypt receipt decision ---
 
     window.injectToFunction({ module: 'WAWebHandleMsgSendReceipt', function: 'sendReceipt' }, function(func, ...args) {
         var receipt = args[0] || {};
@@ -333,6 +118,8 @@ exports.ExposeStore = () => {
         safeDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', logData);
         return func.apply(this, args);
     });
+
+    // --- Identity change ---
 
     window.injectToFunction({ module: 'WAWebHandleIdentityChange', function: 'handleE2eIdentityChange' }, function(func, ...args) {
         var node = args[0] || {};
@@ -372,6 +159,8 @@ exports.ExposeStore = () => {
         }
         return func.apply(this, args);
     });
+
+    // --- Encrypted message handling ---
 
     window.injectToFunction({ module: 'WAWebHandleEncMsg', function: 'handleEncMsg' }, function(func, ...args) {
         var stanza = args[0];
@@ -437,6 +226,8 @@ exports.ExposeStore = () => {
         return result;
     });
 
+    // --- Peer message handling ---
+
     window.injectToFunction({ module: 'WAWebHandlePeerMsg', function: 'handlePeerMsg' }, function(func, ...args) {
         var peerMsg = args[0];
         var msgType = 'unknown';
@@ -474,7 +265,7 @@ exports.ExposeStore = () => {
                 }
             }
         } catch(e) { details.parseError = String(e); }
-        // Peer messages are self-to-self protocol messages (PDO, history sync) — skip to reduce noise (fromMe equivalent)
+        // Peer messages are self-to-self protocol messages (PDO, history sync)
         // Only log errors for debugging protocol failures
         var result = func.apply(this, args);
         if (result && typeof result.then === 'function') {
@@ -488,6 +279,8 @@ exports.ExposeStore = () => {
         }
         return result;
     });
+
+    // --- PDO requests ---
 
     try {
         window.injectToFunction({ module: 'WAWebSendNonMessageDataRequest', function: 'sendPeerDataOperationRequest' }, function(func, ...args) {
@@ -513,7 +306,9 @@ exports.ExposeStore = () => {
         });
     } catch(e) {}
 
+    // --- Signal crypto ---
     // NOTE: Signal crypto hooks below only have raw crypto args — cannot filter by message type/sender
+
     var signalFns = ['Cipher.decryptSignalProto', 'Cipher.decryptGroupSignalProto', 'Cipher.encryptSignalProto'];
     for (var si = 0; si < signalFns.length; si++) {
         try {
@@ -539,6 +334,8 @@ exports.ExposeStore = () => {
             })(signalFns[si]);
         } catch(e) {}
     }
+
+    // --- E2E session management ---
 
     var sessionFns = ['ensureE2ESessions'];
     for (var ei = 0; ei < sessionFns.length; ei++) {
@@ -571,7 +368,8 @@ exports.ExposeStore = () => {
         } catch(e) {}
     }
 
-    // Hook Signal session lifecycle (create/delete) for debugging session corruption
+    // --- Signal session lifecycle (create/delete) for debugging session corruption ---
+
     var signalSessionFns = ['createSignalSession', 'deleteRemoteSession', 'deleteRemoteInfo'];
     for (var ssi = 0; ssi < signalSessionFns.length; ssi++) {
         try {
@@ -603,6 +401,8 @@ exports.ExposeStore = () => {
         } catch(e) {}
     }
 
+    // --- Sender key messages ---
+
     try {
         window.injectToFunction({ module: 'WAWebSenderKeyMsgHandler', function: 'handleSenderKeyMsg' }, function(func, ...args) {
             var stanza = args[0];
@@ -625,9 +425,10 @@ exports.ExposeStore = () => {
             return result;
         });
     } catch(e) {}
+    // --- Media download (blob) ---
+    // NOTE: Cannot filter by message type — only has download URL/directPath, no message context
 
     try {
-        // NOTE: Cannot filter by message type — only has download URL/directPath, no message context
         window.injectToFunction({ module: 'WAWebMediaDownloadUtils', function: 'downloadMediaBlob' }, function(func, ...args) {
             var startTime = Date.now();
             var url = '';
@@ -654,6 +455,8 @@ exports.ExposeStore = () => {
         });
     } catch(e) {}
 
+    // --- Media download (second variant) ---
+
     try {
         window.injectToFunction({ module: 'WAWebMediaDownloadUtils', function: 'downloadMedia' }, function(func, ...args) {
             var startTime = Date.now();
@@ -677,6 +480,8 @@ exports.ExposeStore = () => {
             return result;
         });
     } catch(e) {}
+
+    // --- PreKey management ---
 
     try {
         window.injectToFunction({ module: 'WAWebPreKeyUtils', function: 'getOrGenPreKeys' }, function(func, ...args) {
@@ -713,6 +518,8 @@ exports.ExposeStore = () => {
         });
     } catch(e) {}
 
+    // --- Session deletion ---
+
     try {
         window.injectToFunction({ module: 'WAWebDeleteSessionJob', function: 'deleteRemoteSession' }, function(func, ...args) {
             var jid = '';
@@ -723,6 +530,8 @@ exports.ExposeStore = () => {
             return func.apply(this, args);
         });
     } catch(e) {}
+
+    // --- Socket close ---
 
     try {
         var connMods = ['WAWebSocketConnectModel', 'WAWebSocketModel'];
@@ -739,6 +548,8 @@ exports.ExposeStore = () => {
             } catch(e) {}
         }
     } catch(e) {}
+
+    // --- History sync processing ---
 
     try {
         window.injectToFunction({ module: 'WAWebHistorySyncJobUtils', function: 'processHistorySyncData' }, function(func, ...args) {
@@ -760,9 +571,9 @@ exports.ExposeStore = () => {
             return func.apply(this, args);
         });
     } catch(e) {}
-
-    // [L13] Hook downloadAndMaybeDecrypt to understand filehash mismatch root cause
+    // --- [L13] downloadAndMaybeDecrypt — filehash mismatch root cause ---
     // NOTE: Limited filtering — only opts.type available (no from/fromMe). Can filter stickers.
+
     try {
         window.injectToFunction({ module: 'WAWebDownloadManager', function: 'downloadManager.downloadAndMaybeDecrypt' }, function(func, ...args) {
             var opts = args[0] || {};
@@ -815,8 +626,8 @@ exports.ExposeStore = () => {
                         for (var k in err) {
                             if (err.hasOwnProperty(k) && !['message', 'stack', 'name'].includes(k)) {
                                 var v = err[k];
-                                allProps[k] = (typeof v === 'object' && v !== null) 
-                                    ? JSON.stringify(v).substring(0, 300) 
+                                allProps[k] = (typeof v === 'object' && v !== null)
+                                    ? JSON.stringify(v).substring(0, 300)
                                     : String(v);
                             }
                         }
@@ -844,8 +655,9 @@ exports.ExposeStore = () => {
         safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'downloadAndMaybeDecrypt', error: String(e) });
     }
 
-    // [L13] Hook WAWebMmsClient.download to wrap the ciphertextValidator and capture actual vs expected hash
+    // --- [L13] WAWebMmsClient.download — ciphertextValidator wrapper for hash mismatch ---
     // NOTE: Limited filtering — only opts.type available. Can filter stickers.
+
     try {
         window.injectToFunction({ module: 'WAWebMmsClient', function: 'download' }, function(func, ...args) {
             var opts = args[0] || {};
@@ -912,9 +724,9 @@ exports.ExposeStore = () => {
     } catch(e) {
         safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'WAWebMmsClient.download', error: String(e) });
     }
-
-    // [L13] Hook WAWebCryptoDecryptMedia to capture decryption details
+    // --- [L13] WAWebCryptoDecryptMedia — decryption details ---
     // NOTE: Cannot filter by message type here — only has crypto params, no message context
+
     try {
         window.injectToFunction({ module: 'WAWebCryptoDecryptMedia', function: 'default' }, function(func, ...args) {
             var opts = args[0] || {};
@@ -951,7 +763,8 @@ exports.ExposeStore = () => {
         safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'WAWebCryptoDecryptMedia', error: String(e) });
     }
 
-    // [L13] Hook WAWebValidateMediaFilehash to capture unencrypted media hash validation
+    // --- [L13] WAWebValidateMediaFilehash — unencrypted media hash validation ---
+
     try {
         window.injectToFunction({ module: 'WAWebValidateMediaFilehash', function: 'validateFileash' }, function(func, ...args) {
             var data = args[0];
@@ -977,7 +790,8 @@ exports.ExposeStore = () => {
         });
     } catch(e) {}
 
-    // [L13] Hook to detect BACKFILL/placeholder messages
+    // --- [L13] Detect BACKFILL/placeholder messages ---
+
     try {
         window.injectToFunction({ module: 'WAWebMsgModel', function: 'default.prototype.isPlaceholder' }, function(func, ...args) {
             var result = func.apply(this, args);
@@ -992,12 +806,11 @@ exports.ExposeStore = () => {
         });
     } catch(e) {}
 
-    // [L13] FILEHASH_CALC hook removed (M1 — too noisy, low diagnostic value)
+    // --- [SILENT_LOSS] Wrap Store.Msg.add to trace ALL add attempts ---
 
-    // [SILENT_LOSS] Wrap Store.Msg.add to trace ALL add attempts
     try {
-        const origMsgAdd = window.Store.Msg.add.bind(window.Store.Msg);
-        window.Store.Msg.add = function(...args) {
+        const origMsgAdd = window.require('WAWebCollections').Msg.add.bind(window.require('WAWebCollections').Msg);
+        window.require('WAWebCollections').Msg.add = function(...args) {
             try {
                 const models = Array.isArray(args[0]) ? args[0] : [args[0]];
                 const opts = args[1] || {};
@@ -1006,7 +819,7 @@ exports.ExposeStore = () => {
                     const id = m.id?._serialized || m.id?.id || '';
                     const from = m.from?._serialized || m.from?.user || '';
                     if (_shouldSkipDiag(m)) continue;
-                    const alreadyExists = window.Store.Msg.get(id);
+                    const alreadyExists = window.require('WAWebCollections').Msg.get(id);
                     // Skip no-op re-adds (existing msg, not new) — these fire dozens of times/sec during sync
                     if (alreadyExists && !m.isNewMsg) continue;
                     safeDiagLog('debug', 'MSG_ADD_ATTEMPT', {
@@ -1027,11 +840,12 @@ exports.ExposeStore = () => {
         safeDiagLog('warn', 'HOOK_FAIL', { hook: 'Store.Msg.add-wrapper', reason: String(e) });
     }
 
-    // [SILENT_LOSS] Hook Store.Msg.addAndGet if it exists
+    // --- [SILENT_LOSS] Hook Store.Msg.addAndGet if it exists ---
+
     try {
-        if (typeof window.Store.Msg.addAndGet === 'function') {
-            var origAddAndGet = window.Store.Msg.addAndGet.bind(window.Store.Msg);
-            window.Store.Msg.addAndGet = function(...args) {
+        if (typeof window.require('WAWebCollections').Msg.addAndGet === 'function') {
+            var origAddAndGet = window.require('WAWebCollections').Msg.addAndGet.bind(window.require('WAWebCollections').Msg);
+            window.require('WAWebCollections').Msg.addAndGet = function(...args) {
                 try {
                     var m = args[0];
                     var id = m?.id?._serialized || m?.id?.id || '';
@@ -1048,7 +862,8 @@ exports.ExposeStore = () => {
         }
     } catch(e) {}
 
-    // [SILENT_LOSS] Try to hook modules between decryption and Store.Msg.add
+    // --- [SILENT_LOSS] Probe msg processing modules ---
+
     var msgProcessModules = [
         'WAWebHandleReceivedMsg',
         'WAWebMsgHandler',
@@ -1073,6 +888,8 @@ exports.ExposeStore = () => {
             }
         } catch(e) {}
     }
+
+    // --- Message revoke ---
 
     try {
         window.injectToFunction({ module: 'WAWebMsgDeleteCollection', function: 'sendRevoke' }, function(func, ...args) {
