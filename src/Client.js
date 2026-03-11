@@ -118,26 +118,14 @@ class Client extends EventEmitter {
                 await this.pupPage.evaluate(ExposeLegacyAuthStore, moduleRaid.toString());
             }
 
-            const needAuthentication = await Promise.race([
-                this.pupPage.evaluate(async () => {
-                    let state = window.AuthStore.AppState.state;
-
-                    if (state === 'OPENING' || state === 'UNLAUNCHED' || state === 'PAIRING') {
-                        await new Promise(resolve => {
-                            function waitTillInit(_AppState, state) {
-                                if (state !== 'OPENING' && state !== 'UNLAUNCHED' && state !== 'PAIRING') {
-                                    window.AuthStore.AppState.off('change:state', waitTillInit);
-                                    resolve();
-                                }
-                            }
-                            window.AuthStore.AppState.on('change:state', waitTillInit);
-                        });
-                    }
-                    state = window.AuthStore.AppState.state;
-                    return { need: state == 'UNPAIRED' || state == 'UNPAIRED_IDLE', state };
-                }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('needAuthentication timeout')), authTimeout))
-            ]);
+            const needAuthHandle = await this.pupPage.waitForFunction(() => {
+                const state = window.AuthStore?.AppState?.state;
+                if (!state || state === 'OPENING' || state === 'UNLAUNCHED' || state === 'PAIRING') {
+                    return false;
+                }
+                return { need: state === 'UNPAIRED' || state === 'UNPAIRED_IDLE', state };
+            }, { timeout: authTimeout });
+            const needAuthentication = await needAuthHandle.jsonValue();
 
             if (needAuthentication.need) {
                 const { failed, failureEventPayload, restart } = await this.authStrategy.onAuthenticationNeeded();
