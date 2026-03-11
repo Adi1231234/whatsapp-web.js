@@ -283,33 +283,26 @@ class Client extends EventEmitter {
                 await this.pupPage.waitForNavigation({waitUntil: 'load', timeout: 5000}).catch((_) => _);
             });
             await this.pupPage.evaluate(() => {
+                const listeners = [
+                    [window.AuthStore.AppState, 'change:state', (_AppState, state) => { window.onAuthAppStateChangedEvent(state); }],
+                    [window.AuthStore.AppState, 'change:hasSynced', () => { window.onAppStateHasSyncedEvent(); }],
+                    [window.AuthStore.Cmd, 'offline_progress_update_from_bridge', () => { window.onOfflineProgressUpdateEvent(window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()); }],
+                    [window.AuthStore.Cmd, 'logout', async () => { await window.onLogoutEvent(); }],
+                    [window.AuthStore.Cmd, 'logout_from_bridge', async () => { await window.onLogoutEvent(); }],
+                ];
+
                 // Clean up old listeners to prevent accumulation on re-inject
                 if (window._wwjsListeners) {
-                    try {
-                        window.AuthStore.AppState.off('change:state', window._wwjsListeners.onStateChange);
-                        window.AuthStore.AppState.off('change:hasSynced', window._wwjsListeners.onHasSynced);
-                        window.AuthStore.Cmd.off('offline_progress_update_from_bridge', window._wwjsListeners.onOfflineProgress);
-                        window.AuthStore.Cmd.off('logout', window._wwjsListeners.onLogout);
-                        window.AuthStore.Cmd.off('logout_from_bridge', window._wwjsListeners.onLogoutFromBridge);
-                    } catch (e) { /* listeners may already be gone */ }
+                    for (const [target, event, handler] of window._wwjsListeners) {
+                        try { target.off(event, handler); } catch (e) { /* listeners may already be gone */ }
+                    }
                 }
 
-                const onStateChange = (_AppState, state) => { window.onAuthAppStateChangedEvent(state); };
-                const onHasSynced = () => { window.onAppStateHasSyncedEvent(); };
-                const onOfflineProgress = () => {
-                    window.onOfflineProgressUpdateEvent(window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress());
-                };
-                const onLogout = async () => { await window.onLogoutEvent(); };
-                const onLogoutFromBridge = async () => { await window.onLogoutEvent(); };
+                for (const [target, event, handler] of listeners) {
+                    target.on(event, handler);
+                }
 
-                // Store references for cleanup on next inject
-                window._wwjsListeners = { onStateChange, onHasSynced, onOfflineProgress, onLogout, onLogoutFromBridge };
-
-                window.AuthStore.AppState.on('change:state', onStateChange);
-                window.AuthStore.AppState.on('change:hasSynced', onHasSynced);
-                window.AuthStore.Cmd.on('offline_progress_update_from_bridge', onOfflineProgress);
-                window.AuthStore.Cmd.on('logout', onLogout);
-                window.AuthStore.Cmd.on('logout_from_bridge', onLogoutFromBridge);
+                window._wwjsListeners = listeners;
 
                 // Atomic hasSynced check in the same synchronous block as listener registration.
                 // If hasSynced is already true, Backbone won't fire change:hasSynced (no transition).
