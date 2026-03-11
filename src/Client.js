@@ -967,6 +967,22 @@ class Client extends EventEmitter {
 
         await exposeFunctionIfAbsent(
             this.pupPage,
+            'onCiphertextFailedEvent',
+            (msg) => {
+                /**
+                 * Emitted when a ciphertext message failed to decrypt after recovery attempt
+                 * @event Client#message_ciphertext_failed
+                 * @param {Message} message
+                 */
+                this.emit(
+                    Events.MESSAGE_CIPHERTEXT_FAILED,
+                    new Message(this, msg),
+                );
+            },
+        );
+
+        await exposeFunctionIfAbsent(
+            this.pupPage,
             'onPollVoteEvent',
             (votes) => {
                 for (const vote of votes) {
@@ -1058,6 +1074,7 @@ class Client extends EventEmitter {
                 if (msg.isNewMsg) {
                     if (msg.type === 'ciphertext') {
                         // defer message event until ciphertext is resolved (type changed)
+                        let resolved = false;
                         const resendTimer = setTimeout(() => {
                             try {
                                 const { sendPeerDataOperationRequest } =
@@ -1071,8 +1088,17 @@ class Client extends EventEmitter {
                                 // module may not be available
                             }
                         }, 5000);
+                        const failTimer = setTimeout(() => {
+                            if (!resolved) {
+                                window.onCiphertextFailedEvent(
+                                    window.WWebJS.getMessageModel(msg),
+                                );
+                            }
+                        }, 15000);
                         msg.once('change:type', (_msg) => {
+                            resolved = true;
                             clearTimeout(resendTimer);
+                            clearTimeout(failTimer);
                             window.onAddMessageEvent(
                                 window.WWebJS.getMessageModel(_msg),
                             );
