@@ -392,8 +392,8 @@ class Client extends EventEmitter {
             referer: 'https://whatsapp.com/'
         });
 
-        // Register framenavigated BEFORE inject() so the recovery mechanism
-        // is in place from the start (if inject fails, framenavigated can retry).
+        await this.inject();
+
         this.pupPage.on('framenavigated', async (frame) => {
             const frameUrl = frame.url();
             const isMainFrame = frame === this.pupPage.mainFrame();
@@ -432,8 +432,6 @@ class Client extends EventEmitter {
                 // inject() may fail if page is still loading after navigation
             }
         });
-
-        await this.inject();
 
         // [diag:promise-collected] Monitor execution context lifecycle via CDP
         // This helps diagnose "Promise was collected" errors by detecting context destruction
