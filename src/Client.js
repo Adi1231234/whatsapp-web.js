@@ -97,15 +97,8 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
-        if (this._injectInProgress) {
-            console.warn('[wwjs-diag] inject:SKIPPED (already in progress)');
-            return;
-        }
+        if (this._injectInProgress) return;
         this._injectInProgress = true;
-        const _injectStart = Date.now();
-        let _injectUrl = '';
-        try { _injectUrl = this.pupPage?.url?.() || ''; } catch (_) { /* page may be closed */ }
-        console.log('[wwjs-diag] inject:start', JSON.stringify({ ts: _injectStart, url: _injectUrl.slice(0, 120) }));
 
         try {
 
@@ -141,17 +134,10 @@ class Client extends EventEmitter {
                         });
                     }
                     state = window.AuthStore.AppState.state;
-                    return { need: state == 'UNPAIRED' || state == 'UNPAIRED_IDLE', state, hasSynced: window.AuthStore.AppState.hasSynced };
+                    return { need: state == 'UNPAIRED' || state == 'UNPAIRED_IDLE', state };
                 }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('needAuthentication timeout')), authTimeout))
             ]);
-
-            console.log('[wwjs-diag] inject:authCheck', JSON.stringify({
-                ts: Date.now(),
-                needAuthentication: needAuthentication.need,
-                appState: needAuthentication.state,
-                hasSynced: needAuthentication.hasSynced
-            }));
 
             if (needAuthentication.need) {
                 const { failed, failureEventPayload, restart } = await this.authStrategy.onAuthenticationNeeded();
@@ -235,7 +221,6 @@ class Client extends EventEmitter {
             }
 
             await exposeFunctionIfAbsent(this.pupPage, 'onAuthAppStateChangedEvent', async (state) => {
-                console.log('[wwjs-diag] onAuthAppStateChangedEvent', JSON.stringify({ state, ts: Date.now() }));
                 if (state == 'UNPAIRED_IDLE' && !pairWithPhoneNumber.phoneNumber) {
                 // refresh qr code
                     window.Store.Cmd.refreshQR();
@@ -243,74 +228,60 @@ class Client extends EventEmitter {
             });
 
             await exposeFunctionIfAbsent(this.pupPage, 'onAppStateHasSyncedEvent', async () => {
-                console.log('[wwjs-diag] onAppStateHasSyncedEvent CALLED', JSON.stringify({ ts: Date.now() }));
-                try {
-                    const authEventPayload = await this.authStrategy.getAuthEventPayload();
-                    /**
-                     * Emitted when authentication is successful
-                     * @event Client#authenticated
-                     */
-                    this.emit(Events.AUTHENTICATED, authEventPayload);
-                    console.log('[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted');
+                const authEventPayload = await this.authStrategy.getAuthEventPayload();
+                /**
+                 * Emitted when authentication is successful
+                 * @event Client#authenticated
+                 */
+                this.emit(Events.AUTHENTICATED, authEventPayload);
 
-                    const injected = await this.pupPage.evaluate(async () => {
-                        return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
-                    });
-                    console.log('[wwjs-diag] onAppStateHasSyncedEvent storeCheck', JSON.stringify({ injected, ts: Date.now() }));
+                const injected = await this.pupPage.evaluate(async () => {
+                    return typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
+                });
 
-                    if (!injected) {
-                        if (this.options.webVersionCache.type === 'local' && this.currentIndexHtml) {
-                            const { type: webCacheType, ...webCacheOptions } = this.options.webVersionCache;
-                            const webCache = WebCacheFactory.createWebCache(webCacheType, webCacheOptions);
+                if (!injected) {
+                    if (this.options.webVersionCache.type === 'local' && this.currentIndexHtml) {
+                        const { type: webCacheType, ...webCacheOptions } = this.options.webVersionCache;
+                        const webCache = WebCacheFactory.createWebCache(webCacheType, webCacheOptions);
 
-                            await webCache.persist(this.currentIndexHtml, version);
-                        }
-
-                        if (isCometOrAbove) {
-                            await this.pupPage.evaluate(InjectDiagCommon);
-                            await this.pupPage.evaluate(ExposeStore);
-                        } else {
-                        // make sure all modules are ready before injection
-                        // 2 second delay after authentication makes sense and does not need to be made dyanmic or removed
-                            await new Promise(r => setTimeout(r, 2000));
-                            await this.pupPage.evaluate(ExposeLegacyStore);
-                        }
-                        console.log('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
-                        await this.pupPage.waitForFunction(
-                            'window.Store != undefined',
-                            { timeout: 30000 }
-                        ).catch(() => { throw 'ready timeout'; });
-                        console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready');
-
-                        /**
-                         * Current connection information
-                         * @type {ClientInfo}
-                         */
-                        this.info = new ClientInfo(this, await this.pupPage.evaluate(() => {
-                            return { ...window.Store.Conn.serialize(), wid: window.Store.User.getMaybeMePnUser() || window.Store.User.getMaybeMeLidUser() };
-                        }));
-
-                        this.interface = new InterfaceController(this);
-
-                        //Load util functions (serializers, helper functions)
-                        await this.pupPage.evaluate(LoadUtils);
-
-                        await this.attachEventListeners();
+                        await webCache.persist(this.currentIndexHtml, version);
                     }
+
+                    if (isCometOrAbove) {
+                        await this.pupPage.evaluate(InjectDiagCommon);
+                        await this.pupPage.evaluate(ExposeStore);
+                    } else {
+                    // make sure all modules are ready before injection
+                    // 2 second delay after authentication makes sense and does not need to be made dyanmic or removed
+                        await new Promise(r => setTimeout(r, 2000));
+                        await this.pupPage.evaluate(ExposeLegacyStore);
+                    }
+                    await this.pupPage.waitForFunction(
+                        'window.Store != undefined',
+                        { timeout: 30000 }
+                    ).catch(() => { throw 'ready timeout'; });
+
                     /**
-                     * Emitted when the client has initialized and is ready to receive messages.
-                     * @event Client#ready
+                     * Current connection information
+                     * @type {ClientInfo}
                      */
-                    this.emit(Events.READY);
-                    console.log('[wwjs-diag] onAppStateHasSyncedEvent READY emitted');
-                    this.authStrategy.afterAuthReady();
-                } catch (err) {
-                    console.warn('[wwjs-diag] onAppStateHasSyncedEvent ERROR', JSON.stringify({
-                        error: String(err?.message || err),
-                        ts: Date.now()
+                    this.info = new ClientInfo(this, await this.pupPage.evaluate(() => {
+                        return { ...window.Store.Conn.serialize(), wid: window.Store.User.getMaybeMePnUser() || window.Store.User.getMaybeMeLidUser() };
                     }));
-                    throw err;
+
+                    this.interface = new InterfaceController(this);
+
+                    //Load util functions (serializers, helper functions)
+                    await this.pupPage.evaluate(LoadUtils);
+
+                    await this.attachEventListeners();
                 }
+                /**
+                 * Emitted when the client has initialized and is ready to receive messages.
+                 * @event Client#ready
+                 */
+                this.emit(Events.READY);
+                this.authStrategy.afterAuthReady();
             });
             let lastPercent = null;
             await exposeFunctionIfAbsent(this.pupPage, 'onOfflineProgressUpdateEvent', async (percent) => {
@@ -320,12 +291,11 @@ class Client extends EventEmitter {
                 }
             });
             await exposeFunctionIfAbsent(this.pupPage, 'onLogoutEvent', async () => {
-                console.warn('[wwjs-diag] onLogoutEvent CALLED', JSON.stringify({ ts: Date.now() }));
                 this.lastLoggedOut = true;
                 await this.pupPage.waitForNavigation({waitUntil: 'load', timeout: 5000}).catch((_) => _);
             });
-            const syncCheck = await this.pupPage.evaluate(() => {
-            // Clean up old listeners to prevent accumulation on SPA navigations
+            await this.pupPage.evaluate(() => {
+                // Clean up old listeners to prevent accumulation on re-inject
                 if (window._wwjsListeners) {
                     try {
                         window.AuthStore.AppState.off('change:state', window._wwjsListeners.onStateChange);
@@ -333,48 +303,16 @@ class Client extends EventEmitter {
                         window.AuthStore.Cmd.off('offline_progress_update_from_bridge', window._wwjsListeners.onOfflineProgress);
                         window.AuthStore.Cmd.off('logout', window._wwjsListeners.onLogout);
                         window.AuthStore.Cmd.off('logout_from_bridge', window._wwjsListeners.onLogoutFromBridge);
-                        console.error('[wwjs-diag] listeners:cleaned ' + JSON.stringify({ ts: Date.now() }));
-                    } catch (e) {
-                        console.error('[wwjs-diag] listeners:cleanup-failed ' + JSON.stringify({ error: String(e), ts: Date.now() }));
-                    }
+                    } catch (e) { /* listeners may already be gone */ }
                 }
 
-                // [diag] Log state BEFORE registering listeners
-                const _diagState = {
-                    hasSynced: window.AuthStore.AppState.hasSynced,
-                    state: window.AuthStore.AppState.state,
-                    isReRegister: !!window._wwjsListeners,
-                    ts: Date.now()
-                };
-                console.error('[wwjs-diag] listeners:registering ' + JSON.stringify(_diagState));
-
-                // Store AppState reference to detect replacement
-                window._wwjsDiagAppState = window.AuthStore.AppState;
-
-                const onStateChange = (_AppState, state) => {
-                    console.error('[wwjs-diag] change:state FIRED ' + JSON.stringify({ state, ts: Date.now() }));
-                    window.onAuthAppStateChangedEvent(state);
-                };
-                const onHasSynced = () => {
-                    console.error('[wwjs-diag] change:hasSynced FIRED ' + JSON.stringify({
-                        hasSynced: window.AuthStore.AppState.hasSynced,
-                        state: window.AuthStore.AppState.state,
-                        sameAppState: window.AuthStore.AppState === window._wwjsDiagAppState,
-                        ts: Date.now()
-                    }));
-                    window.onAppStateHasSyncedEvent();
-                };
+                const onStateChange = (_AppState, state) => { window.onAuthAppStateChangedEvent(state); };
+                const onHasSynced = () => { window.onAppStateHasSyncedEvent(); };
                 const onOfflineProgress = () => {
                     window.onOfflineProgressUpdateEvent(window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress());
                 };
-                const onLogout = async () => {
-                    console.error('[wwjs-diag] Cmd:logout FIRED ' + JSON.stringify({ ts: Date.now() }));
-                    await window.onLogoutEvent();
-                };
-                const onLogoutFromBridge = async () => {
-                    console.error('[wwjs-diag] Cmd:logout_from_bridge FIRED ' + JSON.stringify({ ts: Date.now() }));
-                    await window.onLogoutEvent();
-                };
+                const onLogout = async () => { await window.onLogoutEvent(); };
+                const onLogoutFromBridge = async () => { await window.onLogoutEvent(); };
 
                 // Store references for cleanup on next inject
                 window._wwjsListeners = { onStateChange, onHasSynced, onOfflineProgress, onLogout, onLogoutFromBridge };
@@ -385,32 +323,14 @@ class Client extends EventEmitter {
                 window.AuthStore.Cmd.on('logout', onLogout);
                 window.AuthStore.Cmd.on('logout_from_bridge', onLogoutFromBridge);
 
-                console.error('[wwjs-diag] listeners:registered ' + JSON.stringify({ ts: Date.now() }));
-
-                // Atomic hasSynced check — same synchronous block as listener registration.
+                // Atomic hasSynced check in the same synchronous block as listener registration.
                 // If hasSynced is already true, Backbone won't fire change:hasSynced (no transition).
                 // If hasSynced is false, the listener above will catch the future transition.
-                // Being in the same evaluate eliminates any race between the two paths.
-                const _syncCheck = {
-                    hasSynced: window.AuthStore.AppState.hasSynced,
-                    state: window.AuthStore.AppState.state,
-                    storeInjected: typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined',
-                    sameAppState: window.AuthStore.AppState === window._wwjsDiagAppState,
-                    fnExists: typeof window.onAppStateHasSyncedEvent === 'function'
-                };
-                if (_syncCheck.hasSynced === true && !_syncCheck.storeInjected) {
-                    console.error('[wwjs-diag] hasSyncedFix TRIGGERING (atomic) ' + JSON.stringify(_syncCheck));
+                const storeInjected = typeof window.Store !== 'undefined' && typeof window.WWebJS !== 'undefined';
+                if (window.AuthStore.AppState.hasSynced === true && !storeInjected) {
                     window.onAppStateHasSyncedEvent();
-                } else if (_syncCheck.hasSynced === true && _syncCheck.storeInjected) {
-                    console.error('[wwjs-diag] hasSyncedFix SKIPPED (Store already injected) ' + JSON.stringify(_syncCheck));
                 }
-                return _syncCheck;
             });
-            if (syncCheck) {
-                console.log('[wwjs-diag] inject:hasSyncedCheck', JSON.stringify({ ts: Date.now(), ...syncCheck }));
-            }
-
-            console.log('[wwjs-diag] inject:end', JSON.stringify({ ts: Date.now(), durationMs: Date.now() - _injectStart }));
 
         } finally {
             this._injectInProgress = false;
@@ -498,14 +418,6 @@ class Client extends EventEmitter {
             const isMainFrame = frame === this.pupPage.mainFrame();
             const isLogout = frameUrl.includes('post_logout=1') || this.lastLoggedOut;
 
-            console.log('[wwjs-diag] framenavigated', JSON.stringify({
-                ts: Date.now(),
-                url: frameUrl.slice(0, 150),
-                isMainFrame,
-                isLogout,
-                lastLoggedOut: this.lastLoggedOut
-            }));
-
             if (!isMainFrame) return;
 
             if(isLogout) {
@@ -530,78 +442,18 @@ class Client extends EventEmitter {
             // Only re-inject when the context is actually gone (full navigation)
             // or after logout (even if Store lingers).
             if (!isLogout && storeAvailable) {
-                console.log('[wwjs-diag] framenavigated:inject SKIPPED (client already connected)', JSON.stringify({
-                    ts: Date.now(), url: frameUrl.slice(0, 150), storeAvailable
-                }));
                 return;
             }
 
-            console.log('[wwjs-diag] framenavigated:inject START', JSON.stringify({
-                ts: Date.now(),
-                url: frameUrl.slice(0, 150),
-                storeAvailable
-            }));
-
             try {
                 await this.inject();
-                console.log('[wwjs-diag] framenavigated:inject END (success)');
             } catch (err) {
-                console.warn('[wwjs-diag] framenavigated:inject END (error)', String(err?.message || err));
+                // inject() may fail if page is still loading after navigation
             }
         });
 
-        console.log('[wwjs-diag] initialize:inject START (first call)');
         await this.inject();
-        console.log('[wwjs-diag] initialize:inject END (first call)');
 
-        // [diag:promise-collected] Monitor execution context lifecycle via CDP
-        // This helps diagnose "Promise was collected" errors by detecting context destruction
-        try {
-            const cdpSession = await this.pupPage.target().createCDPSession();
-            await cdpSession.send('Runtime.enable');
-            cdpSession.on('Runtime.executionContextDestroyed', (event) => {
-                this.emit('diag', 'warn', 'CDP_CONTEXT_DESTROYED', JSON.stringify({
-                    executionContextId: event.executionContextId,
-                    ts: Date.now()
-                }));
-            });
-            cdpSession.on('Runtime.executionContextsCleared', () => {
-                this.emit('diag', 'warn', 'CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
-            });
-            this._diagCdpSession = cdpSession;
-        } catch (e) {
-            this.emit('diag', 'error', 'CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
-        }
-
-        // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
-        this._diagEvalInflight = 0;
-        const origEvaluate = this.pupPage.evaluate.bind(this.pupPage);
-        const self = this;
-        this.pupPage.evaluate = async function (...args) {
-            self._diagEvalInflight++;
-            const inflight = self._diagEvalInflight;
-            if (inflight > 20) {
-                self.emit('diag', 'warn', 'HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
-            }
-            try {
-                return await origEvaluate(...args);
-            } catch (err) {
-                const isPromiseCollected = err.message?.includes('Promise was collected');
-                const isContextDestroyed = err.message?.includes('Execution context was destroyed');
-                if (isPromiseCollected || isContextDestroyed) {
-                    self.emit('diag', 'error', 'EVALUATE_CDP_ERROR', JSON.stringify({
-                        inflight: self._diagEvalInflight,
-                        error: err.message,
-                        isPromiseCollected,
-                        isContextDestroyed,
-                        ts: Date.now()
-                    }));
-                }
-                throw err;
-            } finally {
-                self._diagEvalInflight--;
-            }
-        };
     }
 
     /**
@@ -1601,26 +1453,9 @@ class Client extends EventEmitter {
      * @returns {Promise<Contact>}
      */
     async getContactById(contactId) {
-        const start = Date.now();
-        let contact;
-        try {
-            contact = await this.pupPage.evaluate(contactId => {
-                return window.WWebJS.getContact(contactId);
-            }, contactId);
-        } catch (err) {
-            // [diag:promise-collected] Log failed getContactById with timing and context
-            const took = Date.now() - start;
-            this.emit('diag', 'error', 'getContactById:failed', JSON.stringify({
-                contactId: contactId?.substring?.(0, 30),
-                took,
-                inflight: this._diagEvalInflight || -1,
-                isPromiseCollected: err.message?.includes('Promise was collected'),
-                isContextDestroyed: err.message?.includes('Execution context was destroyed'),
-                isLid: contactId?.endsWith?.('@lid'),
-                error: String(err.message || err).substring(0, 200)
-            }));
-            throw err;
-        }
+        let contact = await this.pupPage.evaluate(contactId => {
+            return window.WWebJS.getContact(contactId);
+        }, contactId);
 
         return ContactFactory.create(this, contact);
     }
