@@ -984,6 +984,15 @@ class Client extends EventEmitter {
             const { Msg, Chat, WAWebCallCollection } =
                 window.require('WAWebCollections');
             const AppState = window.require('WAWebSocketModel').Socket;
+
+            // Enable placeholder message resend (recovery for ciphertext messages)
+            try {
+                const gatingUtils = window.require('WAWebSyncGatingUtils');
+                gatingUtils.isPlaceholderMessageResendEnabled = () => true;
+            } catch (_) {
+                // Module may not be available in all versions
+            }
+
             Msg.on('change', (msg) => {
                 window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg));
             });
@@ -1049,11 +1058,25 @@ class Client extends EventEmitter {
                 if (msg.isNewMsg) {
                     if (msg.type === 'ciphertext') {
                         // defer message event until ciphertext is resolved (type changed)
-                        msg.once('change:type', (_msg) =>
+                        const resendTimer = setTimeout(() => {
+                            try {
+                                const { sendPeerDataOperationRequest } =
+                                    window.require(
+                                        'WAWebSendNonMessageDataRequest',
+                                    );
+                                sendPeerDataOperationRequest(4, {
+                                    msgKeys: [msg.id],
+                                });
+                            } catch (_) {
+                                // module may not be available
+                            }
+                        }, 5000);
+                        msg.once('change:type', (_msg) => {
+                            clearTimeout(resendTimer);
                             window.onAddMessageEvent(
                                 window.WWebJS.getMessageModel(_msg),
-                            ),
-                        );
+                            );
+                        });
                         window.onAddMessageCiphertextEvent(
                             window.WWebJS.getMessageModel(msg),
                         );
