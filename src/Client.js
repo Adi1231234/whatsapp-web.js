@@ -1075,7 +1075,7 @@ class Client extends EventEmitter {
                     if (msg.type === 'ciphertext') {
                         // defer message event until ciphertext is resolved (type changed)
                         let resolved = false;
-                        const resendTimer = setTimeout(() => {
+                        const recovery = setTimeout(() => {
                             try {
                                 const { sendPeerDataOperationRequest } =
                                     window.require(
@@ -1087,18 +1087,17 @@ class Client extends EventEmitter {
                             } catch (_) {
                                 // module may not be available
                             }
+                            setTimeout(() => {
+                                if (!resolved) {
+                                    window.onCiphertextFailedEvent(
+                                        window.WWebJS.getMessageModel(msg),
+                                    );
+                                }
+                            }, 10000);
                         }, 5000);
-                        const failTimer = setTimeout(() => {
-                            if (!resolved) {
-                                window.onCiphertextFailedEvent(
-                                    window.WWebJS.getMessageModel(msg),
-                                );
-                            }
-                        }, 15000);
                         msg.once('change:type', (_msg) => {
                             resolved = true;
-                            clearTimeout(resendTimer);
-                            clearTimeout(failTimer);
+                            clearTimeout(recovery);
                             window.onAddMessageEvent(
                                 window.WWebJS.getMessageModel(_msg),
                             );
