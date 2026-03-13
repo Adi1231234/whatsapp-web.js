@@ -1079,6 +1079,7 @@ class Client extends EventEmitter {
                     if(msg.type === 'ciphertext') {
                         // Defer message event until ciphertext is resolved (type changed)
                         msg.once('change:type', (_msg) => {
+                            if (_msg.type === 'revoked') return;
                             window.onAddMessageEvent(window.WWebJS.getMessageModel(_msg));
                         });
                         window.onAddMessageCiphertextEvent(window.WWebJS.getMessageModel(msg));
@@ -1097,7 +1098,7 @@ class Client extends EventEmitter {
                     const id = msg.id?._serialized;
                     if (!id || __handledByAdd.has(id)) return;
                     if (!msg.isNewMsg) return;
-                    if (msg.type === 'ciphertext') return; // still encrypted
+                    if (msg.type === 'ciphertext' || msg.type === 'revoked') return;
 
                     // This message bypassed the 'add' event — emit it now
                     __handledByAdd.add(id);
