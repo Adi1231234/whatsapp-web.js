@@ -1098,7 +1098,7 @@ class Client extends EventEmitter {
                     const id = msg.id?._serialized;
                     if (!id || __handledByAdd.has(id)) return;
                     if (!msg.isNewMsg) return;
-                    if (msg.type === 'ciphertext' || msg.type === 'revoked') return;
+                    if (msg.type === 'ciphertext') return; // still encrypted
 
                     // This message bypassed the 'add' event — emit it now
                     __handledByAdd.add(id);
