@@ -1079,6 +1079,13 @@ class Client extends EventEmitter {
                     if(msg.type === 'ciphertext') {
                         // Defer message event until ciphertext is resolved (type changed)
                         msg.once('change:type', (_msg) => {
+                            window.onDiagLog?.('debug', 'CIPHERTEXT_DEFERRED_RESOLVED', JSON.stringify({
+                                traceId: _msg.id?._serialized || '',
+                                resolvedType: _msg.type,
+                                from: _msg.from?._serialized || '',
+                                hasDirectPath: !!_msg.directPath,
+                                hasMediaKey: !!_msg.mediaKey,
+                            }));
                             window.onAddMessageEvent(window.WWebJS.getMessageModel(_msg));
                         });
                         window.onAddMessageCiphertextEvent(window.WWebJS.getMessageModel(msg));
