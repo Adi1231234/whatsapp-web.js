@@ -1036,6 +1036,7 @@ class Client extends EventEmitter {
                 if (!window.__diag.isStatusOrGroup(msg?.from) && !window.__diag.isStatusOrGroup(msg?.to) && !window.__diag.isStatusOrGroup(msg?.id?.remote) && !msg?.isStatusV3) {
                     window.__diag.safeDiagLog('debug', 'change:type', {
                         ...window.__wwjsDiag.diagTrace(msg),
+                        prevType: msg?.previousAttributes?.type,
                         newType: msg?.type,
                         argCount: args.length,
                         args: args.map(a => window.__diag.safeStr(a))
