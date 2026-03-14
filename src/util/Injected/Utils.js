@@ -745,7 +745,7 @@ exports.LoadUtils = () => {
             findTook = Date.now() - start;
             try {
                 const bizStart = Date.now();
-                const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(wid);
+                const bizProfile = await window.Store.BusinessProfile.find(wid);
                 bizTook = Date.now() - bizStart;
                 bizProfile.profileOptions && (contact.businessProfile = bizProfile);
             } catch (_) {}
@@ -761,7 +761,7 @@ exports.LoadUtils = () => {
                 contactId: contactId.substring(0, 20), isLid, findTook, bizTook,
                 totalTook: Date.now() - start,
                 error: String(e?.message || e).substring(0, 200),
-                stage: findTook < 0 ? 'find' : bizTook < 0 ? 'fetchBizProfile' : 'model'
+                stage: findTook < 0 ? 'find' : bizTook < 0 ? 'bizProfile' : 'model'
             }));
             throw e;
         }
