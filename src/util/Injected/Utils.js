@@ -803,18 +803,28 @@ exports.LoadUtils = () => {
         try {
             msg = message.serialize();
         } catch (e) {
-            if (window.onDiagLog) window.onDiagLog('error', 'getMessageModel serialize FAILED', JSON.stringify({
-                id: message.id?._serialized,
-                type: message.type,
-                error: e?.message || String(e)
-            }));
+            if (window.onDiagLog)
+                window.onDiagLog(
+                    'error',
+                    'getMessageModel serialize FAILED',
+                    JSON.stringify({
+                        id: message.id?._serialized,
+                        type: message.type,
+                        error: e?.message || String(e),
+                    }),
+                );
             throw e;
         }
         if (!msg) {
-            if (window.onDiagLog) window.onDiagLog('error', 'getMessageModel serialize returned falsy', JSON.stringify({
-                id: message.id?._serialized,
-                type: message.type
-            }));
+            if (window.onDiagLog)
+                window.onDiagLog(
+                    'error',
+                    'getMessageModel serialize returned falsy',
+                    JSON.stringify({
+                        id: message.id?._serialized,
+                        type: message.type,
+                    }),
+                );
             return null;
         }
 
@@ -1069,7 +1079,8 @@ exports.LoadUtils = () => {
 
     window.WWebJS.getContact = async (contactId) => {
         const start = Date.now();
-        const isLid = typeof contactId === 'string' && contactId.endsWith('@lid');
+        const isLid =
+            typeof contactId === 'string' && contactId.endsWith('@lid');
         let findTook = -1;
         let bizTook = -1;
         try {
@@ -1078,30 +1089,48 @@ exports.LoadUtils = () => {
                 .require('WAWebCollections')
                 .Contact.find(wid);
             findTook = Date.now() - start;
-            try {
-                const bizStart = Date.now();
-                const bizProfile = await window
-                    .require('WAWebCollections')
-                    .BusinessProfile.find(wid);
-                bizTook = Date.now() - bizStart;
-                bizProfile.profileOptions && (contact.businessProfile = bizProfile);
-            } catch (_) {
-                /* find() can fail for non-business contacts */
-            }
+            const bizStart = Date.now();
+            const bizProfile = await window
+                .require('WAWebCollections')
+                .BusinessProfile.find(wid);
+            bizTook = Date.now() - bizStart;
+            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
             const totalTook = Date.now() - start;
             if (totalTook > 200) {
-                if (window.onDiagLog) window.onDiagLog('warn', 'getContact:slow', JSON.stringify({
-                    contactId: contactId.substring(0, 20), isLid, findTook, bizTook, totalTook
-                }));
+                if (window.onDiagLog)
+                    window.onDiagLog(
+                        'warn',
+                        'getContact:slow',
+                        JSON.stringify({
+                            contactId: contactId.substring(0, 20),
+                            isLid,
+                            findTook,
+                            bizTook,
+                            totalTook,
+                        }),
+                    );
             }
             return window.WWebJS.getContactModel(contact);
         } catch (e) {
-            if (window.onDiagLog) window.onDiagLog('error', 'getContact:error', JSON.stringify({
-                contactId: contactId.substring(0, 20), isLid, findTook, bizTook,
-                totalTook: Date.now() - start,
-                error: String(e?.message || e).substring(0, 200),
-                stage: findTook < 0 ? 'find' : bizTook < 0 ? 'bizProfile' : 'model'
-            }));
+            if (window.onDiagLog)
+                window.onDiagLog(
+                    'error',
+                    'getContact:error',
+                    JSON.stringify({
+                        contactId: contactId.substring(0, 20),
+                        isLid,
+                        findTook,
+                        bizTook,
+                        totalTook: Date.now() - start,
+                        error: String(e?.message || e).substring(0, 200),
+                        stage:
+                            findTook < 0
+                                ? 'find'
+                                : bizTook < 0
+                                  ? 'bizProfile'
+                                  : 'model',
+                    }),
+                );
             throw e;
         }
     };
