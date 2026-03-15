@@ -1498,11 +1498,19 @@ class Client extends EventEmitter {
         });
 
         // [L7] Verify Store.Msg listener registration succeeded
+        // NOTE: Backbone's .listeners() may not exist in newer WAWeb versions.
+        //       Fall back to checking _events directly.
         const listenerCount = await this.pupPage.evaluate(() => {
             const Msg = window.require('WAWebCollections').Msg;
-            const addListeners = Msg.listeners?.('add')?.length ?? -1;
-            const changeTypeListeners = Msg.listeners?.('change:type')?.length ?? -1;
-            return { add: addListeners, changeType: changeTypeListeners };
+            var addCount = -1, changeTypeCount = -1;
+            if (typeof Msg.listeners === 'function') {
+                addCount = Msg.listeners('add')?.length ?? -1;
+                changeTypeCount = Msg.listeners('change:type')?.length ?? -1;
+            } else if (Msg._events) {
+                addCount = Msg._events['add'] ? (Array.isArray(Msg._events['add']) ? Msg._events['add'].length : 1) : 0;
+                changeTypeCount = Msg._events['change:type'] ? (Array.isArray(Msg._events['change:type']) ? Msg._events['change:type'].length : 1) : 0;
+            }
+            return { add: addCount, changeType: changeTypeCount };
         });
         this.emit('diag', 'info', 'Store.Msg listener count', JSON.stringify(listenerCount));
     }

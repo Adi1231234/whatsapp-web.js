@@ -31,10 +31,7 @@ exports.InjectDiagHooks = () => {
         var hookId = target.module + '.' + target.function;
         try {
             let module = window.require(target.module);
-            if (!module) {
-                safeDiagLog('warn', 'HOOK_FAIL', { hook: hookId, reason: 'module not found' });
-                return;
-            }
+            if (!module) return;
 
             const path = target.function.split('.');
             const funcName = path.pop();
@@ -415,144 +412,203 @@ exports.InjectDiagHooks = () => {
     } catch(e) {}
 
     // --- Media download monitoring (downloadMediaBlob) ---
-    // NOTE: Cannot filter by message type - only has download URL/directPath, no message context
+    // NOTE: WAWebMediaDownloadUtils was removed in WAWeb 2.3000+. downloadMediaBlob is inlined.
+    //       The DL_DECRYPT hook on downloadAndMaybeDecrypt covers the main download path.
+    //       Try WAWebMediaDownloadUtils first, fall back to WAWebMedia.downloadMsg if available.
     try {
-        window.injectToFunction({ module: 'WAWebMediaDownloadUtils', function: 'downloadMediaBlob' }, function(func, ...args) {
-            var startTime = Date.now();
-            var url = '';
-            try { url = typeof args[0] === 'string' ? args[0].slice(0, 100) : (args[0] && args[0].directPath ? args[0].directPath.slice(0, 100) : ''); } catch(e) {}
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(res) {
-                    safeDiagLog('debug', 'MEDIA_DOWNLOAD_OK', {
-                        elapsed: Date.now() - startTime,
-                        url: url,
-                        size: res ? (res.byteLength || res.size || res.length || 0) : 0,
+        var _mediaDownloadMod = window.require('WAWebMediaDownloadUtils') ? 'WAWebMediaDownloadUtils' : null;
+        if (_mediaDownloadMod) {
+            window.injectToFunction({ module: _mediaDownloadMod, function: 'downloadMediaBlob' }, function(func, ...args) {
+                var startTime = Date.now();
+                var url = '';
+                try { url = typeof args[0] === 'string' ? args[0].slice(0, 100) : (args[0] && args[0].directPath ? args[0].directPath.slice(0, 100) : ''); } catch(e) {}
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result.then(function(res) {
+                        safeDiagLog('debug', 'MEDIA_DOWNLOAD_OK', {
+                            elapsed: Date.now() - startTime,
+                            url: url,
+                            size: res ? (res.byteLength || res.size || res.length || 0) : 0,
+                        });
+                        return res;
+                    }).catch(function(err) {
+                        safeDiagLog('debug', 'MEDIA_DOWNLOAD_FAIL', {
+                            elapsed: Date.now() - startTime,
+                            url: url,
+                            error: err ? (err.message || String(err)) : 'unknown',
+                        });
+                        throw err;
                     });
-                    return res;
-                }).catch(function(err) {
-                    safeDiagLog('debug', 'MEDIA_DOWNLOAD_FAIL', {
-                        elapsed: Date.now() - startTime,
-                        url: url,
-                        error: err ? (err.message || String(err)) : 'unknown',
-                    });
-                    throw err;
-                });
-            }
-            return result;
-        });
-    } catch(e) {}
+                }
+                return result;
+            });
 
-    // --- Media download monitoring (downloadMedia) ---
-    try {
-        window.injectToFunction({ module: 'WAWebMediaDownloadUtils', function: 'downloadMedia' }, function(func, ...args) {
-            var startTime = Date.now();
-            var directPath = '';
-            try { directPath = (args[0] && args[0].directPath) ? args[0].directPath.slice(0, 100) : ''; } catch(e) {}
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(res) {
-                    safeDiagLog('debug', 'MEDIA_DOWNLOAD2_OK', {
-                        elapsed: Date.now() - startTime, directPath: directPath,
+            window.injectToFunction({ module: _mediaDownloadMod, function: 'downloadMedia' }, function(func, ...args) {
+                var startTime = Date.now();
+                var directPath = '';
+                try { directPath = (args[0] && args[0].directPath) ? args[0].directPath.slice(0, 100) : ''; } catch(e) {}
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result.then(function(res) {
+                        safeDiagLog('debug', 'MEDIA_DOWNLOAD2_OK', {
+                            elapsed: Date.now() - startTime, directPath: directPath,
+                        });
+                        return res;
+                    }).catch(function(err) {
+                        safeDiagLog('debug', 'MEDIA_DOWNLOAD2_FAIL', {
+                            elapsed: Date.now() - startTime, directPath: directPath,
+                            error: err ? (err.message || String(err)) : 'unknown',
+                        });
+                        throw err;
                     });
-                    return res;
-                }).catch(function(err) {
-                    safeDiagLog('debug', 'MEDIA_DOWNLOAD2_FAIL', {
-                        elapsed: Date.now() - startTime, directPath: directPath,
-                        error: err ? (err.message || String(err)) : 'unknown',
-                    });
-                    throw err;
-                });
-            }
-            return result;
-        });
+                }
+                return result;
+            });
+        } else {
+            // WAWebMediaDownloadUtils removed in 2.3000+, covered by DL_DECRYPT
+        }
     } catch(e) {}
 
     // --- PreKey get/upload ---
+    // NOTE: WAWebPreKeyUtils was removed in WAWeb 2.3000+. getOrGenPreKeys is inlined.
+    //       uploadPreKeys moved to WAWebUploadPreKeysJob.
     try {
-        window.injectToFunction({ module: 'WAWebPreKeyUtils', function: 'getOrGenPreKeys' }, function(func, ...args) {
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(res) {
-                    var count = Array.isArray(res) ? res.length : (res ? 1 : 0);
-                    safeDiagLog('debug', 'PREKEY_GET', { count: count });
-                    return res;
-                }).catch(function(err) {
-                    safeDiagLog('warn', 'PREKEY_GET_FAIL', {
-                        error: err ? (err.message || String(err)) : 'unknown',
+        var _preKeyGetMod = window.require('WAWebPreKeyUtils') ? 'WAWebPreKeyUtils' : null;
+        if (_preKeyGetMod) {
+            window.injectToFunction({ module: _preKeyGetMod, function: 'getOrGenPreKeys' }, function(func, ...args) {
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result.then(function(res) {
+                        var count = Array.isArray(res) ? res.length : (res ? 1 : 0);
+                        safeDiagLog('debug', 'PREKEY_GET', { count: count });
+                        return res;
+                    }).catch(function(err) {
+                        safeDiagLog('warn', 'PREKEY_GET_FAIL', {
+                            error: err ? (err.message || String(err)) : 'unknown',
+                        });
+                        throw err;
                     });
-                    throw err;
-                });
-            }
-            return result;
-        });
+                }
+                return result;
+            });
+        } else {
+            // WAWebPreKeyUtils.getOrGenPreKeys inlined in 2.3000+
+        }
     } catch(e) {}
 
+    // uploadPreKeys: try WAWebUploadPreKeysJob (2.3000+), fall back to WAWebPreKeyUtils
     try {
-        window.injectToFunction({ module: 'WAWebPreKeyUtils', function: 'uploadPreKeys' }, function(func, ...args) {
-            safeDiagLog('debug', 'PREKEY_UPLOAD', { count: Array.isArray(args[0]) ? args[0].length : 0 });
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.catch(function(err) {
-                    safeDiagLog('warn', 'PREKEY_UPLOAD_FAIL', {
-                        error: err ? (err.message || String(err)) : 'unknown',
+        var _preKeyUploadMod = window.require('WAWebUploadPreKeysJob') ? 'WAWebUploadPreKeysJob'
+            : window.require('WAWebPreKeyUtils') ? 'WAWebPreKeyUtils' : null;
+        if (_preKeyUploadMod) {
+            window.injectToFunction({ module: _preKeyUploadMod, function: 'uploadPreKeys' }, function(func, ...args) {
+                safeDiagLog('debug', 'PREKEY_UPLOAD', { count: Array.isArray(args[0]) ? args[0].length : 0 });
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result.catch(function(err) {
+                        safeDiagLog('warn', 'PREKEY_UPLOAD_FAIL', {
+                            error: err ? (err.message || String(err)) : 'unknown',
+                        });
+                        throw err;
                     });
-                    throw err;
-                });
-            }
-            return result;
-        });
+                }
+                return result;
+            });
+        } else {
+            // uploadPreKeys module not available
+        }
     } catch(e) {}
 
     // --- Session deletion ---
+    // NOTE: WAWebDeleteSessionJob was removed in WAWeb 2.3000+.
+    //       deleteRemoteSession is still available via WAWebSignal.Session (hooked above).
+    //       Try WAWebDeleteSessionJob first, then fall back to WAWebSignal.Session hook.
     try {
-        window.injectToFunction({ module: 'WAWebDeleteSessionJob', function: 'deleteRemoteSession' }, function(func, ...args) {
-            var jid = '';
-            try { jid = wid(args[0]) || safeStr(args[0]); } catch(e) {}
-            if (!_isStatusOrGroup(jid)) {
-                safeDiagLog('warn', 'SESSION_DELETE', { jid: jid });
-            }
-            return func.apply(this, args);
-        });
+        var _deleteSessionMod = window.require('WAWebDeleteSessionJob') ? 'WAWebDeleteSessionJob' : null;
+        if (_deleteSessionMod) {
+            window.injectToFunction({ module: _deleteSessionMod, function: 'deleteRemoteSession' }, function(func, ...args) {
+                var jid = '';
+                try { jid = wid(args[0]) || safeStr(args[0]); } catch(e) {}
+                if (!_isStatusOrGroup(jid)) {
+                    safeDiagLog('warn', 'SESSION_DELETE', { jid: jid });
+                }
+                return func.apply(this, args);
+            });
+        } else {
+            // WAWebDeleteSessionJob removed in 2.3000+, covered by WAWebSignal.Session hooks
+        }
     } catch(e) {}
 
     // --- Socket close monitoring ---
+    // NOTE: WAWebSocketConnectModel and onSocketClose were removed in WAWeb 2.3000+.
+    //       In newer versions, hook SocketBridgeApi.triggerSocketStreamDisconnectedFromBridge
+    //       and also listen to Socket change:state events for disconnect detection.
     try {
+        var _socketHooked = false;
+        // Try legacy approach first
         var connMods = ['WAWebSocketConnectModel', 'WAWebSocketModel'];
         for (var ci = 0; ci < connMods.length; ci++) {
             try {
-                window.injectToFunction({ module: connMods[ci], function: 'onSocketClose' }, function(func, ...args) {
-                    var code = args[0];
-                    var reason = args[1];
-                    safeDiagLog('warn', 'SOCKET_CLOSE', {
-                        code: code, reason: typeof reason === 'string' ? reason.slice(0, 200) : String(reason),
+                var _connMod = window.require(connMods[ci]);
+                if (_connMod && typeof _connMod.onSocketClose === 'function') {
+                    window.injectToFunction({ module: connMods[ci], function: 'onSocketClose' }, function(func, ...args) {
+                        var code = args[0];
+                        var reason = args[1];
+                        safeDiagLog('warn', 'SOCKET_CLOSE', {
+                            code: code, reason: typeof reason === 'string' ? reason.slice(0, 200) : String(reason),
+                        });
+                        return func.apply(this, args);
                     });
+                    _socketHooked = true;
+                    break;
+                }
+            } catch(e) {}
+        }
+        // Fallback: hook SocketBridgeApi disconnect trigger (WAWeb 2.3000+)
+        if (!_socketHooked) {
+            try {
+                window.injectToFunction({ module: 'WAWebSocketBridgeApi', function: 'SocketBridgeApi.triggerSocketStreamDisconnectedFromBridge' }, function(func, ...args) {
+                    safeDiagLog('warn', 'SOCKET_CLOSE', { source: 'bridgeApi', args: safeStr(args[0]) });
                     return func.apply(this, args);
                 });
-            } catch(e) {}
+            } catch(e) {
+                // SOCKET_CLOSE: no hookable module found
+            }
         }
     } catch(e) {}
 
     // --- History sync processing ---
+    // NOTE: WAWebHistorySyncJobUtils.processHistorySyncData was removed in WAWeb 2.3000+.
+    //       Replaced by WAWebHandleHistorySyncChunk.handleHistorySyncChunk.
     try {
-        window.injectToFunction({ module: 'WAWebHistorySyncJobUtils', function: 'processHistorySyncData' }, function(func, ...args) {
-            var data = args[0];
-            var msgCount = 0;
-            try {
-                if (data && data.conversations) {
-                    for (var hi = 0; hi < data.conversations.length; hi++) {
-                        msgCount += (data.conversations[hi].messages || []).length;
+        var _historySyncMod = window.require('WAWebHistorySyncJobUtils') ? 'WAWebHistorySyncJobUtils' : null;
+        var _historySyncFn = _historySyncMod ? 'processHistorySyncData' : null;
+        if (!_historySyncMod) {
+            _historySyncMod = window.require('WAWebHandleHistorySyncChunk') ? 'WAWebHandleHistorySyncChunk' : null;
+            _historySyncFn = _historySyncMod ? 'handleHistorySyncChunk' : null;
+        }
+        if (_historySyncMod && _historySyncFn) {
+            window.injectToFunction({ module: _historySyncMod, function: _historySyncFn }, function(func, ...args) {
+                var data = args[0];
+                var msgCount = 0;
+                try {
+                    if (data && data.conversations) {
+                        for (var hi = 0; hi < data.conversations.length; hi++) {
+                            msgCount += (data.conversations[hi].messages || []).length;
+                        }
                     }
-                }
-            } catch(e) {}
-            safeDiagLog('debug', 'HISTORY_SYNC_PROCESS', {
-                conversationCount: data && data.conversations ? data.conversations.length : 0,
-                msgCount: msgCount,
-                syncType: data ? data.syncType : null,
-                progress: data ? data.progress : null,
+                } catch(e) {}
+                safeDiagLog('debug', 'HISTORY_SYNC_PROCESS', {
+                    conversationCount: data && data.conversations ? data.conversations.length : 0,
+                    msgCount: msgCount,
+                    syncType: data ? data.syncType : null,
+                    progress: data ? data.progress : null,
+                });
+                return func.apply(this, args);
             });
-            return func.apply(this, args);
-        });
+        } else {
+            // HISTORY_SYNC_PROCESS: no module found
+        }
     } catch(e) {}
 
     // --- [L13] downloadAndMaybeDecrypt hook for filehash mismatch root cause ---
@@ -709,38 +765,47 @@ exports.InjectDiagHooks = () => {
 
     // --- [L13] WAWebCryptoDecryptMedia hook - capture decryption details ---
     // NOTE: Cannot filter by message type here - only has crypto params, no message context
+    // NOTE: In newer WAWeb (2.3000+), the module IS the default export function directly
+    //       (typeof module === 'function', no .default property). We cannot replace it in
+    //       Metro's registry, but the DL_DECRYPT hook on downloadAndMaybeDecrypt already
+    //       covers the main decrypt path. We still try the .default hook for older versions.
     try {
-        window.injectToFunction({ module: 'WAWebCryptoDecryptMedia', function: 'default' }, function(func, ...args) {
-            var opts = args[0] || {};
-            var startTime = Date.now();
-            safeDiagLog('debug', 'DECRYPT_MEDIA_START', {
-                expectedPlaintextHash: opts.expectedPlaintextHash || null,
-                ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
-                hasMediaKeys: !!opts.mediaKeys,
-                debugString: opts.debugString || null,
-            });
-
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(plaintext) {
-                    safeDiagLog('debug', 'DECRYPT_MEDIA_OK', {
-                        elapsed: Date.now() - startTime,
-                        plaintextSize: plaintext ? (plaintext.byteLength || 0) : 0,
-                    });
-                    return plaintext;
-                }).catch(function(err) {
-                    safeDiagLog('warn', 'DECRYPT_MEDIA_FAIL', {
-                        elapsed: Date.now() - startTime,
-                        errorName: err ? err.name : null,
-                        errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 500) : null,
-                        expectedPlaintextHash: opts.expectedPlaintextHash,
-                        ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
-                    });
-                    throw err;
+        var _cryptoMod = window.require('WAWebCryptoDecryptMedia');
+        if (typeof _cryptoMod === 'function' && !('default' in _cryptoMod)) {
+            // WAWebCryptoDecryptMedia is module-level function in 2.3000+, covered by DL_DECRYPT
+        } else {
+            window.injectToFunction({ module: 'WAWebCryptoDecryptMedia', function: 'default' }, function(func, ...args) {
+                var opts = args[0] || {};
+                var startTime = Date.now();
+                safeDiagLog('debug', 'DECRYPT_MEDIA_START', {
+                    expectedPlaintextHash: opts.expectedPlaintextHash || null,
+                    ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
+                    hasMediaKeys: !!opts.mediaKeys,
+                    debugString: opts.debugString || null,
                 });
-            }
-            return result;
-        });
+
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result.then(function(plaintext) {
+                        safeDiagLog('debug', 'DECRYPT_MEDIA_OK', {
+                            elapsed: Date.now() - startTime,
+                            plaintextSize: plaintext ? (plaintext.byteLength || 0) : 0,
+                        });
+                        return plaintext;
+                    }).catch(function(err) {
+                        safeDiagLog('warn', 'DECRYPT_MEDIA_FAIL', {
+                            elapsed: Date.now() - startTime,
+                            errorName: err ? err.name : null,
+                            errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 500) : null,
+                            expectedPlaintextHash: opts.expectedPlaintextHash,
+                            ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
+                        });
+                        throw err;
+                    });
+                }
+                return result;
+            });
+        }
     } catch(e) {
         safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'WAWebCryptoDecryptMedia', error: String(e) });
     }
@@ -772,18 +837,29 @@ exports.InjectDiagHooks = () => {
     } catch(e) {}
 
     // --- [L13] Detect BACKFILL/placeholder messages ---
+    // NOTE: In newer WAWeb (2.3000+), isPlaceholder was removed from Msg prototype.
+    //       We try Msg.prototype first (via WAWebMsgModel.Msg), then fall back to .default.
     try {
-        window.injectToFunction({ module: 'WAWebMsgModel', function: 'default.prototype.isPlaceholder' }, function(func, ...args) {
-            var result = func.apply(this, args);
-            if (result && !_shouldSkipDiag(this)) {
-                safeDiagLog('debug', 'MSG_IS_PLACEHOLDER', {
-                    id: this.id ? this.id._serialized : null,
-                    type: this.type,
-                    hasMedia: this.hasMedia,
-                });
-            }
-            return result;
-        });
+        var _msgModelMod = window.require('WAWebMsgModel');
+        var _msgProto = (_msgModelMod && _msgModelMod.Msg && _msgModelMod.Msg.prototype)
+            || (_msgModelMod && _msgModelMod.default && _msgModelMod.default.prototype);
+        if (_msgProto && typeof _msgProto.isPlaceholder === 'function') {
+            var _origIsPlaceholder = _msgProto.isPlaceholder;
+            _msgProto.isPlaceholder = function() {
+                var result = _origIsPlaceholder.apply(this, arguments);
+                if (result && !_shouldSkipDiag(this)) {
+                    safeDiagLog('debug', 'MSG_IS_PLACEHOLDER', {
+                        id: this.id ? this.id._serialized : null,
+                        type: this.type,
+                        hasMedia: this.hasMedia,
+                    });
+                }
+                return result;
+            };
+            safeDiagLog('debug', 'HOOK_OK', 'WAWebMsgModel.isPlaceholder');
+        } else {
+            // WAWebMsgModel.isPlaceholder removed in 2.3000+
+        }
     } catch(e) {}
 
     // --- [SILENT_LOSS] Wrap Msg.add to trace ALL add attempts ---
@@ -871,8 +947,12 @@ exports.InjectDiagHooks = () => {
     }
 
     // --- Message revoke monitoring ---
+    // NOTE: WAWebMsgDeleteCollection was removed in WAWeb 2.3000+. Use WAWebRevokeMsgAction instead.
     try {
-        window.injectToFunction({ module: 'WAWebMsgDeleteCollection', function: 'sendRevoke' }, function(func, ...args) {
+        var _revokeModule = window.require('WAWebRevokeMsgAction') ? 'WAWebRevokeMsgAction'
+            : window.require('WAWebMsgDeleteCollection') ? 'WAWebMsgDeleteCollection' : null;
+        if (!_revokeModule) throw 'no revoke module found';
+        window.injectToFunction({ module: _revokeModule, function: 'sendRevoke' }, function(func, ...args) {
             var msg = args[0];
             if (!_shouldSkipDiag(msg)) {
                 safeDiagLog('debug', 'MSG_REVOKE', {
