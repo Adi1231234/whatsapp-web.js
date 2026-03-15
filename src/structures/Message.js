@@ -639,7 +639,25 @@ class Message extends Base {
                     addAnnotations: function () {
                         return this;
                     },
+                    addAnnotation: function () {
+                        return this;
+                    },
                     addPoint: function () {
+                        return this;
+                    },
+                    start: function () {
+                        return this;
+                    },
+                    end: function () {
+                        return this;
+                    },
+                    cancel: function () {
+                        return this;
+                    },
+                    success: function () {
+                        return this;
+                    },
+                    fail: function () {
                         return this;
                     },
                 };

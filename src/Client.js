@@ -357,6 +357,7 @@ class Client extends EventEmitter {
                             // Inject diagnostic hooks (media download, signal/crypto, receipts, etc.)
                             await this.pupPage.evaluate(InjectDiagHooks);
                             console.log('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
+                            const _readyStart = Date.now();
 
                             await this.pupPage
                                 .waitForFunction(
@@ -367,7 +368,7 @@ class Client extends EventEmitter {
                                     console.warn('[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s');
                                     throw 'ready timeout';
                                 });
-                            console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready');
+                            console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready', JSON.stringify({ durationMs: Date.now() - _readyStart }));
 
                             this.info = new ClientInfo(
                                 this,
