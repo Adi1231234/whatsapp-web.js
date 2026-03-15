@@ -14,6 +14,8 @@ const {
 } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { LoadUtils } = require('./util/Injected/Utils');
+const { InjectDiagCommon, shouldSkipMsg: _shouldSkipDiagMsg } = require('./util/Injected/DiagCommon');
+const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -116,6 +118,12 @@ class Client extends EventEmitter {
         this._injectInProgress = true;
 
         try {
+            const _injectStart = Date.now();
+            let _injectUrl = '';
+            try { _injectUrl = this.pupPage?.url?.() || ''; } catch (_) { /* page may be closed */ }
+            console.log('[wwjs-diag] inject:start', JSON.stringify({ ts: _injectStart, url: _injectUrl.slice(0, 120) }));
+            this._hasSyncedTriggered = false;
+
             const authTimeout = this.options.authTimeoutMs || 30000;
             await this.pupPage
                 .waitForFunction('window.Debug?.VERSION != undefined', {
@@ -148,11 +156,18 @@ class Client extends EventEmitter {
                     return {
                         need: state === 'UNPAIRED' || state === 'UNPAIRED_IDLE',
                         state,
+                        hasSynced: window.require?.('WAWebSocketModel')?.Socket?.hasSynced,
                     };
                 },
                 { timeout: authTimeout },
             );
             const needAuthentication = await needAuthHandle.jsonValue();
+            console.log('[wwjs-diag] inject:authCheck', JSON.stringify({
+                ts: Date.now(),
+                needAuthentication: needAuthentication.need,
+                appState: needAuthentication.state,
+                hasSynced: needAuthentication.hasSynced
+            }));
 
             if (needAuthentication.need) {
                 const { failed, failureEventPayload, restart } =
@@ -283,6 +298,7 @@ class Client extends EventEmitter {
                 this.pupPage,
                 'onAuthAppStateChangedEvent',
                 async (state) => {
+                    console.log('[wwjs-diag] onAuthAppStateChangedEvent', JSON.stringify({ state, ts: Date.now() }));
                     if (
                         state == 'UNPAIRED_IDLE' &&
                         !pairWithPhoneNumber.phoneNumber
@@ -297,80 +313,94 @@ class Client extends EventEmitter {
                 this.pupPage,
                 'onAppStateHasSyncedEvent',
                 async () => {
-                    const authEventPayload =
-                        await this.authStrategy.getAuthEventPayload();
-                    /**
-                     * Emitted when authentication is successful
-                     * @event Client#authenticated
-                     */
-                    this.emit(Events.AUTHENTICATED, authEventPayload);
-
-                    const injected = await this.pupPage.evaluate(async () => {
-                        return typeof window.WWebJS !== 'undefined';
-                    });
-
-                    if (!injected) {
-                        if (
-                            this.options.webVersionCache.type === 'local' &&
-                            this.currentIndexHtml
-                        ) {
-                            const { type: webCacheType, ...webCacheOptions } =
-                                this.options.webVersionCache;
-                            const webCache = WebCacheFactory.createWebCache(
-                                webCacheType,
-                                webCacheOptions,
-                            );
-
-                            await webCache.persist(
-                                this.currentIndexHtml,
-                                version,
-                            );
-                        }
-
-                        //Load util functions (serializers, helper functions)
-                        await this.pupPage.evaluate(LoadUtils);
-
-                        await this.pupPage
-                            .waitForFunction(
-                                'typeof window.WWebJS !== "undefined"',
-                                { timeout: 30000 },
-                            )
-                            .catch(() => {
-                                throw 'ready timeout';
-                            });
-
-                        /**
-                         * Current connection information
-                         * @type {ClientInfo}
-                         */
-                        this.info = new ClientInfo(
-                            this,
-                            await this.pupPage.evaluate(() => {
-                                return {
-                                    ...window
-                                        .require('WAWebConnModel')
-                                        .Conn.serialize(),
-                                    wid:
-                                        window
-                                            .require('WAWebUserPrefsMeUser')
-                                            .getMaybeMePnUser() ||
-                                        window
-                                            .require('WAWebUserPrefsMeUser')
-                                            .getMaybeMeLidUser(),
-                                };
-                            }),
-                        );
-
-                        this.interface = new InterfaceController(this);
-
-                        await this.attachEventListeners();
+                    if (this._hasSyncedTriggered) {
+                        console.warn('[wwjs-diag] onAppStateHasSyncedEvent SKIPPED (already handled)');
+                        return;
                     }
-                    /**
-                     * Emitted when the client has initialized and is ready to receive messages.
-                     * @event Client#ready
-                     */
-                    this.emit(Events.READY);
-                    this.authStrategy.afterAuthReady();
+                    this._hasSyncedTriggered = true;
+                    console.log('[wwjs-diag] onAppStateHasSyncedEvent CALLED', JSON.stringify({ ts: Date.now() }));
+                    try {
+                        const authEventPayload =
+                            await this.authStrategy.getAuthEventPayload();
+                        this.emit(Events.AUTHENTICATED, authEventPayload);
+                        console.log('[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted');
+
+                        const injected = await this.pupPage.evaluate(async () => {
+                            return typeof window.WWebJS !== 'undefined';
+                        });
+                        console.log('[wwjs-diag] onAppStateHasSyncedEvent storeCheck', JSON.stringify({ injected, ts: Date.now() }));
+
+                        if (!injected) {
+                            if (
+                                this.options.webVersionCache.type === 'local' &&
+                                this.currentIndexHtml
+                            ) {
+                                const { type: webCacheType, ...webCacheOptions } =
+                                    this.options.webVersionCache;
+                                const webCache = WebCacheFactory.createWebCache(
+                                    webCacheType,
+                                    webCacheOptions,
+                                );
+
+                                await webCache.persist(
+                                    this.currentIndexHtml,
+                                    version,
+                                );
+                            }
+
+                            // Inject diagnostic common helpers before LoadUtils
+                            await this.pupPage.evaluate(InjectDiagCommon);
+
+                            //Load util functions (serializers, helper functions)
+                            await this.pupPage.evaluate(LoadUtils);
+
+                            // Inject diagnostic hooks (media download, signal/crypto, receipts, etc.)
+                            await this.pupPage.evaluate(InjectDiagHooks);
+                            console.log('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
+
+                            await this.pupPage
+                                .waitForFunction(
+                                    'typeof window.WWebJS !== "undefined"',
+                                    { timeout: 30000 },
+                                )
+                                .catch(() => {
+                                    console.warn('[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s');
+                                    throw 'ready timeout';
+                                });
+                            console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready');
+
+                            this.info = new ClientInfo(
+                                this,
+                                await this.pupPage.evaluate(() => {
+                                    return {
+                                        ...window
+                                            .require('WAWebConnModel')
+                                            .Conn.serialize(),
+                                        wid:
+                                            window
+                                                .require('WAWebUserPrefsMeUser')
+                                                .getMaybeMePnUser() ||
+                                            window
+                                                .require('WAWebUserPrefsMeUser')
+                                                .getMaybeMeLidUser(),
+                                    };
+                                }),
+                            );
+
+                            this.interface = new InterfaceController(this);
+
+                            await this.attachEventListeners();
+                        }
+                        this.emit(Events.READY);
+                        console.log('[wwjs-diag] onAppStateHasSyncedEvent READY emitted');
+                        this.authStrategy.afterAuthReady();
+                    } catch (err) {
+                        console.warn('[wwjs-diag] onAppStateHasSyncedEvent ERROR', JSON.stringify({
+                            error: String(err?.message || err),
+                            ts: Date.now()
+                        }));
+                        throw err;
+                    }
                 },
             );
             let lastPercent = null;
@@ -388,6 +418,7 @@ class Client extends EventEmitter {
                 this.pupPage,
                 'onLogoutEvent',
                 async () => {
+                    console.warn('[wwjs-diag] onLogoutEvent CALLED', JSON.stringify({ ts: Date.now() }));
                     this.lastLoggedOut = true;
                     await this.pupPage
                         .waitForNavigation({ waitUntil: 'load', timeout: 5000 })
@@ -398,11 +429,21 @@ class Client extends EventEmitter {
                 const Socket = window.require('WAWebSocketModel').Socket;
                 const Cmd = window.require('WAWebCmd').Cmd;
 
+                // [diag] Log state BEFORE registering listeners
+                const _diagState = {
+                    hasSynced: Socket.hasSynced,
+                    state: Socket.state,
+                    ts: Date.now()
+                };
+                console.error('[wwjs-diag] listeners:registering ' + JSON.stringify(_diagState));
+                window._wwjsDiagAppState = Socket;
+
                 const listeners = [
                     [
                         Socket,
                         'change:state',
                         (_AppState, state) => {
+                            console.error('[wwjs-diag] change:state FIRED ' + JSON.stringify({ state, ts: Date.now() }));
                             window.onAuthAppStateChangedEvent(state);
                         },
                     ],
@@ -410,6 +451,12 @@ class Client extends EventEmitter {
                         Socket,
                         'change:hasSynced',
                         () => {
+                            console.error('[wwjs-diag] change:hasSynced FIRED ' + JSON.stringify({
+                                hasSynced: Socket.hasSynced,
+                                state: Socket.state,
+                                sameAppState: Socket === window._wwjsDiagAppState,
+                                ts: Date.now()
+                            }));
                             window.onAppStateHasSyncedEvent();
                         },
                     ],
@@ -426,6 +473,7 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout',
                         async () => {
+                            console.error('[wwjs-diag] Cmd:logout FIRED ' + JSON.stringify({ ts: Date.now() }));
                             await window.onLogoutEvent();
                         },
                     ],
@@ -433,6 +481,7 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout_from_bridge',
                         async () => {
+                            console.error('[wwjs-diag] Cmd:logout_from_bridge FIRED ' + JSON.stringify({ ts: Date.now() }));
                             await window.onLogoutEvent();
                         },
                     ],
@@ -455,13 +504,22 @@ class Client extends EventEmitter {
                 window._wwjsListeners = listeners;
 
                 // Atomic hasSynced check in the same synchronous block as listener registration.
-                // If hasSynced is already true, Backbone won't fire change:hasSynced (no transition).
-                // If hasSynced is false, the listener above will catch the future transition.
                 const storeInjected = typeof window.WWebJS !== 'undefined';
+                console.error('[wwjs-diag] inject:hasSyncedCheck ' + JSON.stringify({
+                    hasSynced: Socket.hasSynced,
+                    state: Socket.state,
+                    storeInjected,
+                    sameAppState: Socket === window._wwjsDiagAppState,
+                    ts: Date.now()
+                }));
                 if (Socket.hasSynced === true && !storeInjected) {
+                    console.error('[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent');
                     window.onAppStateHasSyncedEvent();
                 }
+                console.error('[wwjs-diag] listeners:registered ' + JSON.stringify({ ts: Date.now() }));
             });
+
+            console.log('[wwjs-diag] inject:end', JSON.stringify({ ts: Date.now(), durationMs: Date.now() - _injectStart }));
         } finally {
             this._injectInProgress = false;
         }
@@ -534,13 +592,73 @@ class Client extends EventEmitter {
             referer: 'https://whatsapp.com/',
         });
 
+        console.log('[wwjs-diag] initialize:inject START (first call)');
         await this.inject();
+        console.log('[wwjs-diag] initialize:inject END (first call)');
+
+        // [diag:promise-collected] Monitor execution context lifecycle via CDP
+        try {
+            const cdpSession = await this.pupPage.target().createCDPSession();
+            await cdpSession.send('Runtime.enable');
+            cdpSession.on('Runtime.executionContextDestroyed', (event) => {
+                this.emit('diag', 'warn', 'CDP_CONTEXT_DESTROYED', JSON.stringify({
+                    executionContextId: event.executionContextId,
+                    ts: Date.now()
+                }));
+            });
+            cdpSession.on('Runtime.executionContextsCleared', () => {
+                this.emit('diag', 'warn', 'CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
+            });
+            this._diagCdpSession = cdpSession;
+        } catch (e) {
+            this.emit('diag', 'error', 'CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
+        }
+
+        // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
+        this._diagEvalInflight = 0;
+        const origEvaluate = this.pupPage.evaluate.bind(this.pupPage);
+        const self = this;
+        this.pupPage.evaluate = async function (...args) {
+            self._diagEvalInflight++;
+            const inflight = self._diagEvalInflight;
+            if (inflight > 20) {
+                self.emit('diag', 'warn', 'HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
+            }
+            try {
+                return await origEvaluate(...args);
+            } catch (err) {
+                const isPromiseCollected = err.message?.includes('Promise was collected');
+                const isContextDestroyed = err.message?.includes('Execution context was destroyed');
+                if (isPromiseCollected || isContextDestroyed) {
+                    self.emit('diag', 'error', 'EVALUATE_CDP_ERROR', JSON.stringify({
+                        inflight: self._diagEvalInflight,
+                        error: err.message,
+                        isPromiseCollected,
+                        isContextDestroyed,
+                        ts: Date.now()
+                    }));
+                }
+                throw err;
+            } finally {
+                self._diagEvalInflight--;
+            }
+        };
 
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.parentFrame() !== null) return;
 
+            const frameUrl = frame.url();
+            const isMainFrame = frame === this.pupPage.mainFrame();
             const isLogout =
-                frame.url().includes('post_logout=1') || this.lastLoggedOut;
+                frameUrl.includes('post_logout=1') || this.lastLoggedOut;
+
+            console.log('[wwjs-diag] framenavigated', JSON.stringify({
+                ts: Date.now(),
+                url: frameUrl.slice(0, 150),
+                isMainFrame,
+                isLogout,
+                lastLoggedOut: this.lastLoggedOut
+            }));
 
             if (isLogout) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
@@ -561,10 +679,12 @@ class Client extends EventEmitter {
 
             if (!isLogout && storeAvailable) return;
 
+            console.log('[wwjs-diag] framenavigated:inject START', JSON.stringify({ ts: Date.now(), url: frameUrl.slice(0, 150), storeAvailable }));
             try {
                 await this.inject();
+                console.log('[wwjs-diag] framenavigated:inject END (success)');
             } catch (err) {
-                // inject() may fail if page is still loading after navigation
+                console.warn('[wwjs-diag] framenavigated:inject END (error)', String(err?.message || err));
             }
         });
     }
@@ -646,10 +766,29 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        // [diag] Expose diagnostic logging bridge from browser to Node.js
+        await exposeFunctionIfAbsent(this.pupPage, 'onDiagLog', (level, tag, data) => {
+            this.emit('diag', level, tag, data);
+        });
+
         await exposeFunctionIfAbsent(
             this.pupPage,
             'onAddMessageEvent',
             (msg) => {
+                // [L4] Diagnostic: log non-skipped messages
+                const _skipDiag = msg.type === 'gp2' || _shouldSkipDiagMsg(msg);
+                if (!_skipDiag) {
+                    this.emit('diag', 'debug', 'onAddMessageEvent', JSON.stringify({
+                        traceId: msg.id?._serialized || msg.id?.id,
+                        type: msg.type,
+                        from: typeof msg.from === 'object' ? msg.from?._serialized : msg.from,
+                        to: typeof msg.to === 'object' ? msg.to?._serialized : msg.to,
+                        hasMedia: !!msg.directPath,
+                        isStatusV3: msg.isStatusV3 || false,
+                        idRemote: msg.id?.remote || null
+                    }));
+                }
+
                 if (msg.type === 'gp2') {
                     const notification = new GroupNotification(this, msg);
                     if (
@@ -716,6 +855,14 @@ class Client extends EventEmitter {
                  * @param {Message} message The message that was created
                  */
                 this.emit(Events.MESSAGE_CREATE, message);
+
+                // [L5] Log fromMe gate decision
+                if (!_skipDiag) {
+                    this.emit('diag', 'debug', 'fromMe gate', JSON.stringify({
+                        traceId: msg.id?._serialized || msg.id?.id,
+                        fromMe: msg.id.fromMe
+                    }));
+                }
 
                 if (msg.id.fromMe) return;
 
@@ -1084,6 +1231,32 @@ class Client extends EventEmitter {
         );
 
         await this.pupPage.evaluate(() => {
+            // Helper namespace for diagnostic functions
+            window.__wwjsDiag = window.__wwjsDiag || {};
+            window.__wwjsDiag.resolvePhone = (wid) => {
+                try {
+                    const serialized = wid?._serialized || String(wid || '');
+                    if (!serialized) return '';
+                    if (!serialized.endsWith('@lid')) return serialized;
+                    const contact = window.require('WAWebCollections').Contact?.get(wid);
+                    const phone = contact?.phoneNumber?._serialized;
+                    return phone || serialized;
+                } catch (e) {
+                    return wid?._serialized || String(wid || '');
+                }
+            };
+            window.__wwjsDiag.diagTrace = (msg) => {
+                try {
+                    const traceId = msg.id?._serialized || '';
+                    const senderWid = msg.author || msg.from;
+                    const from = window.__wwjsDiag.resolvePhone(senderWid);
+                    const to = window.__wwjsDiag.resolvePhone(msg.to);
+                    return { traceId, from, to };
+                } catch (e) {
+                    return { traceId: msg.id?._serialized || '', from: msg.from?._serialized || '', to: msg.to?._serialized || '' };
+                }
+            };
+
             const { Msg, Chat, WAWebCallCollection } =
                 window.require('WAWebCollections');
             const AppState = window.require('WAWebSocketModel').Socket;
@@ -1099,10 +1272,18 @@ class Client extends EventEmitter {
             Msg.on('change', (msg) => {
                 window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg));
             });
-            Msg.on('change:type', (msg) => {
-                window.onChangeMessageTypeEvent(
-                    window.WWebJS.getMessageModel(msg),
-                );
+            Msg.on('change:type', (...args) => {
+                var [msg] = args;
+                if (!window.__diag?.isStatusOrGroup(msg?.from) && !window.__diag?.isStatusOrGroup(msg?.to) && !window.__diag?.isStatusOrGroup(msg?.id?.remote) && !msg?.isStatusV3) {
+                    window.__diag?.safeDiagLog('debug', 'change:type', {
+                        ...window.__wwjsDiag.diagTrace(msg),
+                        prevType: msg?.previousAttributes?.type,
+                        newType: msg?.type,
+                        argCount: args.length,
+                        args: args.map(a => window.__diag?.safeStr(a))
+                    });
+                }
+                window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
             });
             Msg.on('change:ack', (msg, ack) => {
                 window.onMessageAckEvent(
@@ -1157,8 +1338,24 @@ class Client extends EventEmitter {
                     prevState,
                 );
             });
+            // Track message IDs handled by the normal 'add' path for silent-loss detection
+            const __handledByAdd = new Set();
+            const __HANDLED_SET_CAP = 5000;
+
             Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
+                    const _id = msg.id?._serialized;
+                    if (_id) {
+                        __handledByAdd.add(_id);
+                        if (__handledByAdd.size > __HANDLED_SET_CAP) {
+                            const iter = __handledByAdd.values();
+                            for (let i = 0; i < 1000; i++) iter.next();
+                            const remaining = [];
+                            for (const v of __handledByAdd) remaining.push(v);
+                            __handledByAdd.clear();
+                            for (const v of remaining.slice(1000)) __handledByAdd.add(v);
+                        }
+                    }
                     if (msg.type === 'ciphertext') {
                         // defer message event until ciphertext is resolved (type changed)
                         const resendTimer = setTimeout(() => {
@@ -1182,6 +1379,14 @@ class Client extends EventEmitter {
                         msg.once('change:type', (_msg) => {
                             clearTimeout(resendTimer);
                             clearTimeout(failTimer);
+                            window.onDiagLog?.('debug', 'CIPHERTEXT_DEFERRED_RESOLVED', JSON.stringify({
+                                traceId: _msg.id?._serialized || '',
+                                resolvedType: _msg.type,
+                                from: _msg.from?._serialized || '',
+                                hasDirectPath: !!_msg.directPath,
+                                hasMediaKey: !!_msg.mediaKey,
+                            }));
+                            if (_msg.type === 'revoked') return;
                             window.onAddMessageEvent(
                                 window.WWebJS.getMessageModel(_msg),
                             );
@@ -1196,6 +1401,26 @@ class Client extends EventEmitter {
                     }
                 }
             });
+
+            // [SILENT_LOSS_FIX] Fallback: catch messages added to Msg without triggering 'add'
+            Msg.on('change:type', (msg) => {
+                try {
+                    const id = msg.id?._serialized;
+                    if (!id || __handledByAdd.has(id)) return;
+                    if (!msg.isNewMsg) return;
+                    if (msg.type === 'ciphertext') return;
+                    __handledByAdd.add(id);
+                    window.onDiagLog?.('warn', 'ADD_BYPASS_RECOVERED', JSON.stringify({
+                        traceId: id,
+                        type: msg.type,
+                        from: msg.from?._serialized || '',
+                    }));
+                    window.onAddMessageEvent(window.WWebJS.getMessageModel(msg));
+                } catch (e) {
+                    // Fallback must never break the main flow
+                }
+            });
+
             Chat.on('change:unreadCount', (chat) => {
                 window.onChatUnreadCountEvent(chat);
             });
@@ -1270,6 +1495,15 @@ class Client extends EventEmitter {
                 },
             );
         });
+
+        // [L7] Verify Store.Msg listener registration succeeded
+        const listenerCount = await this.pupPage.evaluate(() => {
+            const Msg = window.require('WAWebCollections').Msg;
+            const addListeners = Msg.listeners?.('add')?.length ?? -1;
+            const changeTypeListeners = Msg.listeners?.('change:type')?.length ?? -1;
+            return { add: addListeners, changeType: changeTypeListeners };
+        });
+        this.emit('diag', 'info', 'Store.Msg listener count', JSON.stringify(listenerCount));
     }
 
     async initWebVersionCache() {
@@ -1744,9 +1978,25 @@ class Client extends EventEmitter {
      * @returns {Promise<Contact>}
      */
     async getContactById(contactId) {
-        let contact = await this.pupPage.evaluate((contactId) => {
-            return window.WWebJS.getContact(contactId);
-        }, contactId);
+        const start = Date.now();
+        let contact;
+        try {
+            contact = await this.pupPage.evaluate((contactId) => {
+                return window.WWebJS.getContact(contactId);
+            }, contactId);
+        } catch (err) {
+            const took = Date.now() - start;
+            this.emit('diag', 'error', 'getContactById:failed', JSON.stringify({
+                contactId: contactId?.substring?.(0, 30),
+                took,
+                inflight: this._diagEvalInflight || -1,
+                isPromiseCollected: err.message?.includes('Promise was collected'),
+                isContextDestroyed: err.message?.includes('Execution context was destroyed'),
+                isLid: contactId?.endsWith?.('@lid'),
+                error: String(err.message || err).substring(0, 200)
+            }));
+            throw err;
+        }
 
         return ContactFactory.create(this, contact);
     }
