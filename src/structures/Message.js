@@ -571,6 +571,12 @@ class Message extends Base {
                         return this;
                     },
                 };
+                const effectiveMediaKey =
+                    msg.mediaKey === '' &&
+                    msg.messageSecret instanceof Uint8Array &&
+                    msg.messageSecret.byteLength === 32
+                        ? btoa(String.fromCharCode(...msg.messageSecret))
+                        : msg.mediaKey;
                 console.log('[wwjs-mediakey-debug]', {
                     msgId: msg.id?.id,
                     mediaKeyType: typeof msg.mediaKey,
@@ -580,14 +586,9 @@ class Message extends Base {
                         msg.messageSecret instanceof Uint8Array
                             ? msg.messageSecret.byteLength
                             : 0,
+                    usingMessageSecret: effectiveMediaKey !== msg.mediaKey,
                     mediaStage: msg.mediaData?.mediaStage,
                 });
-                const effectiveMediaKey =
-                    msg.mediaKey === '' &&
-                    msg.messageSecret instanceof Uint8Array &&
-                    msg.messageSecret.byteLength === 32
-                        ? btoa(String.fromCharCode(...msg.messageSecret))
-                        : msg.mediaKey;
                 const decryptedMedia = await window
                     .require('WAWebDownloadManager')
                     .downloadManager.downloadAndMaybeDecrypt({
