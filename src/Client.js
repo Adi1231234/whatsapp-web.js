@@ -1076,13 +1076,11 @@ class Client extends EventEmitter {
                         // defer message event until ciphertext is resolved (type changed)
                         const resendTimer = setTimeout(() => {
                             try {
-                                const { sendPeerDataOperationRequest } =
-                                    window.require(
-                                        'WAWebSendNonMessageDataRequest',
-                                    );
-                                sendPeerDataOperationRequest(4, {
-                                    msgKeys: [msg.id],
-                                }).catch(() => {});
+                                window
+                                    .require(
+                                        'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+                                    )
+                                    .handlePlaceholderMsgsSeen([msg], true);
                             } catch (_) {
                                 // module may not be available
                             }
