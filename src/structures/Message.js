@@ -571,24 +571,13 @@ class Message extends Base {
                         return this;
                     },
                 };
-                const effectiveMediaKey =
+                const usingMessageSecret =
                     msg.mediaKey === '' &&
                     msg.messageSecret instanceof Uint8Array &&
-                    msg.messageSecret.byteLength === 32
-                        ? btoa(String.fromCharCode(...msg.messageSecret))
-                        : msg.mediaKey;
-                console.log('[wwjs-mediakey-debug]', {
-                    msgId: msg.id?.id,
-                    mediaKeyType: typeof msg.mediaKey,
-                    mediaKeyLen: msg.mediaKey?.length ?? 0,
-                    mediaKeyEmpty: msg.mediaKey === '',
-                    messageSecretByteLen:
-                        msg.messageSecret instanceof Uint8Array
-                            ? msg.messageSecret.byteLength
-                            : 0,
-                    usingMessageSecret: effectiveMediaKey !== msg.mediaKey,
-                    mediaStage: msg.mediaData?.mediaStage,
-                });
+                    msg.messageSecret.byteLength === 32;
+                const effectiveMediaKey = usingMessageSecret
+                    ? btoa(String.fromCharCode(...msg.messageSecret))
+                    : msg.mediaKey;
                 let decryptedMedia;
                 try {
                     decryptedMedia = await window
@@ -603,17 +592,22 @@ class Message extends Base {
                             signal: new AbortController().signal,
                             downloadQpl: mockQpl,
                         });
-                    console.log('[wwjs-mediakey-debug] result', {
-                        msgId: msg.id?.id,
-                        usingMessageSecret: effectiveMediaKey !== msg.mediaKey,
-                        success: true,
-                        bytes: decryptedMedia?.byteLength,
-                    });
+                    if (usingMessageSecret) {
+                        console.log('[wwjs-mediakey-debug] success', {
+                            msgId: msg.id?.id,
+                            bytes: decryptedMedia?.byteLength,
+                        });
+                    }
                 } catch (downloadErr) {
-                    console.log('[wwjs-mediakey-debug] result', {
+                    console.log('[wwjs-mediakey-debug] error', {
                         msgId: msg.id?.id,
-                        usingMessageSecret: effectiveMediaKey !== msg.mediaKey,
-                        success: false,
+                        usingMessageSecret,
+                        mediaKeyEmpty: msg.mediaKey === '',
+                        messageSecretByteLen:
+                            msg.messageSecret instanceof Uint8Array
+                                ? msg.messageSecret.byteLength
+                                : 0,
+                        mediaStage: msg.mediaData?.mediaStage,
                         error: downloadErr?.message?.substring(0, 120),
                     });
                     throw downloadErr;
