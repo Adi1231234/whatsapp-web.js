@@ -49,13 +49,23 @@ class Message extends Base {
         this.hasMedia = Boolean(data.directPath);
 
         // [L11] Log when image/video/document has no directPath (hasMedia=false)
-        if (!this.hasMedia && ['image', 'video', 'document', 'ptt', 'audio', 'sticker'].includes(data.type)) {
-            this.client?.emit?.('diag', 'warn', 'Media type without directPath', JSON.stringify({
-                id: data.id?._serialized || data.id?.id,
-                type: data.type,
-                hasDirectPath: !!data.directPath,
-                hasMediaKey: !!data.mediaKey
-            }));
+        if (
+            !this.hasMedia &&
+            ['image', 'video', 'document', 'ptt', 'audio', 'sticker'].includes(
+                data.type,
+            )
+        ) {
+            this.client?.emit?.(
+                'diag',
+                'warn',
+                'Media type without directPath',
+                JSON.stringify({
+                    id: data.id?._serialized || data.id?.id,
+                    type: data.type,
+                    hasDirectPath: !!data.directPath,
+                    hasMediaKey: !!data.mediaKey,
+                }),
+            );
         }
 
         /**
@@ -537,10 +547,15 @@ class Message extends Base {
     async downloadMedia() {
         if (!this.hasMedia) {
             // [L12] Log when downloadMedia called but hasMedia=false
-            this.client?.emit?.('diag', 'warn', 'downloadMedia: hasMedia=false', JSON.stringify({
-                id: this.id?._serialized,
-                type: this.type
-            }));
+            this.client?.emit?.(
+                'diag',
+                'warn',
+                'downloadMedia: hasMedia=false',
+                JSON.stringify({
+                    id: this.id?._serialized,
+                    type: this.type,
+                }),
+            );
             return undefined;
         }
 
@@ -560,19 +575,30 @@ class Message extends Base {
                 msg.mediaData.mediaStage === 'REUPLOADING'
             ) {
                 // [L12] Log silent null return
-                if (window.onDiagLog) window.onDiagLog('warn', 'downloadMedia: returning null', JSON.stringify({
-                    id: msgId,
-                    hasMsg: !!msg,
-                    hasMediaData: !!msg?.mediaData,
-                    mediaStage: msg?.mediaData?.mediaStage
-                }));
+                if (window.onDiagLog)
+                    window.onDiagLog(
+                        'warn',
+                        'downloadMedia: returning null',
+                        JSON.stringify({
+                            id: msgId,
+                            hasMsg: !!msg,
+                            hasMediaData: !!msg?.mediaData,
+                            mediaStage: msg?.mediaData?.mediaStage,
+                        }),
+                    );
                 return null;
             }
             if (msg.mediaData.mediaStage != 'RESOLVED') {
                 // [L13] Snapshot crypto fields BEFORE resolve attempt
                 const cryptoBefore = {
                     directPath: msg.directPath,
-                    mediaKey: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
+                    mediaKey: msg.mediaKey
+                        ? btoa(
+                              String.fromCharCode(
+                                  ...new Uint8Array(msg.mediaKey.slice(0, 4)),
+                              ),
+                          )
+                        : null,
                     mediaKeyTimestamp: msg.mediaKeyTimestamp,
                     encFilehash: msg.encFilehash,
                     filehash: msg.filehash,
@@ -591,34 +617,50 @@ class Message extends Base {
                         rmrReason: 1,
                     });
                 } catch (re) {
-                    resolveError = { message: String(re?.message || re), name: re?.name };
+                    resolveError = {
+                        message: String(re?.message || re),
+                        name: re?.name,
+                    };
                 }
 
                 // [L13] Snapshot AFTER resolve attempt
                 const cryptoAfter = {
                     directPath: msg.directPath,
-                    mediaKey: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
+                    mediaKey: msg.mediaKey
+                        ? btoa(
+                              String.fromCharCode(
+                                  ...new Uint8Array(msg.mediaKey.slice(0, 4)),
+                              ),
+                          )
+                        : null,
                     encFilehash: msg.encFilehash,
                     filehash: msg.filehash,
                     mediaStage: msg.mediaData.mediaStage,
                     mediaStageTimestamp: msg.mediaData.mediaStageTimestamp,
                 };
                 const fieldsChanged = {
-                    directPath: cryptoBefore.directPath !== cryptoAfter.directPath,
+                    directPath:
+                        cryptoBefore.directPath !== cryptoAfter.directPath,
                     mediaKey: cryptoBefore.mediaKey !== cryptoAfter.mediaKey,
-                    encFilehash: cryptoBefore.encFilehash !== cryptoAfter.encFilehash,
+                    encFilehash:
+                        cryptoBefore.encFilehash !== cryptoAfter.encFilehash,
                     filehash: cryptoBefore.filehash !== cryptoAfter.filehash,
                 };
 
-                if (window.onDiagLog) window.onDiagLog('info', 'downloadMedia: resolve attempt', JSON.stringify({
-                    id: msgId,
-                    stageBefore: cryptoBefore.mediaStage,
-                    stageAfter: cryptoAfter.mediaStage,
-                    fieldsChanged,
-                    resolveError,
-                    cryptoBefore,
-                    cryptoAfter,
-                }));
+                if (window.onDiagLog)
+                    window.onDiagLog(
+                        'info',
+                        'downloadMedia: resolve attempt',
+                        JSON.stringify({
+                            id: msgId,
+                            stageBefore: cryptoBefore.mediaStage,
+                            stageAfter: cryptoAfter.mediaStage,
+                            fieldsChanged,
+                            resolveError,
+                            cryptoBefore,
+                            cryptoAfter,
+                        }),
+                    );
             }
 
             if (
@@ -626,13 +668,26 @@ class Message extends Base {
                 msg.mediaData.mediaStage === 'FETCHING'
             ) {
                 // [L12] Log silent undefined return (error/fetching)
-                if (window.onDiagLog) window.onDiagLog('warn', 'downloadMedia: error/fetching stage', JSON.stringify({
-                    id: msgId,
-                    mediaStage: msg.mediaData.mediaStage
-                }));
+                if (window.onDiagLog)
+                    window.onDiagLog(
+                        'warn',
+                        'downloadMedia: error/fetching stage',
+                        JSON.stringify({
+                            id: msgId,
+                            mediaStage: msg.mediaData.mediaStage,
+                        }),
+                    );
                 // media could not be downloaded
                 return undefined;
             }
+
+            const usingMessageSecret =
+                msg.mediaKey === '' &&
+                msg.messageSecret instanceof Uint8Array &&
+                msg.messageSecret.byteLength === 32;
+            const effectiveMediaKey = usingMessageSecret
+                ? btoa(String.fromCharCode(...msg.messageSecret))
+                : msg.mediaKey;
 
             try {
                 const mockQpl = {
@@ -662,27 +717,44 @@ class Message extends Base {
                     },
                 };
                 // [L13] Log the exact params going into downloadAndMaybeDecrypt
-                if (window.onDiagLog) window.onDiagLog('info', 'downloadMedia: attempting downloadAndMaybeDecrypt', JSON.stringify({
-                    id: msgId,
-                    directPath: msg.directPath,
-                    encFilehash: msg.encFilehash,
-                    filehash: msg.filehash,
-                    mediaKeyPrefix: msg.mediaKey ? btoa(String.fromCharCode(...new Uint8Array(msg.mediaKey.slice(0, 4)))) : null,
-                    mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                    type: msg.type,
-                }));
+                if (window.onDiagLog)
+                    window.onDiagLog(
+                        'info',
+                        'downloadMedia: attempting downloadAndMaybeDecrypt',
+                        JSON.stringify({
+                            id: msgId,
+                            directPath: msg.directPath,
+                            encFilehash: msg.encFilehash,
+                            filehash: msg.filehash,
+                            mediaKeyPrefix: effectiveMediaKey
+                                ? effectiveMediaKey.substring(0, 8)
+                                : null,
+                            mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                            type: msg.type,
+                            usingMessageSecret,
+                        }),
+                    );
                 const decryptedMedia = await window
                     .require('WAWebDownloadManager')
                     .downloadManager.downloadAndMaybeDecrypt({
                         directPath: msg.directPath,
                         encFilehash: msg.encFilehash,
                         filehash: msg.filehash,
-                        mediaKey: msg.mediaKey,
+                        mediaKey: effectiveMediaKey,
                         mediaKeyTimestamp: msg.mediaKeyTimestamp,
                         type: msg.type,
                         signal: new AbortController().signal,
                         downloadQpl: mockQpl,
                     });
+                if (usingMessageSecret && window.onDiagLog)
+                    window.onDiagLog(
+                        'info',
+                        'downloadMedia: mediakey-debug success',
+                        JSON.stringify({
+                            id: msgId,
+                            bytes: decryptedMedia?.byteLength,
+                        }),
+                    );
 
                 const data =
                     await window.WWebJS.arrayBufferToBase64Async(
@@ -703,17 +775,36 @@ class Message extends Base {
                     message: String(e?.message || e).substring(0, 500),
                     status: e?.status,
                     code: e?.code,
+                    usingMessageSecret,
+                    mediaKeyEmpty: msg.mediaKey === '',
+                    messageSecretType: typeof msg.messageSecret,
+                    messageSecretIsUint8Array:
+                        msg.messageSecret instanceof Uint8Array,
+                    messageSecretByteLen:
+                        msg.messageSecret instanceof Uint8Array
+                            ? msg.messageSecret.byteLength
+                            : 0,
                     props: {},
                 };
                 try {
                     for (const k of Object.keys(e || {})) {
                         if (!['message', 'stack', 'name'].includes(k)) {
-                            errorDetail.props[k] = typeof e[k] === 'object' ? JSON.stringify(e[k]).substring(0, 200) : String(e[k]);
+                            errorDetail.props[k] =
+                                typeof e[k] === 'object'
+                                    ? JSON.stringify(e[k]).substring(0, 200)
+                                    : String(e[k]);
                         }
                     }
-                } catch (_) { /* ignore */ }
+                } catch (_) {
+                    /* ignore */
+                }
 
-                if (window.onDiagLog) window.onDiagLog('error', 'downloadMedia: downloadAndMaybeDecrypt failed', JSON.stringify(errorDetail));
+                if (window.onDiagLog)
+                    window.onDiagLog(
+                        'error',
+                        'downloadMedia: downloadAndMaybeDecrypt failed',
+                        JSON.stringify(errorDetail),
+                    );
 
                 if (e.status && e.status === 404) {
                     return undefined;
