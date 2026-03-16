@@ -578,43 +578,18 @@ class Message extends Base {
                 const effectiveMediaKey = usingMessageSecret
                     ? btoa(String.fromCharCode(...msg.messageSecret))
                     : msg.mediaKey;
-                let decryptedMedia;
-                try {
-                    decryptedMedia = await window
-                        .require('WAWebDownloadManager')
-                        .downloadManager.downloadAndMaybeDecrypt({
-                            directPath: msg.directPath,
-                            encFilehash: msg.encFilehash,
-                            filehash: msg.filehash,
-                            mediaKey: effectiveMediaKey,
-                            mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                            type: msg.type,
-                            signal: new AbortController().signal,
-                            downloadQpl: mockQpl,
-                        });
-                    if (usingMessageSecret) {
-                        console.log('[wwjs-mediakey-debug] success', {
-                            msgId: msg.id?.id,
-                            bytes: decryptedMedia?.byteLength,
-                        });
-                    }
-                } catch (downloadErr) {
-                    console.log('[wwjs-mediakey-debug] error', {
-                        msgId: msg.id?.id,
-                        usingMessageSecret,
-                        mediaKeyEmpty: msg.mediaKey === '',
-                        messageSecretType: typeof msg.messageSecret,
-                        messageSecretIsUint8Array:
-                            msg.messageSecret instanceof Uint8Array,
-                        messageSecretByteLen:
-                            msg.messageSecret instanceof Uint8Array
-                                ? msg.messageSecret.byteLength
-                                : 0,
-                        mediaStage: msg.mediaData?.mediaStage,
-                        error: downloadErr?.message?.substring(0, 120),
+                const decryptedMedia = await window
+                    .require('WAWebDownloadManager')
+                    .downloadManager.downloadAndMaybeDecrypt({
+                        directPath: msg.directPath,
+                        encFilehash: msg.encFilehash,
+                        filehash: msg.filehash,
+                        mediaKey: effectiveMediaKey,
+                        mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                        type: msg.type,
+                        signal: new AbortController().signal,
+                        downloadQpl: mockQpl,
                     });
-                    throw downloadErr;
-                }
 
                 const data =
                     await window.WWebJS.arrayBufferToBase64Async(
@@ -626,6 +601,9 @@ class Message extends Base {
                     mimetype: msg.mimetype,
                     filename: msg.filename,
                     filesize: msg.size,
+                    _mediaKeyDebug: usingMessageSecret
+                        ? { bytes: decryptedMedia?.byteLength }
+                        : null,
                 };
             } catch (e) {
                 if (e.status && e.status === 404) return undefined;
@@ -634,12 +612,14 @@ class Message extends Base {
         }, this.id._serialized);
 
         if (!result) return undefined;
-        return new MessageMedia(
+        const media = new MessageMedia(
             result.mimetype,
             result.data,
             result.filename,
             result.filesize,
         );
+        if (result._mediaKeyDebug) media._mediaKeyDebug = result._mediaKeyDebug;
+        return media;
     }
 
     /**
