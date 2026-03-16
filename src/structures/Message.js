@@ -592,30 +592,36 @@ class Message extends Base {
                             signal: new AbortController().signal,
                             downloadQpl: mockQpl,
                         });
-                    if (usingMessageSecret) {
-                        console.log('[wwjs-mediakey-debug] success', {
-                            msgId: msg.id?.id,
-                            bytes: decryptedMedia?.byteLength,
-                        });
-                    }
+                    if (window.onDiagLog)
+                        window.onDiagLog(
+                            'warn',
+                            'downloadMedia: mediakey-debug success',
+                            JSON.stringify({
+                                msgId: msg.id?.id,
+                                usingMessageSecret,
+                                bytes: decryptedMedia?.byteLength,
+                            }),
+                        );
                 } catch (downloadErr) {
-                    console.error(
-                        JSON.stringify({
-                            _tag: '[wwjs-mediakey-debug] error',
-                            msgId: msg.id?.id,
-                            usingMessageSecret,
-                            mediaKeyEmpty: msg.mediaKey === '',
-                            messageSecretType: typeof msg.messageSecret,
-                            messageSecretIsUint8Array:
-                                msg.messageSecret instanceof Uint8Array,
-                            messageSecretByteLen:
-                                msg.messageSecret instanceof Uint8Array
-                                    ? msg.messageSecret.byteLength
-                                    : 0,
-                            mediaStage: msg.mediaData?.mediaStage,
-                            error: downloadErr?.message?.substring(0, 120),
-                        }),
-                    );
+                    if (window.onDiagLog)
+                        window.onDiagLog(
+                            'error',
+                            'downloadMedia: mediakey-debug error',
+                            JSON.stringify({
+                                msgId: msg.id?.id,
+                                usingMessageSecret,
+                                mediaKeyEmpty: msg.mediaKey === '',
+                                messageSecretType: typeof msg.messageSecret,
+                                messageSecretIsUint8Array:
+                                    msg.messageSecret instanceof Uint8Array,
+                                messageSecretByteLen:
+                                    msg.messageSecret instanceof Uint8Array
+                                        ? msg.messageSecret.byteLength
+                                        : 0,
+                                mediaStage: msg.mediaData?.mediaStage,
+                                error: downloadErr?.message?.substring(0, 120),
+                            }),
+                        );
                     throw downloadErr;
                 }
 
