@@ -603,6 +603,9 @@ class Message extends Base {
                         msgId: msg.id?.id,
                         usingMessageSecret,
                         mediaKeyEmpty: msg.mediaKey === '',
+                        messageSecretType: typeof msg.messageSecret,
+                        messageSecretIsUint8Array:
+                            msg.messageSecret instanceof Uint8Array,
                         messageSecretByteLen:
                             msg.messageSecret instanceof Uint8Array
                                 ? msg.messageSecret.byteLength
