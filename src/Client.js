@@ -117,7 +117,12 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
-        if (this._injectInProgress) return;
+        if (this._injectInProgress) {
+            console.warn('[wwjs-diag] inject:SKIPPED (already in progress)', {
+                ts: Date.now(),
+            });
+            return;
+        }
         this._injectInProgress = true;
 
         try {
@@ -128,13 +133,10 @@ class Client extends EventEmitter {
             } catch (_) {
                 /* page may be closed */
             }
-            console.log(
-                '[wwjs-diag] inject:start',
-                JSON.stringify({
-                    ts: _injectStart,
-                    url: _injectUrl.slice(0, 120),
-                }),
-            );
+            console.log('[wwjs-diag] inject:start', {
+                ts: _injectStart,
+                url: _injectUrl.slice(0, 120),
+            });
             this._hasSyncedTriggered = false;
 
             const authTimeout = this.options.authTimeoutMs || 30000;
@@ -177,19 +179,28 @@ class Client extends EventEmitter {
                 { timeout: authTimeout },
             );
             const needAuthentication = await needAuthHandle.jsonValue();
-            console.log(
-                '[wwjs-diag] inject:authCheck',
-                JSON.stringify({
-                    ts: Date.now(),
-                    needAuthentication: needAuthentication.need,
-                    appState: needAuthentication.state,
-                    hasSynced: needAuthentication.hasSynced,
-                }),
-            );
+            console.log('[wwjs-diag] inject:authCheck', {
+                ts: Date.now(),
+                needAuthentication: needAuthentication.need,
+                appState: needAuthentication.state,
+                hasSynced: needAuthentication.hasSynced,
+            });
 
             if (needAuthentication.need) {
                 const { failed, failureEventPayload, restart } =
                     await this.authStrategy.onAuthenticationNeeded();
+
+                console.log(
+                    '[wwjs-diag] inject:onAuthenticationNeeded result',
+                    {
+                        failed,
+                        restart,
+                        failureEventPayload: String(
+                            failureEventPayload || '',
+                        ).substring(0, 100),
+                        ts: Date.now(),
+                    },
+                );
 
                 if (failed) {
                     /**
@@ -249,7 +260,17 @@ class Client extends EventEmitter {
                             this.emit(Events.QR_RECEIVED, qr);
                             if (this.options.qrMaxRetries > 0) {
                                 qrRetries++;
+                                console.log('[wwjs-diag] onQRChangedEvent', {
+                                    qrRetries,
+                                    qrMaxRetries: this.options.qrMaxRetries,
+                                    willDisconnect:
+                                        qrRetries > this.options.qrMaxRetries,
+                                    ts: Date.now(),
+                                });
                                 if (qrRetries > this.options.qrMaxRetries) {
+                                    console.warn(
+                                        '[wwjs-diag] onQRChangedEvent DISCONNECTED max retries reached',
+                                    );
                                     this.emit(
                                         Events.DISCONNECTED,
                                         'Max qrcode retries reached',
@@ -316,15 +337,18 @@ class Client extends EventEmitter {
                 this.pupPage,
                 'onAuthAppStateChangedEvent',
                 async (state) => {
-                    console.log(
-                        '[wwjs-diag] onAuthAppStateChangedEvent',
-                        JSON.stringify({ state, ts: Date.now() }),
-                    );
+                    console.log('[wwjs-diag] onAuthAppStateChangedEvent', {
+                        state,
+                        ts: Date.now(),
+                    });
                     if (
                         state == 'UNPAIRED_IDLE' &&
                         !pairWithPhoneNumber.phoneNumber
                     ) {
-                        // refresh qr code
+                        console.log(
+                            '[wwjs-diag] onAuthAppStateChangedEvent refreshQR triggered',
+                        );
+                        // refresh qr code - must run in browser context, not Node.js
                         await this.pupPage.evaluate(() => {
                             window.require('WAWebCmd').Cmd.refreshQR();
                         });
@@ -343,10 +367,9 @@ class Client extends EventEmitter {
                         return;
                     }
                     this._hasSyncedTriggered = true;
-                    console.log(
-                        '[wwjs-diag] onAppStateHasSyncedEvent CALLED',
-                        JSON.stringify({ ts: Date.now() }),
-                    );
+                    console.log('[wwjs-diag] onAppStateHasSyncedEvent CALLED', {
+                        ts: Date.now(),
+                    });
                     try {
                         const authEventPayload =
                             await this.authStrategy.getAuthEventPayload();
@@ -362,7 +385,7 @@ class Client extends EventEmitter {
                         );
                         console.log(
                             '[wwjs-diag] onAppStateHasSyncedEvent storeCheck',
-                            JSON.stringify({ injected, ts: Date.now() }),
+                            { injected, ts: Date.now() },
                         );
 
                         if (!injected) {
@@ -411,9 +434,7 @@ class Client extends EventEmitter {
                                 });
                             console.log(
                                 '[wwjs-diag] onAppStateHasSyncedEvent Store ready',
-                                JSON.stringify({
-                                    durationMs: Date.now() - _readyStart,
-                                }),
+                                { durationMs: Date.now() - _readyStart },
                             );
 
                             this.info = new ClientInfo(
@@ -436,7 +457,15 @@ class Client extends EventEmitter {
 
                             this.interface = new InterfaceController(this);
 
+                            console.log(
+                                '[wwjs-diag] onAppStateHasSyncedEvent calling attachEventListeners',
+                                { ts: Date.now() },
+                            );
                             await this.attachEventListeners();
+                            console.log(
+                                '[wwjs-diag] onAppStateHasSyncedEvent attachEventListeners done',
+                                { ts: Date.now() },
+                            );
                         }
                         this.emit(Events.READY);
                         console.log(
@@ -446,10 +475,10 @@ class Client extends EventEmitter {
                     } catch (err) {
                         console.warn(
                             '[wwjs-diag] onAppStateHasSyncedEvent ERROR',
-                            JSON.stringify({
+                            {
                                 error: String(err?.message || err),
                                 ts: Date.now(),
-                            }),
+                            },
                         );
                         throw err;
                     }
@@ -470,10 +499,9 @@ class Client extends EventEmitter {
                 this.pupPage,
                 'onLogoutEvent',
                 async () => {
-                    console.warn(
-                        '[wwjs-diag] onLogoutEvent CALLED',
-                        JSON.stringify({ ts: Date.now() }),
-                    );
+                    console.warn('[wwjs-diag] onLogoutEvent CALLED', {
+                        ts: Date.now(),
+                    });
                     this.lastLoggedOut = true;
                     await this.pupPage
                         .waitForNavigation({ waitUntil: 'load', timeout: 5000 })
@@ -490,7 +518,7 @@ class Client extends EventEmitter {
                     state: Socket.state,
                     ts: Date.now(),
                 };
-                console.error(
+                console.warn(
                     '[wwjs-diag] listeners:registering ' +
                         JSON.stringify(_diagState),
                 );
@@ -501,7 +529,7 @@ class Client extends EventEmitter {
                         Socket,
                         'change:state',
                         (_AppState, state) => {
-                            console.error(
+                            console.warn(
                                 '[wwjs-diag] change:state FIRED ' +
                                     JSON.stringify({ state, ts: Date.now() }),
                             );
@@ -512,7 +540,7 @@ class Client extends EventEmitter {
                         Socket,
                         'change:hasSynced',
                         () => {
-                            console.error(
+                            console.warn(
                                 '[wwjs-diag] change:hasSynced FIRED ' +
                                     JSON.stringify({
                                         hasSynced: Socket.hasSynced,
@@ -538,7 +566,7 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout',
                         async () => {
-                            console.error(
+                            console.warn(
                                 '[wwjs-diag] Cmd:logout FIRED ' +
                                     JSON.stringify({ ts: Date.now() }),
                             );
@@ -549,7 +577,7 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout_from_bridge',
                         async () => {
-                            console.error(
+                            console.warn(
                                 '[wwjs-diag] Cmd:logout_from_bridge FIRED ' +
                                     JSON.stringify({ ts: Date.now() }),
                             );
@@ -560,6 +588,12 @@ class Client extends EventEmitter {
 
                 // Clean up old listeners to prevent accumulation on re-inject
                 if (window._wwjsListeners) {
+                    console.warn(
+                        '[wwjs-diag] inject:cleanupListeners removing ' +
+                            window._wwjsListeners.length +
+                            ' old listeners ts=' +
+                            Date.now(),
+                    );
                     for (const [obj, event, handler] of window._wwjsListeners) {
                         try {
                             obj.off(event, handler);
@@ -567,6 +601,11 @@ class Client extends EventEmitter {
                             /* listeners may already be gone */
                         }
                     }
+                } else {
+                    console.warn(
+                        '[wwjs-diag] inject:cleanupListeners no previous listeners ts=' +
+                            Date.now(),
+                    );
                 }
 
                 for (const [obj, event, handler] of listeners) {
@@ -576,7 +615,7 @@ class Client extends EventEmitter {
 
                 // Atomic hasSynced check in the same synchronous block as listener registration.
                 const storeInjected = typeof window.WWebJS !== 'undefined';
-                console.error(
+                console.warn(
                     '[wwjs-diag] inject:hasSyncedCheck ' +
                         JSON.stringify({
                             hasSynced: Socket.hasSynced,
@@ -587,24 +626,21 @@ class Client extends EventEmitter {
                         }),
                 );
                 if (Socket.hasSynced === true && !storeInjected) {
-                    console.error(
+                    console.warn(
                         '[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent',
                     );
                     window.onAppStateHasSyncedEvent();
                 }
-                console.error(
+                console.warn(
                     '[wwjs-diag] listeners:registered ' +
                         JSON.stringify({ ts: Date.now() }),
                 );
             });
 
-            console.log(
-                '[wwjs-diag] inject:end',
-                JSON.stringify({
-                    ts: Date.now(),
-                    durationMs: Date.now() - _injectStart,
-                }),
-            );
+            console.log('[wwjs-diag] inject:end', {
+                ts: Date.now(),
+                durationMs: Date.now() - _injectStart,
+            });
         } finally {
             this._injectInProgress = false;
         }
@@ -766,16 +802,13 @@ class Client extends EventEmitter {
             const isLogout =
                 frameUrl.includes('post_logout=1') || this.lastLoggedOut;
 
-            console.log(
-                '[wwjs-diag] framenavigated',
-                JSON.stringify({
-                    ts: Date.now(),
-                    url: frameUrl.slice(0, 150),
-                    isMainFrame,
-                    isLogout,
-                    lastLoggedOut: this.lastLoggedOut,
-                }),
-            );
+            console.log('[wwjs-diag] framenavigated', {
+                ts: Date.now(),
+                url: frameUrl.slice(0, 150),
+                isMainFrame,
+                isLogout,
+                lastLoggedOut: this.lastLoggedOut,
+            });
 
             if (isLogout) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
@@ -796,22 +829,18 @@ class Client extends EventEmitter {
 
             if (!isLogout && storeAvailable) return;
 
-            console.log(
-                '[wwjs-diag] framenavigated:inject START',
-                JSON.stringify({
-                    ts: Date.now(),
-                    url: frameUrl.slice(0, 150),
-                    storeAvailable,
-                }),
-            );
+            console.log('[wwjs-diag] framenavigated:inject START', {
+                ts: Date.now(),
+                url: frameUrl.slice(0, 150),
+                storeAvailable,
+            });
             try {
                 await this.inject();
                 console.log('[wwjs-diag] framenavigated:inject END (success)');
             } catch (err) {
-                console.warn(
-                    '[wwjs-diag] framenavigated:inject END (error)',
-                    String(err?.message || err),
-                );
+                console.warn('[wwjs-diag] framenavigated:inject END (error)', {
+                    error: String(err?.message || err),
+                });
             }
         });
     }
@@ -893,6 +922,9 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        console.log('[wwjs-diag] attachEventListeners:start', {
+            ts: Date.now(),
+        });
         // [diag] Expose diagnostic logging bridge from browser to Node.js
         await exposeFunctionIfAbsent(
             this.pupPage,
@@ -1199,12 +1231,43 @@ class Client extends EventEmitter {
                     }
                 }
 
-                if (!ACCEPTED_STATES.includes(state)) {
+                const willDisconnect = !ACCEPTED_STATES.includes(state);
+                console.log('[wwjs-diag] onAppStateChangedEvent', {
+                    state,
+                    willDisconnect,
+                    acceptedStates: ACCEPTED_STATES,
+                    takeoverOnConflict: !!this.options.takeoverOnConflict,
+                    ts: Date.now(),
+                });
+
+                if (willDisconnect) {
                     /**
                      * Emitted when the client has been disconnected
                      * @event Client#disconnected
                      * @param {WAState|"LOGOUT"} reason reason that caused the disconnect
                      */
+                    console.warn(
+                        '[wwjs-diag] onAppStateChangedEvent DISCONNECTED emitting',
+                        { state, ts: Date.now() },
+                    );
+                    let browserState = null;
+                    try {
+                        browserState = await this.pupPage.evaluate(() => ({
+                            socketState:
+                                window.require?.('WAWebSocketModel')?.Socket
+                                    ?.state,
+                            hasSynced:
+                                window.require?.('WAWebSocketModel')?.Socket
+                                    ?.hasSynced,
+                            storeInjected: typeof window.WWebJS !== 'undefined',
+                        }));
+                    } catch (_) {
+                        /* page may be closing */
+                    }
+                    console.warn(
+                        '[wwjs-diag] onAppStateChangedEvent DISCONNECTED browserState',
+                        { browserState, ts: Date.now() },
+                    );
                     await this.authStrategy.disconnect();
                     this.emit(Events.DISCONNECTED, state);
                     this.destroy();
@@ -1471,6 +1534,14 @@ class Client extends EventEmitter {
                 );
             });
             AppState.on('change:state', (_AppState, state) => {
+                console.warn(
+                    '[wwjs-diag] attachListeners:change:state FIRED ' +
+                        JSON.stringify({
+                            state,
+                            hasSynced: AppState.hasSynced,
+                            ts: Date.now(),
+                        }),
+                );
                 window.onAppStateChangedEvent(state);
             });
             window
@@ -1697,6 +1768,7 @@ class Client extends EventEmitter {
             'Store.Msg listener count',
             JSON.stringify(listenerCount),
         );
+        console.log('[wwjs-diag] attachEventListeners:end', { ts: Date.now() });
     }
 
     async initWebVersionCache() {
@@ -1739,6 +1811,11 @@ class Client extends EventEmitter {
     async destroy() {
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
+        console.warn('[wwjs-diag] destroy CALLED', {
+            browserIsConnected: isConnected,
+            ts: Date.now(),
+            stack: new Error().stack?.split('\n').slice(1, 5).join(' | '),
+        });
         if (isConnected) {
             await browser.close();
         }
