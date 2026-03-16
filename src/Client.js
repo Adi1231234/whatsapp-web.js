@@ -536,8 +536,6 @@ class Client extends EventEmitter {
             referer: 'https://whatsapp.com/',
         });
 
-        await this.inject();
-
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.parentFrame() !== null) return;
 
@@ -569,6 +567,8 @@ class Client extends EventEmitter {
                 // inject() may fail if page is still loading after navigation
             }
         });
+
+        await this.inject();
     }
 
     /**
