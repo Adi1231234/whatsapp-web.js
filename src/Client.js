@@ -117,7 +117,13 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
-        if (this._injectInProgress) return;
+        if (this._injectInProgress) {
+            console.warn(
+                '[wwjs-diag] inject:SKIPPED (already in progress)',
+                JSON.stringify({ ts: Date.now() }),
+            );
+            return;
+        }
         this._injectInProgress = true;
 
         try {
@@ -191,6 +197,18 @@ class Client extends EventEmitter {
                 const { failed, failureEventPayload, restart } =
                     await this.authStrategy.onAuthenticationNeeded();
 
+                console.log(
+                    '[wwjs-diag] inject:onAuthenticationNeeded result',
+                    JSON.stringify({
+                        failed,
+                        restart,
+                        failureEventPayload: String(
+                            failureEventPayload || '',
+                        ).substring(0, 100),
+                        ts: Date.now(),
+                    }),
+                );
+
                 if (failed) {
                     /**
                      * Emitted when there has been an error while trying to restore an existing session
@@ -249,7 +267,21 @@ class Client extends EventEmitter {
                             this.emit(Events.QR_RECEIVED, qr);
                             if (this.options.qrMaxRetries > 0) {
                                 qrRetries++;
+                                console.log(
+                                    '[wwjs-diag] onQRChangedEvent',
+                                    JSON.stringify({
+                                        qrRetries,
+                                        qrMaxRetries: this.options.qrMaxRetries,
+                                        willDisconnect:
+                                            qrRetries >
+                                            this.options.qrMaxRetries,
+                                        ts: Date.now(),
+                                    }),
+                                );
                                 if (qrRetries > this.options.qrMaxRetries) {
+                                    console.warn(
+                                        '[wwjs-diag] onQRChangedEvent DISCONNECTED max retries reached',
+                                    );
                                     this.emit(
                                         Events.DISCONNECTED,
                                         'Max qrcode retries reached',
@@ -318,12 +350,21 @@ class Client extends EventEmitter {
                 async (state) => {
                     console.log(
                         '[wwjs-diag] onAuthAppStateChangedEvent',
-                        JSON.stringify({ state, ts: Date.now() }),
+                        JSON.stringify({
+                            state,
+                            hasSynced:
+                                window.require?.('WAWebSocketModel')?.Socket
+                                    ?.hasSynced,
+                            ts: Date.now(),
+                        }),
                     );
                     if (
                         state == 'UNPAIRED_IDLE' &&
                         !pairWithPhoneNumber.phoneNumber
                     ) {
+                        console.log(
+                            '[wwjs-diag] onAuthAppStateChangedEvent refreshQR triggered',
+                        );
                         // refresh qr code
                         window.require('WAWebCmd').Cmd.refreshQR();
                     }
@@ -434,7 +475,15 @@ class Client extends EventEmitter {
 
                             this.interface = new InterfaceController(this);
 
+                            console.log(
+                                '[wwjs-diag] onAppStateHasSyncedEvent calling attachEventListeners',
+                                JSON.stringify({ ts: Date.now() }),
+                            );
                             await this.attachEventListeners();
+                            console.log(
+                                '[wwjs-diag] onAppStateHasSyncedEvent attachEventListeners done',
+                                JSON.stringify({ ts: Date.now() }),
+                            );
                         }
                         this.emit(Events.READY);
                         console.log(
@@ -1234,6 +1283,24 @@ class Client extends EventEmitter {
                         '[wwjs-diag] onAppStateChangedEvent DISCONNECTED emitting',
                         JSON.stringify({ state, ts: Date.now() }),
                     );
+                    let browserState = null;
+                    try {
+                        browserState = await this.pupPage.evaluate(() => ({
+                            socketState:
+                                window.require?.('WAWebSocketModel')?.Socket
+                                    ?.state,
+                            hasSynced:
+                                window.require?.('WAWebSocketModel')?.Socket
+                                    ?.hasSynced,
+                            storeInjected: typeof window.WWebJS !== 'undefined',
+                        }));
+                    } catch (_) {
+                        /* page may be closing */
+                    }
+                    console.warn(
+                        '[wwjs-diag] onAppStateChangedEvent DISCONNECTED browserState',
+                        JSON.stringify({ browserState, ts: Date.now() }),
+                    );
                     await this.authStrategy.disconnect();
                     this.emit(Events.DISCONNECTED, state);
                     this.destroy();
@@ -1780,6 +1847,14 @@ class Client extends EventEmitter {
     async destroy() {
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
+        console.warn(
+            '[wwjs-diag] destroy CALLED',
+            JSON.stringify({
+                browserIsConnected: isConnected,
+                ts: Date.now(),
+                stack: new Error().stack?.split('\n').slice(1, 5).join(' | '),
+            }),
+        );
         if (isConnected) {
             await browser.close();
         }
