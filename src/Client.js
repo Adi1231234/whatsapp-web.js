@@ -516,7 +516,7 @@ class Client extends EventEmitter {
                     state: Socket.state,
                     ts: Date.now(),
                 };
-                console.error(
+                console.warn(
                     '[wwjs-diag] listeners:registering ' +
                         JSON.stringify(_diagState),
                 );
@@ -527,7 +527,7 @@ class Client extends EventEmitter {
                         Socket,
                         'change:state',
                         (_AppState, state) => {
-                            console.error(
+                            console.warn(
                                 '[wwjs-diag] change:state FIRED ' +
                                     JSON.stringify({ state, ts: Date.now() }),
                             );
@@ -538,7 +538,7 @@ class Client extends EventEmitter {
                         Socket,
                         'change:hasSynced',
                         () => {
-                            console.error(
+                            console.warn(
                                 '[wwjs-diag] change:hasSynced FIRED ' +
                                     JSON.stringify({
                                         hasSynced: Socket.hasSynced,
@@ -564,7 +564,7 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout',
                         async () => {
-                            console.error(
+                            console.warn(
                                 '[wwjs-diag] Cmd:logout FIRED ' +
                                     JSON.stringify({ ts: Date.now() }),
                             );
@@ -575,7 +575,7 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout_from_bridge',
                         async () => {
-                            console.error(
+                            console.warn(
                                 '[wwjs-diag] Cmd:logout_from_bridge FIRED ' +
                                     JSON.stringify({ ts: Date.now() }),
                             );
@@ -586,7 +586,7 @@ class Client extends EventEmitter {
 
                 // Clean up old listeners to prevent accumulation on re-inject
                 if (window._wwjsListeners) {
-                    console.error(
+                    console.warn(
                         '[wwjs-diag] inject:cleanupListeners removing ' +
                             window._wwjsListeners.length +
                             ' old listeners ts=' +
@@ -600,7 +600,7 @@ class Client extends EventEmitter {
                         }
                     }
                 } else {
-                    console.error(
+                    console.warn(
                         '[wwjs-diag] inject:cleanupListeners no previous listeners ts=' +
                             Date.now(),
                     );
@@ -613,7 +613,7 @@ class Client extends EventEmitter {
 
                 // Atomic hasSynced check in the same synchronous block as listener registration.
                 const storeInjected = typeof window.WWebJS !== 'undefined';
-                console.error(
+                console.warn(
                     '[wwjs-diag] inject:hasSyncedCheck ' +
                         JSON.stringify({
                             hasSynced: Socket.hasSynced,
@@ -624,12 +624,12 @@ class Client extends EventEmitter {
                         }),
                 );
                 if (Socket.hasSynced === true && !storeInjected) {
-                    console.error(
+                    console.warn(
                         '[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent',
                     );
                     window.onAppStateHasSyncedEvent();
                 }
-                console.error(
+                console.warn(
                     '[wwjs-diag] listeners:registered ' +
                         JSON.stringify({ ts: Date.now() }),
                 );
@@ -1532,7 +1532,7 @@ class Client extends EventEmitter {
                 );
             });
             AppState.on('change:state', (_AppState, state) => {
-                console.error(
+                console.warn(
                     '[wwjs-diag] attachListeners:change:state FIRED ' +
                         JSON.stringify({
                             state,
