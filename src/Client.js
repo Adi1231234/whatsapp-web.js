@@ -1184,6 +1184,7 @@ class Client extends EventEmitter {
                         msg.once('change:type', (_msg) => {
                             clearTimeout(resendTimer);
                             clearTimeout(failTimer);
+                            if (_msg.type === 'revoked') return;
                             window.onAddMessageEvent(
                                 window.WWebJS.getMessageModel(_msg),
                             );
