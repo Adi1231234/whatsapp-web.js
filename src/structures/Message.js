@@ -571,13 +571,20 @@ class Message extends Base {
                         return this;
                     },
                 };
+                const usingMessageSecret =
+                    msg.mediaKey === '' &&
+                    msg.messageSecret instanceof Uint8Array &&
+                    msg.messageSecret.byteLength === 32;
+                const effectiveMediaKey = usingMessageSecret
+                    ? btoa(String.fromCharCode(...msg.messageSecret))
+                    : msg.mediaKey;
                 const decryptedMedia = await window
                     .require('WAWebDownloadManager')
                     .downloadManager.downloadAndMaybeDecrypt({
                         directPath: msg.directPath,
                         encFilehash: msg.encFilehash,
                         filehash: msg.filehash,
-                        mediaKey: msg.mediaKey,
+                        mediaKey: effectiveMediaKey,
                         mediaKeyTimestamp: msg.mediaKeyTimestamp,
                         type: msg.type,
                         signal: new AbortController().signal,
