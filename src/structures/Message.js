@@ -594,7 +594,7 @@ class Message extends Base {
                         });
                     if (usingMessageSecret && window.onDiagLog)
                         window.onDiagLog(
-                            'warn',
+                            'info',
                             'downloadMedia: mediakey-debug success',
                             JSON.stringify({
                                 msgId: msg.id?.id,
