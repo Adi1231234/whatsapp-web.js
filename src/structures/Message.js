@@ -592,13 +592,12 @@ class Message extends Base {
                             signal: new AbortController().signal,
                             downloadQpl: mockQpl,
                         });
-                    if (window.onDiagLog)
+                    if (usingMessageSecret && window.onDiagLog)
                         window.onDiagLog(
                             'warn',
                             'downloadMedia: mediakey-debug success',
                             JSON.stringify({
                                 msgId: msg.id?.id,
-                                usingMessageSecret,
                                 bytes: decryptedMedia?.byteLength,
                             }),
                         );
