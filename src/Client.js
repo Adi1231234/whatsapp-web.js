@@ -350,13 +350,7 @@ class Client extends EventEmitter {
                 async (state) => {
                     console.log(
                         '[wwjs-diag] onAuthAppStateChangedEvent',
-                        JSON.stringify({
-                            state,
-                            hasSynced:
-                                window.require?.('WAWebSocketModel')?.Socket
-                                    ?.hasSynced,
-                            ts: Date.now(),
-                        }),
+                        JSON.stringify({ state, ts: Date.now() }),
                     );
                     if (
                         state == 'UNPAIRED_IDLE' &&
