@@ -593,13 +593,10 @@ class Message extends Base {
                             downloadQpl: mockQpl,
                         });
                     if (usingMessageSecret) {
-                        console.error(
-                            JSON.stringify({
-                                _tag: '[wwjs-mediakey-debug] success',
-                                msgId: msg.id?.id,
-                                bytes: decryptedMedia?.byteLength,
-                            }),
-                        );
+                        console.log('[wwjs-mediakey-debug] success', {
+                            msgId: msg.id?.id,
+                            bytes: decryptedMedia?.byteLength,
+                        });
                     }
                 } catch (downloadErr) {
                     console.error(
