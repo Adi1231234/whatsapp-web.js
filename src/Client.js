@@ -1498,7 +1498,7 @@ class Client extends EventEmitter {
                 ) {
                     window.__diag?.safeDiagLog('debug', 'change:type', {
                         ...window.__wwjsDiag.diagTrace(msg),
-                        prevType: msg?.previousAttributes?.type,
+                        prevType: args[2],
                         newType: msg?.type,
                         argCount: args.length,
                         args: args.map((a) => window.__diag?.safeStr(a)),
