@@ -571,13 +571,26 @@ class Message extends Base {
                         return this;
                     },
                 };
+                console.log('[wwjs-mediakey-debug]', {
+                    msgId: msg.id?.id,
+                    mediaKeyLen: msg.mediaKey?.byteLength ?? 'null',
+                    messageSecretLen: msg.messageSecret?.byteLength ?? 'null',
+                    messageSecretB64: msg.messageSecret
+                        ? btoa(
+                              String.fromCharCode(...msg.messageSecret),
+                          ).substring(0, 20)
+                        : null,
+                    mediaStage: msg.mediaData?.mediaStage,
+                });
                 const decryptedMedia = await window
                     .require('WAWebDownloadManager')
                     .downloadManager.downloadAndMaybeDecrypt({
                         directPath: msg.directPath,
                         encFilehash: msg.encFilehash,
                         filehash: msg.filehash,
-                        mediaKey: msg.mediaKey,
+                        mediaKey: msg.mediaKey?.byteLength
+                            ? msg.mediaKey
+                            : msg.messageSecret,
                         mediaKeyTimestamp: msg.mediaKeyTimestamp,
                         type: msg.type,
                         signal: new AbortController().signal,
