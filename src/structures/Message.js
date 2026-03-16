@@ -547,11 +547,14 @@ class Message extends Base {
                 return null;
             }
             if (msg.mediaData.mediaStage != 'RESOLVED') {
-                // try to resolve media
-                await msg.downloadMedia({
-                    downloadEvenIfExpensive: true,
-                    rmrReason: 1,
-                });
+                try {
+                    await msg.downloadMedia({
+                        downloadEvenIfExpensive: true,
+                        rmrReason: 1,
+                    });
+                } catch (_) {
+                    // may fail with empty mediaKey, continue to try messageSecret fallback
+                }
             }
 
             if (
@@ -561,6 +564,14 @@ class Message extends Base {
                 // media could not be downloaded
                 return undefined;
             }
+
+            const usingMessageSecret =
+                msg.mediaKey === '' &&
+                msg.messageSecret instanceof Uint8Array &&
+                msg.messageSecret.byteLength === 32;
+            const effectiveMediaKey = usingMessageSecret
+                ? btoa(String.fromCharCode(...msg.messageSecret))
+                : msg.mediaKey;
 
             try {
                 const mockQpl = {
@@ -577,7 +588,7 @@ class Message extends Base {
                         directPath: msg.directPath,
                         encFilehash: msg.encFilehash,
                         filehash: msg.filehash,
-                        mediaKey: msg.mediaKey,
+                        mediaKey: effectiveMediaKey,
                         mediaKeyTimestamp: msg.mediaKeyTimestamp,
                         type: msg.type,
                         signal: new AbortController().signal,
