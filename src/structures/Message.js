@@ -777,6 +777,7 @@ class Message extends Base {
                     code: e?.code,
                     usingMessageSecret,
                     mediaKeyEmpty: msg.mediaKey === '',
+                    messageSecretType: typeof msg.messageSecret,
                     messageSecretIsUint8Array:
                         msg.messageSecret instanceof Uint8Array,
                     messageSecretByteLen:
