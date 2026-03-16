@@ -588,11 +588,12 @@ class Message extends Base {
                         directPath: msg.directPath,
                         encFilehash: msg.encFilehash,
                         filehash: msg.filehash,
-                        mediaKey: msg.mediaKey?.byteLength
-                            ? msg.mediaKey
-                            : msg.messageSecret?.byteLength
-                              ? msg.messageSecret
-                              : msg.mediaKey,
+                        mediaKey:
+                            msg.mediaKey instanceof Uint8Array &&
+                            msg.mediaKey.byteLength === 0 &&
+                            msg.messageSecret?.byteLength
+                                ? msg.messageSecret
+                                : msg.mediaKey,
                         mediaKeyTimestamp: msg.mediaKeyTimestamp,
                         type: msg.type,
                         signal: new AbortController().signal,
