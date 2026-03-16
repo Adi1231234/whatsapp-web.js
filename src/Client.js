@@ -1754,7 +1754,7 @@ class Client extends EventEmitter {
     async acceptInvite(inviteCode) {
         const res = await this.pupPage.evaluate(async (inviteCode) => {
             return await window
-                .require('WAWebGroupQueryJob')
+                .require('WAWebGroupInviteJob')
                 .joinGroupViaInvite(inviteCode);
         }, inviteCode);
 
