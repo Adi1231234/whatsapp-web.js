@@ -1165,13 +1165,11 @@ class Client extends EventEmitter {
                         // defer message event until ciphertext is resolved (type changed)
                         const resendTimer = setTimeout(() => {
                             try {
-                                const { sendPeerDataOperationRequest } =
-                                    window.require(
-                                        'WAWebSendNonMessageDataRequest',
-                                    );
-                                sendPeerDataOperationRequest(4, {
-                                    msgKeys: [msg.id],
-                                }).catch(() => {});
+                                window
+                                    .require(
+                                        'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+                                    )
+                                    .handlePlaceholderMsgsSeen([msg], true);
                             } catch (_) {
                                 // module may not be available
                             }
@@ -1184,6 +1182,7 @@ class Client extends EventEmitter {
                         msg.once('change:type', (_msg) => {
                             clearTimeout(resendTimer);
                             clearTimeout(failTimer);
+                            if (_msg.type === 'revoked') return;
                             window.onAddMessageEvent(
                                 window.WWebJS.getMessageModel(_msg),
                             );
