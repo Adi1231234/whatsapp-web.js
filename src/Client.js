@@ -1054,35 +1054,85 @@ class Client extends EventEmitter {
             },
         );
 
-        let last_message;
-
         await exposeFunctionIfAbsent(
             this.pupPage,
             'onChangeMessageTypeEvent',
             (msg) => {
-                if (msg.type === 'revoked') {
-                    const message = new Message(this, msg);
-                    let revoked_msg;
-                    if (last_message && msg.id.id === last_message.id.id) {
-                        revoked_msg = new Message(this, last_message);
+                const originalKey = msg.protocolMessageKey;
+                const K2 = msg.id?._serialized || msg.id?.id;
+                const K1 = originalKey?._serialized || originalKey?.id;
+                const secret = msg.messageSecret || msg.messageSecretV2 || null;
+                const secretHex = secret
+                    ? Buffer.from(Object.values(secret)).toString('hex')
+                    : null;
 
-                        if (message.protocolMessageKey)
-                            revoked_msg.id = { ...message.protocolMessageKey };
-                    }
+                console.log('[wwjs-revoke] node:received', {
+                    K2,
+                    K1,
+                    hasProtocolMessageKey: !!originalKey,
+                    idsAreDifferent: K1 !== K2,
+                    type: msg.type,
+                    K2_remote: msg.id?.remote,
+                    K2_fromMe: msg.id?.fromMe,
+                    K2_id: msg.id?.id,
+                    K2_participant: msg.id?.participant,
+                    K1_remote: originalKey?.remote,
+                    K1_fromMe: originalKey?.fromMe,
+                    K1_id: originalKey?.id,
+                    K1_participant: originalKey?.participant,
+                    remoteMatch: msg.id?.remote === originalKey?.remote,
+                    timestamp: msg.t || msg.timestamp,
+                    hasMessageSecret: !!secret,
+                    messageSecretHex: secretHex,
+                    subtype: msg.subtype,
+                    revokeTimestamp: msg.revokeTimestamp,
+                    isOverwrittenByRevoke: msg.isOverwrittenByRevoke,
+                    body:
+                        msg.body === undefined ? 'undefined' : typeof msg.body,
+                });
 
-                    /**
-                     * Emitted when a message is deleted for everyone in the chat.
-                     * @event Client#message_revoke_everyone
-                     * @param {Message} message The message that was revoked, in its current state. It will not contain the original message's data.
-                     * @param {?Message} revoked_msg The message that was revoked, before it was revoked. It will contain the message's original data.
-                     * Note that due to the way this data is captured, it may be possible that this param will be undefined.
-                     */
-                    this.emit(
-                        Events.MESSAGE_REVOKED_EVERYONE,
-                        message,
-                        revoked_msg,
-                    );
-                }
+                const message = new Message(this, { ...msg, id: originalKey });
+                const revoked_msg = originalKey
+                    ? new Message(this, { id: originalKey })
+                    : undefined;
+
+                // Log exactly what createStableKeys will compute
+                const stableRemote = message.id?.remote;
+                const stableTs = message.timestamp;
+                const stableSecretHex = secretHex;
+                const stablePrimary =
+                    stableRemote && stableSecretHex && stableTs
+                        ? `${stableRemote}_${stableSecretHex}_${stableTs}`
+                        : null;
+                const stableFallback =
+                    stableRemote && stableTs
+                        ? `${stableRemote}_${stableTs}`
+                        : null;
+
+                console.log('[wwjs-revoke] node:emitting', {
+                    messageId: message.id?._serialized || message.id?.id,
+                    messageRemote: stableRemote,
+                    messageTimestamp: stableTs,
+                    messageSecretHex: stableSecretHex,
+                    stableKey_primary: stablePrimary,
+                    stableKey_fallback: stableFallback,
+                    hasRevokedMsg: !!revoked_msg,
+                    revokedMsgId:
+                        revoked_msg?.id?._serialized || revoked_msg?.id?.id,
+                });
+
+                /**
+                 * Emitted when a message is deleted for everyone in the chat.
+                 * @event Client#message_revoke_everyone
+                 * @param {Message} message The message that was revoked, in its current state. It will not contain the original message's data.
+                 * @param {?Message} revoked_msg The message that was revoked, before it was revoked. It will contain the message's original data.
+                 * Note that due to the way this data is captured, it may be possible that this param will be undefined.
+                 */
+                this.emit(
+                    Events.MESSAGE_REVOKED_EVERYONE,
+                    message,
+                    revoked_msg,
+                );
             },
         );
 
@@ -1090,10 +1140,6 @@ class Client extends EventEmitter {
             this.pupPage,
             'onChangeMessageEvent',
             (msg) => {
-                if (msg.type !== 'revoked') {
-                    last_message = msg;
-                }
-
                 /**
                  * The event notification that is received when one of
                  * the group participants changes their phone number.
@@ -1504,6 +1550,56 @@ class Client extends EventEmitter {
                         args: args.map((a) => window.__diag?.safeStr(a)),
                     });
                 }
+                if (msg.type !== 'revoked') return;
+
+                var pk = msg.protocolMessageKey;
+                var serialized = null;
+                try {
+                    serialized = msg.serialize();
+                } catch (serializeErr) {
+                    window.__diag?.safeDiagLog(
+                        'error',
+                        'revoke:serialize-failed',
+                        {
+                            error: String(serializeErr),
+                        },
+                    );
+                }
+
+                window.__diag?.safeDiagLog('info', 'revoke:browser', {
+                    currentId: msg.id?._serialized?.toString(),
+                    protocolMessageKey: pk?._serialized?.toString(),
+                    hasProtocolMessageKey: !!pk,
+                    idsAreDifferent:
+                        pk?._serialized?.toString() !==
+                        msg.id?._serialized?.toString(),
+                    K2_remote: msg.id?.remote?.toString(),
+                    K2_fromMe: msg.id?.fromMe,
+                    K2_id: msg.id?.id,
+                    K2_participant: msg.id?.participant?.toString(),
+                    K1_remote: pk?.remote?.toString(),
+                    K1_fromMe: pk?.fromMe,
+                    K1_id: pk?.id,
+                    K1_participant: pk?.participant?.toString(),
+                    remoteMatch:
+                        msg.id?.remote?.toString() === pk?.remote?.toString(),
+                    type: msg.type,
+                    timestamp: msg.t,
+                    hasMessageSecret: !!msg.messageSecret,
+                    messageSecretType: msg.messageSecret
+                        ? typeof msg.messageSecret
+                        : 'absent',
+                    subtype: msg.subtype,
+                    revokeTimestamp: msg.revokeTimestamp,
+                    isOverwrittenByRevoke: msg.isOverwrittenByRevoke,
+                    body: msg.body === undefined ? 'cleared' : typeof msg.body,
+                    serializeHasProtocolMessageKey:
+                        !!serialized?.protocolMessageKey,
+                    serializeIdRemoteType: typeof serialized?.id?.remote,
+                    serializePkRemoteType:
+                        typeof serialized?.protocolMessageKey?.remote,
+                });
+
                 window.onChangeMessageTypeEvent(
                     window.WWebJS.getMessageModel(msg),
                 );
