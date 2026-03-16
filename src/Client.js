@@ -348,8 +348,10 @@ class Client extends EventEmitter {
                         console.log(
                             '[wwjs-diag] onAuthAppStateChangedEvent refreshQR triggered',
                         );
-                        // refresh qr code
-                        window.require('WAWebCmd').Cmd.refreshQR();
+                        // refresh qr code - must run in browser context, not Node.js
+                        await this.pupPage.evaluate(() => {
+                            window.require('WAWebCmd').Cmd.refreshQR();
+                        });
                     }
                 },
             );
