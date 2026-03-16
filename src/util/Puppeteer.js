@@ -15,9 +15,11 @@ async function exposeFunctionIfAbsent(page, name, fn) {
         return !!window[name];
     }, name);
     if (exist) {
+        console.warn('[wwjs-diag] exposeFunctionIfAbsent SKIPPED', name);
         return;
     }
     await page.exposeFunction(name, fn);
+    console.warn('[wwjs-diag] exposeFunctionIfAbsent EXPOSED', name);
 }
 
 module.exports = { exposeFunctionIfAbsent };
