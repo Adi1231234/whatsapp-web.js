@@ -590,7 +590,9 @@ class Message extends Base {
                         filehash: msg.filehash,
                         mediaKey: msg.mediaKey?.byteLength
                             ? msg.mediaKey
-                            : msg.messageSecret,
+                            : msg.messageSecret?.byteLength
+                              ? msg.messageSecret
+                              : msg.mediaKey,
                         mediaKeyTimestamp: msg.mediaKeyTimestamp,
                         type: msg.type,
                         signal: new AbortController().signal,
