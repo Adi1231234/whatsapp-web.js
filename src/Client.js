@@ -288,7 +288,9 @@ class Client extends EventEmitter {
                         !pairWithPhoneNumber.phoneNumber
                     ) {
                         // refresh qr code
-                        window.require('WAWebCmd').Cmd.refreshQR();
+                        await this.pupPage.evaluate(() => {
+                            window.require('WAWebCmd').Cmd.refreshQR();
+                        });
                     }
                 },
             );
