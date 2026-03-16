@@ -573,27 +573,28 @@ class Message extends Base {
                 };
                 console.log('[wwjs-mediakey-debug]', {
                     msgId: msg.id?.id,
-                    mediaKeyLen: msg.mediaKey?.byteLength ?? 'null',
-                    messageSecretLen: msg.messageSecret?.byteLength ?? 'null',
-                    messageSecretB64: msg.messageSecret
-                        ? btoa(
-                              String.fromCharCode(...msg.messageSecret),
-                          ).substring(0, 20)
-                        : null,
+                    mediaKeyType: typeof msg.mediaKey,
+                    mediaKeyLen: msg.mediaKey?.length ?? 0,
+                    mediaKeyEmpty: msg.mediaKey === '',
+                    messageSecretByteLen:
+                        msg.messageSecret instanceof Uint8Array
+                            ? msg.messageSecret.byteLength
+                            : 0,
                     mediaStage: msg.mediaData?.mediaStage,
                 });
+                const effectiveMediaKey =
+                    msg.mediaKey === '' &&
+                    msg.messageSecret instanceof Uint8Array &&
+                    msg.messageSecret.byteLength === 32
+                        ? btoa(String.fromCharCode(...msg.messageSecret))
+                        : msg.mediaKey;
                 const decryptedMedia = await window
                     .require('WAWebDownloadManager')
                     .downloadManager.downloadAndMaybeDecrypt({
                         directPath: msg.directPath,
                         encFilehash: msg.encFilehash,
                         filehash: msg.filehash,
-                        mediaKey:
-                            msg.mediaKey instanceof Uint8Array &&
-                            msg.mediaKey.byteLength === 0 &&
-                            msg.messageSecret?.byteLength
-                                ? msg.messageSecret
-                                : msg.mediaKey,
+                        mediaKey: effectiveMediaKey,
                         mediaKeyTimestamp: msg.mediaKeyTimestamp,
                         type: msg.type,
                         signal: new AbortController().signal,
