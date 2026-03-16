@@ -14,7 +14,10 @@ const {
 } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { LoadUtils } = require('./util/Injected/Utils');
-const { InjectDiagCommon, shouldSkipMsg: _shouldSkipDiagMsg } = require('./util/Injected/DiagCommon');
+const {
+    InjectDiagCommon,
+    shouldSkipMsg: _shouldSkipDiagMsg,
+} = require('./util/Injected/DiagCommon');
 const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
@@ -120,8 +123,18 @@ class Client extends EventEmitter {
         try {
             const _injectStart = Date.now();
             let _injectUrl = '';
-            try { _injectUrl = this.pupPage?.url?.() || ''; } catch (_) { /* page may be closed */ }
-            console.log('[wwjs-diag] inject:start', JSON.stringify({ ts: _injectStart, url: _injectUrl.slice(0, 120) }));
+            try {
+                _injectUrl = this.pupPage?.url?.() || '';
+            } catch (_) {
+                /* page may be closed */
+            }
+            console.log(
+                '[wwjs-diag] inject:start',
+                JSON.stringify({
+                    ts: _injectStart,
+                    url: _injectUrl.slice(0, 120),
+                }),
+            );
             this._hasSyncedTriggered = false;
 
             const authTimeout = this.options.authTimeoutMs || 30000;
@@ -156,18 +169,23 @@ class Client extends EventEmitter {
                     return {
                         need: state === 'UNPAIRED' || state === 'UNPAIRED_IDLE',
                         state,
-                        hasSynced: window.require?.('WAWebSocketModel')?.Socket?.hasSynced,
+                        hasSynced:
+                            window.require?.('WAWebSocketModel')?.Socket
+                                ?.hasSynced,
                     };
                 },
                 { timeout: authTimeout },
             );
             const needAuthentication = await needAuthHandle.jsonValue();
-            console.log('[wwjs-diag] inject:authCheck', JSON.stringify({
-                ts: Date.now(),
-                needAuthentication: needAuthentication.need,
-                appState: needAuthentication.state,
-                hasSynced: needAuthentication.hasSynced
-            }));
+            console.log(
+                '[wwjs-diag] inject:authCheck',
+                JSON.stringify({
+                    ts: Date.now(),
+                    needAuthentication: needAuthentication.need,
+                    appState: needAuthentication.state,
+                    hasSynced: needAuthentication.hasSynced,
+                }),
+            );
 
             if (needAuthentication.need) {
                 const { failed, failureEventPayload, restart } =
@@ -298,7 +316,10 @@ class Client extends EventEmitter {
                 this.pupPage,
                 'onAuthAppStateChangedEvent',
                 async (state) => {
-                    console.log('[wwjs-diag] onAuthAppStateChangedEvent', JSON.stringify({ state, ts: Date.now() }));
+                    console.log(
+                        '[wwjs-diag] onAuthAppStateChangedEvent',
+                        JSON.stringify({ state, ts: Date.now() }),
+                    );
                     if (
                         state == 'UNPAIRED_IDLE' &&
                         !pairWithPhoneNumber.phoneNumber
@@ -314,29 +335,43 @@ class Client extends EventEmitter {
                 'onAppStateHasSyncedEvent',
                 async () => {
                     if (this._hasSyncedTriggered) {
-                        console.warn('[wwjs-diag] onAppStateHasSyncedEvent SKIPPED (already handled)');
+                        console.warn(
+                            '[wwjs-diag] onAppStateHasSyncedEvent SKIPPED (already handled)',
+                        );
                         return;
                     }
                     this._hasSyncedTriggered = true;
-                    console.log('[wwjs-diag] onAppStateHasSyncedEvent CALLED', JSON.stringify({ ts: Date.now() }));
+                    console.log(
+                        '[wwjs-diag] onAppStateHasSyncedEvent CALLED',
+                        JSON.stringify({ ts: Date.now() }),
+                    );
                     try {
                         const authEventPayload =
                             await this.authStrategy.getAuthEventPayload();
                         this.emit(Events.AUTHENTICATED, authEventPayload);
-                        console.log('[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted');
+                        console.log(
+                            '[wwjs-diag] onAppStateHasSyncedEvent AUTHENTICATED emitted',
+                        );
 
-                        const injected = await this.pupPage.evaluate(async () => {
-                            return typeof window.WWebJS !== 'undefined';
-                        });
-                        console.log('[wwjs-diag] onAppStateHasSyncedEvent storeCheck', JSON.stringify({ injected, ts: Date.now() }));
+                        const injected = await this.pupPage.evaluate(
+                            async () => {
+                                return typeof window.WWebJS !== 'undefined';
+                            },
+                        );
+                        console.log(
+                            '[wwjs-diag] onAppStateHasSyncedEvent storeCheck',
+                            JSON.stringify({ injected, ts: Date.now() }),
+                        );
 
                         if (!injected) {
                             if (
                                 this.options.webVersionCache.type === 'local' &&
                                 this.currentIndexHtml
                             ) {
-                                const { type: webCacheType, ...webCacheOptions } =
-                                    this.options.webVersionCache;
+                                const {
+                                    type: webCacheType,
+                                    ...webCacheOptions
+                                } = this.options.webVersionCache;
                                 const webCache = WebCacheFactory.createWebCache(
                                     webCacheType,
                                     webCacheOptions,
@@ -356,7 +391,9 @@ class Client extends EventEmitter {
 
                             // Inject diagnostic hooks (media download, signal/crypto, receipts, etc.)
                             await this.pupPage.evaluate(InjectDiagHooks);
-                            console.log('[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...');
+                            console.log(
+                                '[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...',
+                            );
                             const _readyStart = Date.now();
 
                             await this.pupPage
@@ -365,10 +402,17 @@ class Client extends EventEmitter {
                                     { timeout: 30000 },
                                 )
                                 .catch(() => {
-                                    console.warn('[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s');
+                                    console.warn(
+                                        '[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s',
+                                    );
                                     throw 'ready timeout';
                                 });
-                            console.log('[wwjs-diag] onAppStateHasSyncedEvent Store ready', JSON.stringify({ durationMs: Date.now() - _readyStart }));
+                            console.log(
+                                '[wwjs-diag] onAppStateHasSyncedEvent Store ready',
+                                JSON.stringify({
+                                    durationMs: Date.now() - _readyStart,
+                                }),
+                            );
 
                             this.info = new ClientInfo(
                                 this,
@@ -393,13 +437,18 @@ class Client extends EventEmitter {
                             await this.attachEventListeners();
                         }
                         this.emit(Events.READY);
-                        console.log('[wwjs-diag] onAppStateHasSyncedEvent READY emitted');
+                        console.log(
+                            '[wwjs-diag] onAppStateHasSyncedEvent READY emitted',
+                        );
                         this.authStrategy.afterAuthReady();
                     } catch (err) {
-                        console.warn('[wwjs-diag] onAppStateHasSyncedEvent ERROR', JSON.stringify({
-                            error: String(err?.message || err),
-                            ts: Date.now()
-                        }));
+                        console.warn(
+                            '[wwjs-diag] onAppStateHasSyncedEvent ERROR',
+                            JSON.stringify({
+                                error: String(err?.message || err),
+                                ts: Date.now(),
+                            }),
+                        );
                         throw err;
                     }
                 },
@@ -419,7 +468,10 @@ class Client extends EventEmitter {
                 this.pupPage,
                 'onLogoutEvent',
                 async () => {
-                    console.warn('[wwjs-diag] onLogoutEvent CALLED', JSON.stringify({ ts: Date.now() }));
+                    console.warn(
+                        '[wwjs-diag] onLogoutEvent CALLED',
+                        JSON.stringify({ ts: Date.now() }),
+                    );
                     this.lastLoggedOut = true;
                     await this.pupPage
                         .waitForNavigation({ waitUntil: 'load', timeout: 5000 })
@@ -434,9 +486,12 @@ class Client extends EventEmitter {
                 const _diagState = {
                     hasSynced: Socket.hasSynced,
                     state: Socket.state,
-                    ts: Date.now()
+                    ts: Date.now(),
                 };
-                console.error('[wwjs-diag] listeners:registering ' + JSON.stringify(_diagState));
+                console.error(
+                    '[wwjs-diag] listeners:registering ' +
+                        JSON.stringify(_diagState),
+                );
                 window._wwjsDiagAppState = Socket;
 
                 const listeners = [
@@ -444,7 +499,10 @@ class Client extends EventEmitter {
                         Socket,
                         'change:state',
                         (_AppState, state) => {
-                            console.error('[wwjs-diag] change:state FIRED ' + JSON.stringify({ state, ts: Date.now() }));
+                            console.error(
+                                '[wwjs-diag] change:state FIRED ' +
+                                    JSON.stringify({ state, ts: Date.now() }),
+                            );
                             window.onAuthAppStateChangedEvent(state);
                         },
                     ],
@@ -452,12 +510,16 @@ class Client extends EventEmitter {
                         Socket,
                         'change:hasSynced',
                         () => {
-                            console.error('[wwjs-diag] change:hasSynced FIRED ' + JSON.stringify({
-                                hasSynced: Socket.hasSynced,
-                                state: Socket.state,
-                                sameAppState: Socket === window._wwjsDiagAppState,
-                                ts: Date.now()
-                            }));
+                            console.error(
+                                '[wwjs-diag] change:hasSynced FIRED ' +
+                                    JSON.stringify({
+                                        hasSynced: Socket.hasSynced,
+                                        state: Socket.state,
+                                        sameAppState:
+                                            Socket === window._wwjsDiagAppState,
+                                        ts: Date.now(),
+                                    }),
+                            );
                             window.onAppStateHasSyncedEvent();
                         },
                     ],
@@ -474,7 +536,10 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout',
                         async () => {
-                            console.error('[wwjs-diag] Cmd:logout FIRED ' + JSON.stringify({ ts: Date.now() }));
+                            console.error(
+                                '[wwjs-diag] Cmd:logout FIRED ' +
+                                    JSON.stringify({ ts: Date.now() }),
+                            );
                             await window.onLogoutEvent();
                         },
                     ],
@@ -482,7 +547,10 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout_from_bridge',
                         async () => {
-                            console.error('[wwjs-diag] Cmd:logout_from_bridge FIRED ' + JSON.stringify({ ts: Date.now() }));
+                            console.error(
+                                '[wwjs-diag] Cmd:logout_from_bridge FIRED ' +
+                                    JSON.stringify({ ts: Date.now() }),
+                            );
                             await window.onLogoutEvent();
                         },
                     ],
@@ -490,6 +558,12 @@ class Client extends EventEmitter {
 
                 // Clean up old listeners to prevent accumulation on re-inject
                 if (window._wwjsListeners) {
+                    console.error(
+                        '[wwjs-diag] inject:cleanupListeners removing ' +
+                            window._wwjsListeners.length +
+                            ' old listeners ts=' +
+                            Date.now(),
+                    );
                     for (const [obj, event, handler] of window._wwjsListeners) {
                         try {
                             obj.off(event, handler);
@@ -497,6 +571,11 @@ class Client extends EventEmitter {
                             /* listeners may already be gone */
                         }
                     }
+                } else {
+                    console.error(
+                        '[wwjs-diag] inject:cleanupListeners no previous listeners ts=' +
+                            Date.now(),
+                    );
                 }
 
                 for (const [obj, event, handler] of listeners) {
@@ -506,21 +585,35 @@ class Client extends EventEmitter {
 
                 // Atomic hasSynced check in the same synchronous block as listener registration.
                 const storeInjected = typeof window.WWebJS !== 'undefined';
-                console.error('[wwjs-diag] inject:hasSyncedCheck ' + JSON.stringify({
-                    hasSynced: Socket.hasSynced,
-                    state: Socket.state,
-                    storeInjected,
-                    sameAppState: Socket === window._wwjsDiagAppState,
-                    ts: Date.now()
-                }));
+                console.error(
+                    '[wwjs-diag] inject:hasSyncedCheck ' +
+                        JSON.stringify({
+                            hasSynced: Socket.hasSynced,
+                            state: Socket.state,
+                            storeInjected,
+                            sameAppState: Socket === window._wwjsDiagAppState,
+                            ts: Date.now(),
+                        }),
+                );
                 if (Socket.hasSynced === true && !storeInjected) {
-                    console.error('[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent');
+                    console.error(
+                        '[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent',
+                    );
                     window.onAppStateHasSyncedEvent();
                 }
-                console.error('[wwjs-diag] listeners:registered ' + JSON.stringify({ ts: Date.now() }));
+                console.error(
+                    '[wwjs-diag] listeners:registered ' +
+                        JSON.stringify({ ts: Date.now() }),
+                );
             });
 
-            console.log('[wwjs-diag] inject:end', JSON.stringify({ ts: Date.now(), durationMs: Date.now() - _injectStart }));
+            console.log(
+                '[wwjs-diag] inject:end',
+                JSON.stringify({
+                    ts: Date.now(),
+                    durationMs: Date.now() - _injectStart,
+                }),
+            );
         } finally {
             this._injectInProgress = false;
         }
@@ -602,17 +695,32 @@ class Client extends EventEmitter {
             const cdpSession = await this.pupPage.target().createCDPSession();
             await cdpSession.send('Runtime.enable');
             cdpSession.on('Runtime.executionContextDestroyed', (event) => {
-                this.emit('diag', 'warn', 'CDP_CONTEXT_DESTROYED', JSON.stringify({
-                    executionContextId: event.executionContextId,
-                    ts: Date.now()
-                }));
+                this.emit(
+                    'diag',
+                    'warn',
+                    'CDP_CONTEXT_DESTROYED',
+                    JSON.stringify({
+                        executionContextId: event.executionContextId,
+                        ts: Date.now(),
+                    }),
+                );
             });
             cdpSession.on('Runtime.executionContextsCleared', () => {
-                this.emit('diag', 'warn', 'CDP_CONTEXTS_CLEARED', JSON.stringify({ ts: Date.now() }));
+                this.emit(
+                    'diag',
+                    'warn',
+                    'CDP_CONTEXTS_CLEARED',
+                    JSON.stringify({ ts: Date.now() }),
+                );
             });
             this._diagCdpSession = cdpSession;
         } catch (e) {
-            this.emit('diag', 'error', 'CDP_MONITOR_SETUP_FAILED', JSON.stringify({ error: String(e?.message || e) }));
+            this.emit(
+                'diag',
+                'error',
+                'CDP_MONITOR_SETUP_FAILED',
+                JSON.stringify({ error: String(e?.message || e) }),
+            );
         }
 
         // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
@@ -623,21 +731,35 @@ class Client extends EventEmitter {
             self._diagEvalInflight++;
             const inflight = self._diagEvalInflight;
             if (inflight > 20) {
-                self.emit('diag', 'warn', 'HIGH_EVAL_CONCURRENCY', JSON.stringify({ inflight, ts: Date.now() }));
+                self.emit(
+                    'diag',
+                    'warn',
+                    'HIGH_EVAL_CONCURRENCY',
+                    JSON.stringify({ inflight, ts: Date.now() }),
+                );
             }
             try {
                 return await origEvaluate(...args);
             } catch (err) {
-                const isPromiseCollected = err.message?.includes('Promise was collected');
-                const isContextDestroyed = err.message?.includes('Execution context was destroyed');
+                const isPromiseCollected = err.message?.includes(
+                    'Promise was collected',
+                );
+                const isContextDestroyed = err.message?.includes(
+                    'Execution context was destroyed',
+                );
                 if (isPromiseCollected || isContextDestroyed) {
-                    self.emit('diag', 'error', 'EVALUATE_CDP_ERROR', JSON.stringify({
-                        inflight: self._diagEvalInflight,
-                        error: err.message,
-                        isPromiseCollected,
-                        isContextDestroyed,
-                        ts: Date.now()
-                    }));
+                    self.emit(
+                        'diag',
+                        'error',
+                        'EVALUATE_CDP_ERROR',
+                        JSON.stringify({
+                            inflight: self._diagEvalInflight,
+                            error: err.message,
+                            isPromiseCollected,
+                            isContextDestroyed,
+                            ts: Date.now(),
+                        }),
+                    );
                 }
                 throw err;
             } finally {
@@ -653,13 +775,16 @@ class Client extends EventEmitter {
             const isLogout =
                 frameUrl.includes('post_logout=1') || this.lastLoggedOut;
 
-            console.log('[wwjs-diag] framenavigated', JSON.stringify({
-                ts: Date.now(),
-                url: frameUrl.slice(0, 150),
-                isMainFrame,
-                isLogout,
-                lastLoggedOut: this.lastLoggedOut
-            }));
+            console.log(
+                '[wwjs-diag] framenavigated',
+                JSON.stringify({
+                    ts: Date.now(),
+                    url: frameUrl.slice(0, 150),
+                    isMainFrame,
+                    isLogout,
+                    lastLoggedOut: this.lastLoggedOut,
+                }),
+            );
 
             if (isLogout) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
@@ -680,12 +805,22 @@ class Client extends EventEmitter {
 
             if (!isLogout && storeAvailable) return;
 
-            console.log('[wwjs-diag] framenavigated:inject START', JSON.stringify({ ts: Date.now(), url: frameUrl.slice(0, 150), storeAvailable }));
+            console.log(
+                '[wwjs-diag] framenavigated:inject START',
+                JSON.stringify({
+                    ts: Date.now(),
+                    url: frameUrl.slice(0, 150),
+                    storeAvailable,
+                }),
+            );
             try {
                 await this.inject();
                 console.log('[wwjs-diag] framenavigated:inject END (success)');
             } catch (err) {
-                console.warn('[wwjs-diag] framenavigated:inject END (error)', String(err?.message || err));
+                console.warn(
+                    '[wwjs-diag] framenavigated:inject END (error)',
+                    String(err?.message || err),
+                );
             }
         });
     }
@@ -767,10 +902,18 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        console.log(
+            '[wwjs-diag] attachEventListeners:start',
+            JSON.stringify({ ts: Date.now() }),
+        );
         // [diag] Expose diagnostic logging bridge from browser to Node.js
-        await exposeFunctionIfAbsent(this.pupPage, 'onDiagLog', (level, tag, data) => {
-            this.emit('diag', level, tag, data);
-        });
+        await exposeFunctionIfAbsent(
+            this.pupPage,
+            'onDiagLog',
+            (level, tag, data) => {
+                this.emit('diag', level, tag, data);
+            },
+        );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
@@ -779,15 +922,26 @@ class Client extends EventEmitter {
                 // [L4] Diagnostic: log non-skipped messages
                 const _skipDiag = msg.type === 'gp2' || _shouldSkipDiagMsg(msg);
                 if (!_skipDiag) {
-                    this.emit('diag', 'debug', 'onAddMessageEvent', JSON.stringify({
-                        traceId: msg.id?._serialized || msg.id?.id,
-                        type: msg.type,
-                        from: typeof msg.from === 'object' ? msg.from?._serialized : msg.from,
-                        to: typeof msg.to === 'object' ? msg.to?._serialized : msg.to,
-                        hasMedia: !!msg.directPath,
-                        isStatusV3: msg.isStatusV3 || false,
-                        idRemote: msg.id?.remote || null
-                    }));
+                    this.emit(
+                        'diag',
+                        'debug',
+                        'onAddMessageEvent',
+                        JSON.stringify({
+                            traceId: msg.id?._serialized || msg.id?.id,
+                            type: msg.type,
+                            from:
+                                typeof msg.from === 'object'
+                                    ? msg.from?._serialized
+                                    : msg.from,
+                            to:
+                                typeof msg.to === 'object'
+                                    ? msg.to?._serialized
+                                    : msg.to,
+                            hasMedia: !!msg.directPath,
+                            isStatusV3: msg.isStatusV3 || false,
+                            idRemote: msg.id?.remote || null,
+                        }),
+                    );
                 }
 
                 if (msg.type === 'gp2') {
@@ -859,10 +1013,15 @@ class Client extends EventEmitter {
 
                 // [L5] Log fromMe gate decision
                 if (!_skipDiag) {
-                    this.emit('diag', 'debug', 'fromMe gate', JSON.stringify({
-                        traceId: msg.id?._serialized || msg.id?.id,
-                        fromMe: msg.id.fromMe
-                    }));
+                    this.emit(
+                        'diag',
+                        'debug',
+                        'fromMe gate',
+                        JSON.stringify({
+                            traceId: msg.id?._serialized || msg.id?.id,
+                            fromMe: msg.id.fromMe,
+                        }),
+                    );
                 }
 
                 if (msg.id.fromMe) return;
@@ -1053,12 +1212,28 @@ class Client extends EventEmitter {
                     }
                 }
 
-                if (!ACCEPTED_STATES.includes(state)) {
+                const willDisconnect = !ACCEPTED_STATES.includes(state);
+                console.log(
+                    '[wwjs-diag] onAppStateChangedEvent',
+                    JSON.stringify({
+                        state,
+                        willDisconnect,
+                        acceptedStates: ACCEPTED_STATES,
+                        takeoverOnConflict: !!this.options.takeoverOnConflict,
+                        ts: Date.now(),
+                    }),
+                );
+
+                if (willDisconnect) {
                     /**
                      * Emitted when the client has been disconnected
                      * @event Client#disconnected
                      * @param {WAState|"LOGOUT"} reason reason that caused the disconnect
                      */
+                    console.warn(
+                        '[wwjs-diag] onAppStateChangedEvent DISCONNECTED emitting',
+                        JSON.stringify({ state, ts: Date.now() }),
+                    );
                     await this.authStrategy.disconnect();
                     this.emit(Events.DISCONNECTED, state);
                     this.destroy();
@@ -1239,7 +1414,9 @@ class Client extends EventEmitter {
                     const serialized = wid?._serialized || String(wid || '');
                     if (!serialized) return '';
                     if (!serialized.endsWith('@lid')) return serialized;
-                    const contact = window.require('WAWebCollections').Contact?.get(wid);
+                    const contact = window
+                        .require('WAWebCollections')
+                        .Contact?.get(wid);
                     const phone = contact?.phoneNumber?._serialized;
                     return phone || serialized;
                 } catch (e) {
@@ -1254,7 +1431,11 @@ class Client extends EventEmitter {
                     const to = window.__wwjsDiag.resolvePhone(msg.to);
                     return { traceId, from, to };
                 } catch (e) {
-                    return { traceId: msg.id?._serialized || '', from: msg.from?._serialized || '', to: msg.to?._serialized || '' };
+                    return {
+                        traceId: msg.id?._serialized || '',
+                        from: msg.from?._serialized || '',
+                        to: msg.to?._serialized || '',
+                    };
                 }
             };
 
@@ -1275,16 +1456,23 @@ class Client extends EventEmitter {
             });
             Msg.on('change:type', (...args) => {
                 var [msg] = args;
-                if (!window.__diag?.isStatusOrGroup(msg?.from) && !window.__diag?.isStatusOrGroup(msg?.to) && !window.__diag?.isStatusOrGroup(msg?.id?.remote) && !msg?.isStatusV3) {
+                if (
+                    !window.__diag?.isStatusOrGroup(msg?.from) &&
+                    !window.__diag?.isStatusOrGroup(msg?.to) &&
+                    !window.__diag?.isStatusOrGroup(msg?.id?.remote) &&
+                    !msg?.isStatusV3
+                ) {
                     window.__diag?.safeDiagLog('debug', 'change:type', {
                         ...window.__wwjsDiag.diagTrace(msg),
                         prevType: msg?.previousAttributes?.type,
                         newType: msg?.type,
                         argCount: args.length,
-                        args: args.map(a => window.__diag?.safeStr(a))
+                        args: args.map((a) => window.__diag?.safeStr(a)),
                     });
                 }
-                window.onChangeMessageTypeEvent(window.WWebJS.getMessageModel(msg));
+                window.onChangeMessageTypeEvent(
+                    window.WWebJS.getMessageModel(msg),
+                );
             });
             Msg.on('change:ack', (msg, ack) => {
                 window.onMessageAckEvent(
@@ -1312,6 +1500,14 @@ class Client extends EventEmitter {
                 );
             });
             AppState.on('change:state', (_AppState, state) => {
+                console.error(
+                    '[wwjs-diag] attachListeners:change:state FIRED ' +
+                        JSON.stringify({
+                            state,
+                            hasSynced: AppState.hasSynced,
+                            ts: Date.now(),
+                        }),
+                );
                 window.onAppStateChangedEvent(state);
             });
             window
@@ -1354,7 +1550,8 @@ class Client extends EventEmitter {
                             const remaining = [];
                             for (const v of __handledByAdd) remaining.push(v);
                             __handledByAdd.clear();
-                            for (const v of remaining.slice(1000)) __handledByAdd.add(v);
+                            for (const v of remaining.slice(1000))
+                                __handledByAdd.add(v);
                         }
                     }
                     if (msg.type === 'ciphertext') {
@@ -1380,13 +1577,17 @@ class Client extends EventEmitter {
                         msg.once('change:type', (_msg) => {
                             clearTimeout(resendTimer);
                             clearTimeout(failTimer);
-                            window.onDiagLog?.('debug', 'CIPHERTEXT_DEFERRED_RESOLVED', JSON.stringify({
-                                traceId: _msg.id?._serialized || '',
-                                resolvedType: _msg.type,
-                                from: _msg.from?._serialized || '',
-                                hasDirectPath: !!_msg.directPath,
-                                hasMediaKey: !!_msg.mediaKey,
-                            }));
+                            window.onDiagLog?.(
+                                'debug',
+                                'CIPHERTEXT_DEFERRED_RESOLVED',
+                                JSON.stringify({
+                                    traceId: _msg.id?._serialized || '',
+                                    resolvedType: _msg.type,
+                                    from: _msg.from?._serialized || '',
+                                    hasDirectPath: !!_msg.directPath,
+                                    hasMediaKey: !!_msg.mediaKey,
+                                }),
+                            );
                             if (_msg.type === 'revoked') return;
                             window.onAddMessageEvent(
                                 window.WWebJS.getMessageModel(_msg),
@@ -1411,12 +1612,18 @@ class Client extends EventEmitter {
                     if (!msg.isNewMsg) return;
                     if (msg.type === 'ciphertext') return;
                     __handledByAdd.add(id);
-                    window.onDiagLog?.('warn', 'ADD_BYPASS_RECOVERED', JSON.stringify({
-                        traceId: id,
-                        type: msg.type,
-                        from: msg.from?._serialized || '',
-                    }));
-                    window.onAddMessageEvent(window.WWebJS.getMessageModel(msg));
+                    window.onDiagLog?.(
+                        'warn',
+                        'ADD_BYPASS_RECOVERED',
+                        JSON.stringify({
+                            traceId: id,
+                            type: msg.type,
+                            from: msg.from?._serialized || '',
+                        }),
+                    );
+                    window.onAddMessageEvent(
+                        window.WWebJS.getMessageModel(msg),
+                    );
                 } catch (e) {
                     // Fallback must never break the main flow
                 }
@@ -1502,17 +1709,35 @@ class Client extends EventEmitter {
         //       Fall back to checking _events directly.
         const listenerCount = await this.pupPage.evaluate(() => {
             const Msg = window.require('WAWebCollections').Msg;
-            var addCount = -1, changeTypeCount = -1;
+            var addCount = -1,
+                changeTypeCount = -1;
             if (typeof Msg.listeners === 'function') {
                 addCount = Msg.listeners('add')?.length ?? -1;
                 changeTypeCount = Msg.listeners('change:type')?.length ?? -1;
             } else if (Msg._events) {
-                addCount = Msg._events['add'] ? (Array.isArray(Msg._events['add']) ? Msg._events['add'].length : 1) : 0;
-                changeTypeCount = Msg._events['change:type'] ? (Array.isArray(Msg._events['change:type']) ? Msg._events['change:type'].length : 1) : 0;
+                addCount = Msg._events['add']
+                    ? Array.isArray(Msg._events['add'])
+                        ? Msg._events['add'].length
+                        : 1
+                    : 0;
+                changeTypeCount = Msg._events['change:type']
+                    ? Array.isArray(Msg._events['change:type'])
+                        ? Msg._events['change:type'].length
+                        : 1
+                    : 0;
             }
             return { add: addCount, changeType: changeTypeCount };
         });
-        this.emit('diag', 'info', 'Store.Msg listener count', JSON.stringify(listenerCount));
+        this.emit(
+            'diag',
+            'info',
+            'Store.Msg listener count',
+            JSON.stringify(listenerCount),
+        );
+        console.log(
+            '[wwjs-diag] attachEventListeners:end',
+            JSON.stringify({ ts: Date.now() }),
+        );
     }
 
     async initWebVersionCache() {
@@ -1995,15 +2220,24 @@ class Client extends EventEmitter {
             }, contactId);
         } catch (err) {
             const took = Date.now() - start;
-            this.emit('diag', 'error', 'getContactById:failed', JSON.stringify({
-                contactId: contactId?.substring?.(0, 30),
-                took,
-                inflight: this._diagEvalInflight || -1,
-                isPromiseCollected: err.message?.includes('Promise was collected'),
-                isContextDestroyed: err.message?.includes('Execution context was destroyed'),
-                isLid: contactId?.endsWith?.('@lid'),
-                error: String(err.message || err).substring(0, 200)
-            }));
+            this.emit(
+                'diag',
+                'error',
+                'getContactById:failed',
+                JSON.stringify({
+                    contactId: contactId?.substring?.(0, 30),
+                    took,
+                    inflight: this._diagEvalInflight || -1,
+                    isPromiseCollected: err.message?.includes(
+                        'Promise was collected',
+                    ),
+                    isContextDestroyed: err.message?.includes(
+                        'Execution context was destroyed',
+                    ),
+                    isLid: contactId?.endsWith?.('@lid'),
+                    error: String(err.message || err).substring(0, 200),
+                }),
+            );
             throw err;
         }
 
