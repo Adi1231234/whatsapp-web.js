@@ -589,18 +589,35 @@ class Message extends Base {
                     usingMessageSecret: effectiveMediaKey !== msg.mediaKey,
                     mediaStage: msg.mediaData?.mediaStage,
                 });
-                const decryptedMedia = await window
-                    .require('WAWebDownloadManager')
-                    .downloadManager.downloadAndMaybeDecrypt({
-                        directPath: msg.directPath,
-                        encFilehash: msg.encFilehash,
-                        filehash: msg.filehash,
-                        mediaKey: effectiveMediaKey,
-                        mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                        type: msg.type,
-                        signal: new AbortController().signal,
-                        downloadQpl: mockQpl,
+                let decryptedMedia;
+                try {
+                    decryptedMedia = await window
+                        .require('WAWebDownloadManager')
+                        .downloadManager.downloadAndMaybeDecrypt({
+                            directPath: msg.directPath,
+                            encFilehash: msg.encFilehash,
+                            filehash: msg.filehash,
+                            mediaKey: effectiveMediaKey,
+                            mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                            type: msg.type,
+                            signal: new AbortController().signal,
+                            downloadQpl: mockQpl,
+                        });
+                    console.log('[wwjs-mediakey-debug] result', {
+                        msgId: msg.id?.id,
+                        usingMessageSecret: effectiveMediaKey !== msg.mediaKey,
+                        success: true,
+                        bytes: decryptedMedia?.byteLength,
                     });
+                } catch (downloadErr) {
+                    console.log('[wwjs-mediakey-debug] result', {
+                        msgId: msg.id?.id,
+                        usingMessageSecret: effectiveMediaKey !== msg.mediaKey,
+                        success: false,
+                        error: downloadErr?.message?.substring(0, 120),
+                    });
+                    throw downloadErr;
+                }
 
                 const data =
                     await window.WWebJS.arrayBufferToBase64Async(
