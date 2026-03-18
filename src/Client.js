@@ -1968,7 +1968,13 @@ class Client extends EventEmitter {
             stack: new Error().stack?.split('\n').slice(1, 5).join(' | '),
         });
         if (isConnected) {
-            await browser.close();
+            // Close the browser only if this client spawned it (process() !== null).
+            // For connected/external browsers, just disconnect the CDP session.
+            if (browser.process()) {
+                await browser.close();
+            } else {
+                browser.disconnect();
+            }
         }
         await this.authStrategy.destroy();
     }
@@ -1980,13 +1986,17 @@ class Client extends EventEmitter {
         await this.pupPage.evaluate(() => {
             return window.require('WAWebSocketModel').Socket.logout();
         });
-        await this.pupBrowser.close();
 
-        let maxDelay = 0;
-        while (this.pupBrowser.isConnected() && maxDelay < 10) {
-            // waits a maximum of 1 second before calling the AuthStrategy
-            await new Promise((resolve) => setTimeout(resolve, 100));
-            maxDelay++;
+        if (this.pupBrowser.process()) {
+            await this.pupBrowser.close();
+
+            let maxDelay = 0;
+            while (this.pupBrowser.isConnected() && maxDelay < 10) {
+                await new Promise((resolve) => setTimeout(resolve, 100));
+                maxDelay++;
+            }
+        } else {
+            this.pupBrowser.disconnect();
         }
 
         await this.authStrategy.logout();
