@@ -1050,10 +1050,12 @@ exports.LoadUtils = () => {
         const contact = await window
             .require('WAWebCollections')
             .Contact.find(contactId);
-        const bizProfile = await window
-            .require('WAWebCollections')
-            .BusinessProfile.find(contactId);
-        bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+        if (contact.isBusiness || contact.isEnterprise) {
+            const bizProfile = await window
+                .require('WAWebCollections')
+                .BusinessProfile.find(contactId);
+            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+        }
         return window.WWebJS.getContactModel(contact);
     };
 
