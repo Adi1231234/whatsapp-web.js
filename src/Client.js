@@ -1159,43 +1159,60 @@ class Client extends EventEmitter {
                     prevState,
                 );
             });
-            Msg.on('add', (msg) => {
-                if (msg.isNewMsg) {
-                    if (msg.type === 'ciphertext') {
-                        // defer message event until ciphertext is resolved (type changed)
-                        const resendTimer = setTimeout(() => {
-                            try {
-                                window
-                                    .require(
-                                        'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
-                                    )
-                                    .handlePlaceholderMsgsSeen([msg], true);
-                            } catch (_) {
-                                // module may not be available
-                            }
-                        }, 5000);
-                        const failTimer = setTimeout(() => {
-                            window.onCiphertextFailedEvent(
-                                window.WWebJS.getMessageModel(msg),
-                            );
-                        }, 15000);
-                        msg.once('change:type', (_msg) => {
-                            clearTimeout(resendTimer);
-                            clearTimeout(failTimer);
-                            if (_msg.type === 'revoked') return;
-                            window.onAddMessageEvent(
-                                window.WWebJS.getMessageModel(_msg),
-                            );
-                        });
-                        window.onAddMessageCiphertextEvent(
-                            window.WWebJS.getMessageModel(msg),
-                        );
-                    } else {
-                        window.onAddMessageEvent(
-                            window.WWebJS.getMessageModel(msg),
-                        );
+            const pendingResend = new Set();
+            let resendFlush = null;
+
+            function requestResend(msg) {
+                pendingResend.add(msg);
+                if (resendFlush) return;
+                resendFlush = setTimeout(() => {
+                    resendFlush = null;
+                    const msgs = [...pendingResend];
+                    pendingResend.clear();
+                    if (msgs.length === 0) return;
+                    try {
+                        window
+                            .require(
+                                'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+                            )
+                            .handlePlaceholderMsgsSeen(msgs, true);
+                    } catch (_) {
+                        // module may not be available
                     }
+                }, 5000);
+            }
+
+            Msg.on('add', (msg) => {
+                if (!msg.isNewMsg) return;
+
+                if (msg.type !== 'ciphertext') {
+                    window.onAddMessageEvent(
+                        window.WWebJS.getMessageModel(msg),
+                    );
+                    return;
                 }
+
+                requestResend(msg);
+
+                const failTimer = setTimeout(() => {
+                    if (msg.type !== 'ciphertext') return;
+                    window.onCiphertextFailedEvent(
+                        window.WWebJS.getMessageModel(msg),
+                    );
+                }, 15000);
+
+                msg.once('change:type', (_msg) => {
+                    clearTimeout(failTimer);
+                    pendingResend.delete(_msg);
+                    if (_msg.type === 'revoked') return;
+                    window.onAddMessageEvent(
+                        window.WWebJS.getMessageModel(_msg),
+                    );
+                });
+
+                window.onAddMessageCiphertextEvent(
+                    window.WWebJS.getMessageModel(msg),
+                );
             });
             Chat.on('change:unreadCount', (chat) => {
                 window.onChatUnreadCountEvent(chat);
