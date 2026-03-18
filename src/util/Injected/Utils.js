@@ -286,7 +286,9 @@ exports.LoadUtils = () => {
 
         let vcardOptions = {};
         if (options.contactCard) {
-            let contact = await window.WWebJS.findContact(options.contactCard);
+            let contact = await window
+                .require('WAWebCollections')
+                .Contact.find(options.contactCard);
             vcardOptions = {
                 body: window
                     .require('WAWebFrontendVcardUtils')
@@ -298,7 +300,7 @@ exports.LoadUtils = () => {
         } else if (options.contactCardList) {
             let contacts = await Promise.all(
                 options.contactCardList.map((c) =>
-                    window.WWebJS.findContact(c),
+                    window.require('WAWebCollections').Contact.find(c),
                 ),
             );
             let vcards = contacts.map((c) =>
@@ -956,14 +958,10 @@ exports.LoadUtils = () => {
                 window.require('WAWebCollections').GroupMetadata ||
                 window.require('WAWebCollections').WAWebGroupMetadataCollection;
             await groupMetadata.update(chatWid);
+            const { toPn } = window.require('WAWebLidMigrationUtils');
             const serializedMetadata = chat.groupMetadata.serialize();
-            const participantModels = chat.groupMetadata.participants._models;
             for (const p of serializedMetadata.participants || []) {
-                if (!p.id?._serialized?.endsWith('@lid')) continue;
-                const phone = participantModels.find(
-                    (m) => m.id?._serialized === p.id._serialized,
-                )?.contact?.phoneNumber;
-                if (phone) p.id = phone;
+                p.id = toPn(p.id) ?? p.id;
             }
             model.groupMetadata = serializedMetadata;
             model.isReadOnly = chat.groupMetadata.announce;
@@ -1007,15 +1005,13 @@ exports.LoadUtils = () => {
         return model;
     };
 
-    window.WWebJS.findContact = async (id) => {
-        const wid = window.require('WAWebWidFactory').createWid(id);
-        return window.require('WAWebCollections').Contact.find(wid);
-    };
-
     window.WWebJS.getContactModel = (contact) => {
         let res = contact.serialize();
 
-        if (res.id?._serialized?.endsWith('@lid') && contact.phoneNumber) {
+        const wid = window
+            .require('WAWebWidFactory')
+            .createWidFromWidLike(contact.id);
+        if (wid.isLid() && contact.phoneNumber) {
             res.id = contact.phoneNumber;
         }
 
@@ -1051,14 +1047,15 @@ exports.LoadUtils = () => {
     };
 
     window.WWebJS.getContact = async (contactId) => {
-        const wid = window.require('WAWebWidFactory').createWid(contactId);
         const contact = await window
             .require('WAWebCollections')
-            .Contact.find(wid);
-        const bizProfile = await window
-            .require('WAWebCollections')
-            .BusinessProfile.find(wid);
-        bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+            .Contact.find(contactId);
+        if (contact.isBusiness || contact.isEnterprise) {
+            const bizProfile = await window
+                .require('WAWebCollections')
+                .BusinessProfile.find(contactId);
+            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+        }
         return window.WWebJS.getContactModel(contact);
     };
 
