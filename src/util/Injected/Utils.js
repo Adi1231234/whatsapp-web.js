@@ -1084,12 +1084,15 @@ exports.LoadUtils = () => {
                 .require('WAWebCollections')
                 .Contact.find(contactId);
             findTook = Date.now() - start;
-            const bizStart = Date.now();
-            const bizProfile = await window
-                .require('WAWebCollections')
-                .BusinessProfile.find(contactId);
-            bizTook = Date.now() - bizStart;
-            bizProfile.profileOptions && (contact.businessProfile = bizProfile);
+            if (contact.isBusiness || contact.isEnterprise) {
+                const bizStart = Date.now();
+                const bizProfile = await window
+                    .require('WAWebCollections')
+                    .BusinessProfile.find(contactId);
+                bizTook = Date.now() - bizStart;
+                bizProfile.profileOptions &&
+                    (contact.businessProfile = bizProfile);
+            }
             const totalTook = Date.now() - start;
             if (totalTook > 200) {
                 if (window.onDiagLog)
