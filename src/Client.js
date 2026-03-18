@@ -1669,6 +1669,39 @@ class Client extends EventEmitter {
             const __handledByAdd = new Set();
             const __HANDLED_SET_CAP = 5000;
 
+            const pendingResend = new Set();
+            let resendFlush = null;
+
+            function requestResend(msg) {
+                pendingResend.add(msg);
+                if (resendFlush) return;
+                resendFlush = setTimeout(() => {
+                    resendFlush = null;
+                    const msgs = [...pendingResend];
+                    pendingResend.clear();
+                    if (msgs.length === 0) return;
+                    window.onDiagLog?.(
+                        'info',
+                        'CIPHERTEXT_BATCH_FLUSH',
+                        JSON.stringify({
+                            count: msgs.length,
+                            ids: msgs
+                                .slice(0, 5)
+                                .map((m) => m.id?._serialized || ''),
+                        }),
+                    );
+                    try {
+                        window
+                            .require(
+                                'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+                            )
+                            .handlePlaceholderMsgsSeen(msgs, true);
+                    } catch (_) {
+                        // module may not be available
+                    }
+                }, 5000);
+            }
+
             Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
                     const _id = msg.id?._serialized;
@@ -1684,53 +1717,71 @@ class Client extends EventEmitter {
                                 __handledByAdd.add(v);
                         }
                     }
-                    if (msg.type === 'ciphertext') {
-                        // defer message event until ciphertext is resolved (type changed)
-                        const resendTimer = setTimeout(() => {
-                            try {
-                                const { sendPeerDataOperationRequest } =
-                                    window.require(
-                                        'WAWebSendNonMessageDataRequest',
-                                    );
-                                sendPeerDataOperationRequest(4, {
-                                    msgKeys: [msg.id],
-                                }).catch(() => {});
-                            } catch (_) {
-                                // module may not be available
-                            }
-                        }, 5000);
-                        const failTimer = setTimeout(() => {
-                            window.onCiphertextFailedEvent(
-                                window.WWebJS.getMessageModel(msg),
-                            );
-                        }, 15000);
-                        msg.once('change:type', (_msg) => {
-                            clearTimeout(resendTimer);
-                            clearTimeout(failTimer);
-                            window.onDiagLog?.(
-                                'debug',
-                                'CIPHERTEXT_DEFERRED_RESOLVED',
-                                JSON.stringify({
-                                    traceId: _msg.id?._serialized || '',
-                                    resolvedType: _msg.type,
-                                    from: _msg.from?._serialized || '',
-                                    hasDirectPath: !!_msg.directPath,
-                                    hasMediaKey: !!_msg.mediaKey,
-                                }),
-                            );
-                            if (_msg.type === 'revoked') return;
-                            window.onAddMessageEvent(
-                                window.WWebJS.getMessageModel(_msg),
-                            );
-                        });
-                        window.onAddMessageCiphertextEvent(
-                            window.WWebJS.getMessageModel(msg),
-                        );
-                    } else {
+
+                    if (msg.type !== 'ciphertext') {
                         window.onAddMessageEvent(
                             window.WWebJS.getMessageModel(msg),
                         );
+                        return;
                     }
+
+                    window.onDiagLog?.(
+                        'debug',
+                        'CIPHERTEXT_BUFFERED',
+                        JSON.stringify({
+                            traceId: _id || '',
+                            from: msg.from?._serialized || '',
+                            subtype: msg.subtype || null,
+                            pendingCount: pendingResend.size + 1,
+                            flushScheduled: !!resendFlush,
+                        }),
+                    );
+
+                    requestResend(msg);
+                    const _arrivalTs = Date.now();
+
+                    const failTimer = setTimeout(() => {
+                        if (msg.type !== 'ciphertext') {
+                            window.onDiagLog?.(
+                                'debug',
+                                'CIPHERTEXT_FAIL_SKIPPED',
+                                JSON.stringify({
+                                    traceId: _id || '',
+                                    currentType: msg.type,
+                                }),
+                            );
+                            return;
+                        }
+                        window.onCiphertextFailedEvent(
+                            window.WWebJS.getMessageModel(msg),
+                        );
+                    }, 15000);
+
+                    msg.once('change:type', (_msg) => {
+                        clearTimeout(failTimer);
+                        const wasPending = pendingResend.delete(_msg);
+                        window.onDiagLog?.(
+                            'debug',
+                            'CIPHERTEXT_DEFERRED_RESOLVED',
+                            JSON.stringify({
+                                traceId: _msg.id?._serialized || '',
+                                resolvedType: _msg.type,
+                                from: _msg.from?._serialized || '',
+                                hasDirectPath: !!_msg.directPath,
+                                hasMediaKey: !!_msg.mediaKey,
+                                removedFromBuffer: wasPending,
+                                elapsed: Date.now() - _arrivalTs,
+                            }),
+                        );
+                        if (_msg.type === 'revoked') return;
+                        window.onAddMessageEvent(
+                            window.WWebJS.getMessageModel(_msg),
+                        );
+                    });
+
+                    window.onAddMessageCiphertextEvent(
+                        window.WWebJS.getMessageModel(msg),
+                    );
                 }
             });
 
