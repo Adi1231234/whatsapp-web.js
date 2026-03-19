@@ -442,11 +442,7 @@ class Client extends EventEmitter {
                 // Clean up old listeners to prevent accumulation on re-inject
                 if (window._wwjsListeners) {
                     for (const [obj, event, handler] of window._wwjsListeners) {
-                        try {
-                            obj.off(event, handler);
-                        } catch (e) {
-                            /* listeners may already be gone */
-                        }
+                        obj.off(event, handler);
                     }
                 }
 
