@@ -802,6 +802,7 @@ exports.LoadUtils = () => {
 
     window.WWebJS.getMessageModel = (message) => {
         const msg = message.serialize();
+        if (!msg) return null;
 
         const { findLinks } = window.require('WALinkify');
 

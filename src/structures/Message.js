@@ -548,10 +548,14 @@ class Message extends Base {
             }
             if (msg.mediaData.mediaStage != 'RESOLVED') {
                 // try to resolve media
-                await msg.downloadMedia({
-                    downloadEvenIfExpensive: true,
-                    rmrReason: 1,
-                });
+                try {
+                    await msg.downloadMedia({
+                        downloadEvenIfExpensive: true,
+                        rmrReason: 1,
+                    });
+                } catch (_) {
+                    // resolve may fail; continue to check mediaStage
+                }
             }
 
             if (

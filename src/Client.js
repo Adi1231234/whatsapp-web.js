@@ -295,10 +295,15 @@ class Client extends EventEmitter {
                 },
             );
 
+            this._hasSyncedTriggered = false;
+
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onAppStateHasSyncedEvent',
                 async () => {
+                    if (this._hasSyncedTriggered) return;
+                    this._hasSyncedTriggered = true;
+
                     const authEventPayload =
                         await this.authStrategy.getAuthEventPayload();
                     /**
@@ -1150,6 +1155,8 @@ class Client extends EventEmitter {
                     prevState,
                 );
             });
+            const __handledByAdd = new Set();
+            const __HANDLED_SET_CAP = 5000;
             const pendingResend = new Set();
             let resendFlush = null;
 
@@ -1175,6 +1182,16 @@ class Client extends EventEmitter {
 
             Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
+                    const _id = msg.id?._serialized;
+                    if (_id) {
+                        __handledByAdd.add(_id);
+                        if (__handledByAdd.size > __HANDLED_SET_CAP) {
+                            const keep = [...__handledByAdd].slice(-1000);
+                            __handledByAdd.clear();
+                            for (const v of keep) __handledByAdd.add(v);
+                        }
+                    }
+
                     if (msg.type !== 'ciphertext') {
                         window.onAddMessageEvent(
                             window.WWebJS.getMessageModel(msg),
@@ -1204,6 +1221,15 @@ class Client extends EventEmitter {
                         window.WWebJS.getMessageModel(msg),
                     );
                 }
+            });
+            // Fallback: catch messages that bypass the 'add' event
+            Msg.on('change:type', (msg) => {
+                const id = msg.id?._serialized;
+                if (!id || __handledByAdd.has(id)) return;
+                if (!msg.isNewMsg) return;
+                if (msg.type === 'ciphertext') return;
+                __handledByAdd.add(id);
+                window.onAddMessageEvent(window.WWebJS.getMessageModel(msg));
             });
             Chat.on('change:unreadCount', (chat) => {
                 window.onChatUnreadCountEvent(chat);
