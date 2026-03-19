@@ -1528,12 +1528,8 @@ class Client extends EventEmitter {
             const AppState = window.require('WAWebSocketModel').Socket;
 
             // Enable placeholder message resend (recovery for ciphertext messages)
-            try {
-                const gatingUtils = window.require('WAWebSyncGatingUtils');
-                gatingUtils.isPlaceholderMessageResendEnabled = () => true;
-            } catch (_) {
-                // Module may not be available in all versions
-            }
+            const gatingUtils = window.require('WAWebSyncGatingUtils');
+            gatingUtils.isPlaceholderMessageResendEnabled = () => true;
 
             Msg.on('change', (msg) => {
                 window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg));
@@ -1694,15 +1690,11 @@ class Client extends EventEmitter {
                                 .map((m) => m.id?._serialized || ''),
                         }),
                     );
-                    try {
-                        window
-                            .require(
-                                'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
-                            )
-                            .handlePlaceholderMsgsSeen(msgs, true);
-                    } catch (_) {
-                        // module may not be available
-                    }
+                    window
+                        .require(
+                            'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+                        )
+                        .handlePlaceholderMsgsSeen(msgs, true);
                 }, 5000);
             }
 
