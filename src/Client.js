@@ -240,8 +240,6 @@ class Client extends EventEmitter {
                             window.AuthStore.Base64Tools.encodeB64(
                                 registrationInfo.identityKeyPair.pubKey,
                             );
-                        const advSecretKey =
-                            await window.AuthStore.RegistrationUtils.getADVSecretKey();
                         const platform =
                             window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
                         const getQR = (ref) =>
@@ -251,7 +249,9 @@ class Client extends EventEmitter {
                             ',' +
                             identityKeyB64 +
                             ',' +
-                            advSecretKey +
+                            window
+                                .require('WAWebUserPrefsMultiDevice')
+                                .getADVSecretKey() +
                             ',' +
                             platform;
                         window.getQR = getQR;
@@ -637,13 +637,19 @@ class Client extends EventEmitter {
      * Cancels an active pairing code session and returns to QR code mode
      */
     async cancelPairingCode() {
-        await this.pupPage.evaluate(() => {
+        await this.pupPage.evaluate(async () => {
             if (window.codeInterval) {
                 clearInterval(window.codeInterval);
                 window.codeInterval = undefined;
             }
-            window.AuthStore.PairingCodeLinkUtils.initializeQRLinking();
-            window.onQRChangedEvent(window.getQR(window.AuthStore.Conn.ref));
+            // Mirror WhatsApp Web's internal resetLinkDeviceState (bundle_09:50457):
+            // 1. Restart WebSocket to get fresh refs from server
+            window.require('WAWebLaunchSocketUtils').refreshQR();
+            // 2. Generate new ADV key and reset pairing state
+            await window
+                .require('WAWebAltDeviceLinkingApi')
+                .initializeQRLinking();
+            // QR emission happens automatically via change:ref when new refs arrive
         });
     }
 
