@@ -730,35 +730,29 @@ class Client extends EventEmitter {
             },
         );
 
-        let last_message;
-
         await exposeFunctionIfAbsent(
             this.pupPage,
             'onChangeMessageTypeEvent',
             (msg) => {
-                if (msg.type === 'revoked') {
-                    const message = new Message(this, msg);
-                    let revoked_msg;
-                    if (last_message && msg.id.id === last_message.id.id) {
-                        revoked_msg = new Message(this, last_message);
+                const originalKey = msg.protocolMessageKey;
 
-                        if (message.protocolMessageKey)
-                            revoked_msg.id = { ...message.protocolMessageKey };
-                    }
+                /**
+                 * Emitted when a message is deleted for everyone in the chat.
+                 * @event Client#message_revoke_everyone
+                 * @param {Message} message The message that was revoked, in its current state. It will not contain the original message's data.
+                 * @param {?Message} revoked_msg The message that was revoked, before it was revoked. It will contain the message's original data.
+                 * Note that due to the way this data is captured, it may be possible that this param will be undefined.
+                 */
+                const message = new Message(this, { ...msg, id: originalKey });
+                const revoked_msg = originalKey
+                    ? new Message(this, { id: originalKey })
+                    : undefined;
 
-                    /**
-                     * Emitted when a message is deleted for everyone in the chat.
-                     * @event Client#message_revoke_everyone
-                     * @param {Message} message The message that was revoked, in its current state. It will not contain the original message's data.
-                     * @param {?Message} revoked_msg The message that was revoked, before it was revoked. It will contain the message's original data.
-                     * Note that due to the way this data is captured, it may be possible that this param will be undefined.
-                     */
-                    this.emit(
-                        Events.MESSAGE_REVOKED_EVERYONE,
-                        message,
-                        revoked_msg,
-                    );
-                }
+                this.emit(
+                    Events.MESSAGE_REVOKED_EVERYONE,
+                    message,
+                    revoked_msg,
+                );
             },
         );
 
@@ -766,10 +760,6 @@ class Client extends EventEmitter {
             this.pupPage,
             'onChangeMessageEvent',
             (msg) => {
-                if (msg.type !== 'revoked') {
-                    last_message = msg;
-                }
-
                 /**
                  * The event notification that is received when one of
                  * the group participants changes their phone number.
@@ -1102,6 +1092,7 @@ class Client extends EventEmitter {
                 window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg));
             });
             Msg.on('change:type', (msg) => {
+                if (msg.type !== 'revoked') return;
                 window.onChangeMessageTypeEvent(
                     window.WWebJS.getMessageModel(msg),
                 );
@@ -1159,42 +1150,59 @@ class Client extends EventEmitter {
                     prevState,
                 );
             });
+            const pendingResend = new Set();
+            let resendFlush = null;
+
+            function requestResend(msg) {
+                pendingResend.add(msg);
+                if (resendFlush) return;
+                resendFlush = setTimeout(() => {
+                    resendFlush = null;
+                    const msgs = [...pendingResend];
+                    pendingResend.clear();
+                    if (msgs.length === 0) return;
+                    try {
+                        window
+                            .require(
+                                'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+                            )
+                            .handlePlaceholderMsgsSeen(msgs, true);
+                    } catch (_) {
+                        // module may not be available
+                    }
+                }, 5000);
+            }
+
             Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
-                    if (msg.type === 'ciphertext') {
-                        // defer message event until ciphertext is resolved (type changed)
-                        const resendTimer = setTimeout(() => {
-                            try {
-                                window
-                                    .require(
-                                        'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
-                                    )
-                                    .handlePlaceholderMsgsSeen([msg], true);
-                            } catch (_) {
-                                // module may not be available
-                            }
-                        }, 5000);
-                        const failTimer = setTimeout(() => {
-                            window.onCiphertextFailedEvent(
-                                window.WWebJS.getMessageModel(msg),
-                            );
-                        }, 15000);
-                        msg.once('change:type', (_msg) => {
-                            clearTimeout(resendTimer);
-                            clearTimeout(failTimer);
-                            if (_msg.type === 'revoked') return;
-                            window.onAddMessageEvent(
-                                window.WWebJS.getMessageModel(_msg),
-                            );
-                        });
-                        window.onAddMessageCiphertextEvent(
-                            window.WWebJS.getMessageModel(msg),
-                        );
-                    } else {
+                    if (msg.type !== 'ciphertext') {
                         window.onAddMessageEvent(
                             window.WWebJS.getMessageModel(msg),
                         );
+                        return;
                     }
+
+                    requestResend(msg);
+
+                    const failTimer = setTimeout(() => {
+                        if (msg.type !== 'ciphertext') return;
+                        window.onCiphertextFailedEvent(
+                            window.WWebJS.getMessageModel(msg),
+                        );
+                    }, 15000);
+
+                    msg.once('change:type', (_msg) => {
+                        clearTimeout(failTimer);
+                        pendingResend.delete(_msg);
+                        if (_msg.type === 'revoked') return;
+                        window.onAddMessageEvent(
+                            window.WWebJS.getMessageModel(_msg),
+                        );
+                    });
+
+                    window.onAddMessageCiphertextEvent(
+                        window.WWebJS.getMessageModel(msg),
+                    );
                 }
             });
             Chat.on('change:unreadCount', (chat) => {
