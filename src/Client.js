@@ -547,22 +547,13 @@ class Client extends EventEmitter {
                 this.lastLoggedOut = false;
             }
 
-            let storeAvailable = false;
-            try {
-                storeAvailable = await this.pupPage.evaluate(() => {
-                    return typeof window.WWebJS !== 'undefined';
-                });
-            } catch (e) {
-                /* page may not be ready */
-            }
+            const storeAvailable = await this.pupPage.evaluate(() => {
+                return typeof window.WWebJS !== 'undefined';
+            });
 
             if (!isLogout && storeAvailable) return;
 
-            try {
-                await this.inject();
-            } catch (err) {
-                // inject() may fail if page is still loading after navigation
-            }
+            await this.inject();
         });
     }
 
