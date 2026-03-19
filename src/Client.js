@@ -713,10 +713,6 @@ class Client extends EventEmitter {
             referer: 'https://whatsapp.com/',
         });
 
-        console.log('[wwjs-diag] initialize:inject START (first call)');
-        await this.inject();
-        console.log('[wwjs-diag] initialize:inject END (first call)');
-
         // [diag:promise-collected] Monitor execution context lifecycle via CDP
         try {
             const cdpSession = await this.pupPage.target().createCDPSession();
@@ -843,6 +839,10 @@ class Client extends EventEmitter {
                 });
             }
         });
+
+        console.log('[wwjs-diag] initialize:inject START (first call)');
+        await this.inject();
+        console.log('[wwjs-diag] initialize:inject END (first call)');
     }
 
     /**
