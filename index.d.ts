@@ -198,7 +198,7 @@ declare namespace WAWebJS {
         ): Promise<string>;
 
         /** Cancels an active pairing code session and returns to QR code mode */
-        cancelPairingCode(): Promise<void>
+        cancelPairingCode(): Promise<void>;
 
         /** Force reset of connection state for the client */
         resetState(): Promise<void>;
@@ -542,6 +542,15 @@ declare namespace WAWebJS {
             event: 'message_ciphertext',
             listener: (
                 /** The message that was ciphertext */
+                message: Message,
+            ) => void,
+        ): this;
+
+        /** Emitted when a ciphertext message failed to decrypt after recovery attempt */
+        on(
+            event: 'message_ciphertext_failed',
+            listener: (
+                /** The message that failed to decrypt */
                 message: Message,
             ) => void,
         ): this;
