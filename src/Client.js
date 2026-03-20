@@ -666,7 +666,7 @@ class Client extends EventEmitter {
 
         const puppeteerOpts = this.options.puppeteer;
         if (puppeteerOpts && puppeteerOpts.browser && puppeteerOpts.page) {
-            // External browser + page (e.g. Electron BrowserView via remote-debugging-port)
+            // External browser + page provided by caller
             browser = puppeteerOpts.browser;
             page = puppeteerOpts.page;
         } else if (
@@ -1968,8 +1968,6 @@ class Client extends EventEmitter {
             stack: new Error().stack?.split('\n').slice(1, 5).join(' | '),
         });
         if (isConnected) {
-            // Close the browser only if this client spawned it (process() !== null).
-            // For connected/external browsers, just disconnect the CDP session.
             if (browser.process()) {
                 await browser.close();
             } else {
