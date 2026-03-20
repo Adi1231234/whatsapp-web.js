@@ -240,8 +240,6 @@ class Client extends EventEmitter {
                             window.AuthStore.Base64Tools.encodeB64(
                                 registrationInfo.identityKeyPair.pubKey,
                             );
-                        const advSecretKey =
-                            await window.AuthStore.RegistrationUtils.getADVSecretKey();
                         const platform =
                             window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
                         const getQR = (ref) =>
@@ -251,11 +249,11 @@ class Client extends EventEmitter {
                             ',' +
                             identityKeyB64 +
                             ',' +
-                            advSecretKey +
+                            window
+                                .require('WAWebUserPrefsMultiDevice')
+                                .getADVSecretKey() +
                             ',' +
                             platform;
-                        window.getQR = getQR;
-
                         const onRefChange = (_, ref) => {
                             if (ref == null) return;
                             window.onQRChangedEvent(getQR(ref));
@@ -443,11 +441,7 @@ class Client extends EventEmitter {
                 // Clean up old listeners to prevent accumulation on re-inject
                 if (window._wwjsListeners) {
                     for (const [obj, event, handler] of window._wwjsListeners) {
-                        try {
-                            obj.off(event, handler);
-                        } catch (e) {
-                            /* listeners may already be gone */
-                        }
+                        obj.off(event, handler);
                     }
                 }
 
@@ -536,6 +530,8 @@ class Client extends EventEmitter {
             referer: 'https://whatsapp.com/',
         });
 
+        await this.inject();
+
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.parentFrame() !== null) return;
 
@@ -550,25 +546,14 @@ class Client extends EventEmitter {
                 this.lastLoggedOut = false;
             }
 
-            let storeAvailable = false;
-            try {
-                storeAvailable = await this.pupPage.evaluate(() => {
-                    return typeof window.WWebJS !== 'undefined';
-                });
-            } catch (e) {
-                /* page may not be ready */
-            }
+            const storeAvailable = await this.pupPage.evaluate(() => {
+                return typeof window.WWebJS !== 'undefined';
+            });
 
             if (!isLogout && storeAvailable) return;
 
-            try {
-                await this.inject();
-            } catch (err) {
-                // inject() may fail if page is still loading after navigation
-            }
+            await this.inject();
         });
-
-        await this.inject();
     }
 
     /**
@@ -632,13 +617,15 @@ class Client extends EventEmitter {
      * Cancels an active pairing code session and returns to QR code mode
      */
     async cancelPairingCode() {
-        await this.pupPage.evaluate(() => {
+        await this.pupPage.evaluate(async () => {
             if (window.codeInterval) {
                 clearInterval(window.codeInterval);
                 window.codeInterval = undefined;
             }
-            window.AuthStore.PairingCodeLinkUtils.initializeQRLinking();
-            window.onQRChangedEvent(window.getQR(window.AuthStore.Conn.ref));
+            window.require('WAWebLaunchSocketUtils').refreshQR();
+            await window
+                .require('WAWebAltDeviceLinkingApi')
+                .initializeQRLinking();
         });
     }
 
@@ -1091,12 +1078,8 @@ class Client extends EventEmitter {
             const AppState = window.require('WAWebSocketModel').Socket;
 
             // Enable placeholder message resend (recovery for ciphertext messages)
-            try {
-                const gatingUtils = window.require('WAWebSyncGatingUtils');
-                gatingUtils.isPlaceholderMessageResendEnabled = () => true;
-            } catch (_) {
-                // Module may not be available in all versions
-            }
+            const gatingUtils = window.require('WAWebSyncGatingUtils');
+            gatingUtils.isPlaceholderMessageResendEnabled = () => true;
 
             Msg.on('change', (msg) => {
                 window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg));
@@ -1159,43 +1142,56 @@ class Client extends EventEmitter {
                     prevState,
                 );
             });
+            const pendingResend = new Set();
+            let resendFlush = null;
+
+            function requestResend(msg) {
+                pendingResend.add(msg);
+                if (resendFlush) return;
+                resendFlush = setTimeout(() => {
+                    resendFlush = null;
+                    const msgs = [...pendingResend];
+                    pendingResend.clear();
+                    if (msgs.length === 0) return;
+                    window
+                        .require(
+                            'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+                        )
+                        .handlePlaceholderMsgsSeen(msgs, true);
+                }, 5000);
+            }
+
             Msg.on('add', (msg) => {
-                if (msg.isNewMsg) {
-                    if (msg.type === 'ciphertext') {
-                        // defer message event until ciphertext is resolved (type changed)
-                        const resendTimer = setTimeout(() => {
-                            try {
-                                window
-                                    .require(
-                                        'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
-                                    )
-                                    .handlePlaceholderMsgsSeen([msg], true);
-                            } catch (_) {
-                                // module may not be available
-                            }
-                        }, 5000);
-                        const failTimer = setTimeout(() => {
-                            window.onCiphertextFailedEvent(
-                                window.WWebJS.getMessageModel(msg),
-                            );
-                        }, 15000);
-                        msg.once('change:type', (_msg) => {
-                            clearTimeout(resendTimer);
-                            clearTimeout(failTimer);
-                            if (_msg.type === 'revoked') return;
-                            window.onAddMessageEvent(
-                                window.WWebJS.getMessageModel(_msg),
-                            );
-                        });
-                        window.onAddMessageCiphertextEvent(
-                            window.WWebJS.getMessageModel(msg),
-                        );
-                    } else {
-                        window.onAddMessageEvent(
-                            window.WWebJS.getMessageModel(msg),
-                        );
-                    }
+                if (!msg.isNewMsg) return;
+
+                if (msg.type !== 'ciphertext') {
+                    window.onAddMessageEvent(
+                        window.WWebJS.getMessageModel(msg),
+                    );
+                    return;
                 }
+
+                requestResend(msg);
+
+                const failTimer = setTimeout(() => {
+                    if (msg.type !== 'ciphertext') return;
+                    window.onCiphertextFailedEvent(
+                        window.WWebJS.getMessageModel(msg),
+                    );
+                }, 15000);
+
+                msg.once('change:type', (_msg) => {
+                    clearTimeout(failTimer);
+                    pendingResend.delete(_msg);
+                    if (_msg.type === 'revoked') return;
+                    window.onAddMessageEvent(
+                        window.WWebJS.getMessageModel(_msg),
+                    );
+                });
+
+                window.onAddMessageCiphertextEvent(
+                    window.WWebJS.getMessageModel(msg),
+                );
             });
             Chat.on('change:unreadCount', (chat) => {
                 window.onChatUnreadCountEvent(chat);
@@ -1843,7 +1839,7 @@ class Client extends EventEmitter {
     async acceptInvite(inviteCode) {
         const res = await this.pupPage.evaluate(async (inviteCode) => {
             return await window
-                .require('WAWebGroupQueryJob')
+                .require('WAWebGroupInviteJob')
                 .joinGroupViaInvite(inviteCode);
         }, inviteCode);
 
