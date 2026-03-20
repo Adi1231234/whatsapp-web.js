@@ -254,12 +254,25 @@ class Client extends EventEmitter {
                                 .getADVSecretKey() +
                             ',' +
                             platform;
+                        const onRefChange = (_, ref) => {
+                            if (ref == null) return;
+                            window.onQRChangedEvent(getQR(ref));
+                        };
+
                         window.onQRChangedEvent(
                             getQR(window.AuthStore.Conn.ref),
                         ); // initial qr
-                        window.AuthStore.Conn.on('change:ref', (_, ref) => {
-                            window.onQRChangedEvent(getQR(ref));
-                        }); // future QR changes
+                        window.AuthStore.Conn.on('change:ref', onRefChange); // future QR changes
+
+                        // Remove QR listener once authentication succeeds
+                        window
+                            .require('WAWebSocketModel')
+                            .Socket.on('change:hasSynced', () => {
+                                window.AuthStore.Conn.off(
+                                    'change:ref',
+                                    onRefChange,
+                                );
+                            });
                     });
                 }
             }
@@ -517,6 +530,8 @@ class Client extends EventEmitter {
             referer: 'https://whatsapp.com/',
         });
 
+        await this.inject();
+
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.parentFrame() !== null) return;
 
@@ -539,8 +554,6 @@ class Client extends EventEmitter {
 
             await this.inject();
         });
-
-        await this.inject();
     }
 
     /**
