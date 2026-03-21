@@ -548,18 +548,44 @@ class Message extends Base {
             }
             if (msg.mediaData.mediaStage != 'RESOLVED') {
                 // try to resolve media
-                await msg.downloadMedia({
-                    downloadEvenIfExpensive: true,
-                    rmrReason: 1,
-                });
-            }
+                try {
+                    await msg.downloadMedia({
+                        downloadEvenIfExpensive: true,
+                        rmrReason: 1,
+                    });
+                } catch (_) {
+                    /* resolve may throw */
+                }
 
-            if (
-                msg.mediaData.mediaStage.includes('ERROR') ||
-                msg.mediaData.mediaStage === 'FETCHING'
-            ) {
-                // media could not be downloaded
-                return undefined;
+                // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
+                if (msg.mediaData.mediaStage === 'NEED_POKE') {
+                    var entry =
+                        msg.mediaObject?.entries?.getDownloadEntry?.(true);
+                    if (entry?.markWhetherOnServer) {
+                        entry.markWhetherOnServer(false);
+                        try {
+                            await msg.downloadMedia({
+                                downloadEvenIfExpensive: true,
+                                rmrReason: 1,
+                            });
+                        } catch (_) {
+                            /* RMR may throw */
+                        }
+                    }
+                }
+
+                if (
+                    msg.mediaData.mediaStage.includes('ERROR') ||
+                    msg.mediaData.mediaStage === 'FETCHING' ||
+                    msg.mediaData.mediaStage === 'NEED_POKE' ||
+                    msg.mediaData.mediaStage === 'REUPLOADING'
+                ) {
+                    throw new Error(
+                        'downloadMedia: media not available (stage: ' +
+                            msg.mediaData.mediaStage +
+                            ')',
+                    );
+                }
             }
 
             try {
@@ -567,7 +593,25 @@ class Message extends Base {
                     addAnnotations: function () {
                         return this;
                     },
+                    addAnnotation: function () {
+                        return this;
+                    },
                     addPoint: function () {
+                        return this;
+                    },
+                    start: function () {
+                        return this;
+                    },
+                    end: function () {
+                        return this;
+                    },
+                    cancel: function () {
+                        return this;
+                    },
+                    success: function () {
+                        return this;
+                    },
+                    fail: function () {
                         return this;
                     },
                 };
