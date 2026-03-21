@@ -592,13 +592,10 @@ class Message extends Base {
                 // [L13] Snapshot crypto fields BEFORE resolve attempt
                 const cryptoBefore = {
                     directPath: msg.directPath,
-                    mediaKey: msg.mediaKey
-                        ? btoa(
-                              String.fromCharCode(
-                                  ...new Uint8Array(msg.mediaKey.slice(0, 4)),
-                              ),
-                          )
-                        : null,
+                    mediaKey:
+                        typeof msg.mediaKey === 'string'
+                            ? msg.mediaKey.substring(0, 8)
+                            : null,
                     mediaKeyTimestamp: msg.mediaKeyTimestamp,
                     encFilehash: msg.encFilehash,
                     filehash: msg.filehash,
@@ -623,16 +620,34 @@ class Message extends Base {
                     };
                 }
 
-                // [L13] Snapshot AFTER resolve attempt
+                // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
+                var rmrAttempted = false;
+                var rmrError = null;
+                var stageAfterFirstResolve = msg.mediaData.mediaStage;
+                if (stageAfterFirstResolve === 'NEED_POKE') {
+                    var entry =
+                        msg.mediaObject?.entries?.getDownloadEntry?.(true);
+                    if (entry?.markWhetherOnServer) {
+                        rmrAttempted = true;
+                        entry.markWhetherOnServer(false);
+                        try {
+                            await msg.downloadMedia({
+                                downloadEvenIfExpensive: true,
+                                rmrReason: 1,
+                            });
+                        } catch (re2) {
+                            rmrError = String(re2?.message || re2);
+                        }
+                    }
+                }
+
+                // [L13] Snapshot AFTER resolve attempt (includes RMR result if attempted)
                 const cryptoAfter = {
                     directPath: msg.directPath,
-                    mediaKey: msg.mediaKey
-                        ? btoa(
-                              String.fromCharCode(
-                                  ...new Uint8Array(msg.mediaKey.slice(0, 4)),
-                              ),
-                          )
-                        : null,
+                    mediaKey:
+                        typeof msg.mediaKey === 'string'
+                            ? msg.mediaKey.substring(0, 8)
+                            : null,
                     encFilehash: msg.encFilehash,
                     filehash: msg.filehash,
                     mediaStage: msg.mediaData.mediaStage,
@@ -647,47 +662,36 @@ class Message extends Base {
                     filehash: cryptoBefore.filehash !== cryptoAfter.filehash,
                 };
 
-                if (window.onDiagLog)
-                    window.onDiagLog(
-                        'info',
-                        'downloadMedia: resolve attempt',
-                        JSON.stringify({
-                            id: msgId,
-                            stageBefore: cryptoBefore.mediaStage,
-                            stageAfter: cryptoAfter.mediaStage,
-                            fieldsChanged,
-                            resolveError,
-                            cryptoBefore,
-                            cryptoAfter,
-                        }),
+                if (
+                    msg.mediaData.mediaStage.includes('ERROR') ||
+                    msg.mediaData.mediaStage === 'FETCHING' ||
+                    msg.mediaData.mediaStage === 'NEED_POKE' ||
+                    msg.mediaData.mediaStage === 'REUPLOADING'
+                ) {
+                    if (window.onDiagLog)
+                        window.onDiagLog(
+                            'error',
+                            'downloadMedia: failed',
+                            JSON.stringify({
+                                id: msgId,
+                                stageBefore: cryptoBefore.mediaStage,
+                                stageAfter: msg.mediaData.mediaStage,
+                                stageAfterFirstResolve,
+                                resolveError,
+                                rmrAttempted,
+                                rmrError,
+                                fieldsChanged,
+                                cryptoBefore,
+                                cryptoAfter,
+                            }),
+                        );
+                    throw new Error(
+                        'downloadMedia: media not available (stage: ' +
+                            msg.mediaData.mediaStage +
+                            ')',
                     );
+                }
             }
-
-            if (
-                msg.mediaData.mediaStage.includes('ERROR') ||
-                msg.mediaData.mediaStage === 'FETCHING'
-            ) {
-                // [L12] Log silent undefined return (error/fetching)
-                if (window.onDiagLog)
-                    window.onDiagLog(
-                        'warn',
-                        'downloadMedia: error/fetching stage',
-                        JSON.stringify({
-                            id: msgId,
-                            mediaStage: msg.mediaData.mediaStage,
-                        }),
-                    );
-                // media could not be downloaded
-                return undefined;
-            }
-
-            const usingMessageSecret =
-                msg.mediaKey === '' &&
-                msg.messageSecret instanceof Uint8Array &&
-                msg.messageSecret.byteLength === 32;
-            const effectiveMediaKey = usingMessageSecret
-                ? btoa(String.fromCharCode(...msg.messageSecret))
-                : msg.mediaKey;
 
             try {
                 const mockQpl = {
@@ -716,46 +720,18 @@ class Message extends Base {
                         return this;
                     },
                 };
-                // [L13] Log the exact params going into downloadAndMaybeDecrypt
-                if (window.onDiagLog)
-                    window.onDiagLog(
-                        'info',
-                        'downloadMedia: attempting downloadAndMaybeDecrypt',
-                        JSON.stringify({
-                            id: msgId,
-                            directPath: msg.directPath,
-                            encFilehash: msg.encFilehash,
-                            filehash: msg.filehash,
-                            mediaKeyPrefix: effectiveMediaKey
-                                ? effectiveMediaKey.substring(0, 8)
-                                : null,
-                            mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                            type: msg.type,
-                            usingMessageSecret,
-                        }),
-                    );
                 const decryptedMedia = await window
                     .require('WAWebDownloadManager')
                     .downloadManager.downloadAndMaybeDecrypt({
                         directPath: msg.directPath,
                         encFilehash: msg.encFilehash,
                         filehash: msg.filehash,
-                        mediaKey: effectiveMediaKey,
+                        mediaKey: msg.mediaKey,
                         mediaKeyTimestamp: msg.mediaKeyTimestamp,
                         type: msg.type,
                         signal: new AbortController().signal,
                         downloadQpl: mockQpl,
                     });
-                if (usingMessageSecret && window.onDiagLog)
-                    window.onDiagLog(
-                        'info',
-                        'downloadMedia: mediakey-debug success',
-                        JSON.stringify({
-                            id: msgId,
-                            bytes: decryptedMedia?.byteLength,
-                        }),
-                    );
-
                 const data =
                     await window.WWebJS.arrayBufferToBase64Async(
                         decryptedMedia,
@@ -775,15 +751,12 @@ class Message extends Base {
                     message: String(e?.message || e).substring(0, 500),
                     status: e?.status,
                     code: e?.code,
-                    usingMessageSecret,
-                    mediaKeyEmpty: msg.mediaKey === '',
-                    messageSecretType: typeof msg.messageSecret,
-                    messageSecretIsUint8Array:
-                        msg.messageSecret instanceof Uint8Array,
-                    messageSecretByteLen:
-                        msg.messageSecret instanceof Uint8Array
-                            ? msg.messageSecret.byteLength
-                            : 0,
+                    mediaKeyType: typeof msg.mediaKey,
+                    mediaKeyLength:
+                        msg.mediaKey?.length || msg.mediaKey?.byteLength || 0,
+                    mediaStage: msg.mediaData?.mediaStage,
+                    directPath: msg.directPath,
+                    filehash: msg.filehash,
                     props: {},
                 };
                 try {
