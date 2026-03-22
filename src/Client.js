@@ -1798,6 +1798,20 @@ class Client extends EventEmitter {
                         );
                     });
 
+                    // Track if this specific msg object gets destroyed/removed before change:type fires
+                    msg.once('remove', () => {
+                        window.onDiagLog?.(
+                            'warn',
+                            'CIPHERTEXT_MSG_OBJECT_REMOVED',
+                            JSON.stringify({
+                                traceId: _id || '',
+                                elapsed: Date.now() - _arrivalTs,
+                                typeAtRemoval: msg.type,
+                                subtype: msg.subtype || null,
+                            }),
+                        );
+                    });
+
                     window.onAddMessageCiphertextEvent(
                         window.WWebJS.getMessageModel(msg),
                     );

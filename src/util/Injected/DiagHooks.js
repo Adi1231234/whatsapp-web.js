@@ -108,6 +108,40 @@ exports.InjectDiagHooks = () => {
             logData.msgInfoRaw = safeStr(msgInfo);
             logData.decryptResultRaw = safeStr(decryptResult);
         }
+        // For SUCCESS after a BACKFILL - check store state to understand if processMsgs worked
+        if (resultStr && resultStr.indexOf('SUCCESS') !== -1 && receipt.externalId) {
+            try {
+                var _Msg = window.require('WAWebCollections').Msg;
+                // Build the possible serialized IDs for this message
+                var senderLid = wid(receipt.senderLid);
+                var senderPn = wid(receipt.senderPn);
+                var extId = receipt.externalId;
+                var candidates = [];
+                if (senderLid) candidates.push('false_' + senderLid + '_' + extId);
+                if (senderPn) candidates.push('false_' + senderPn + '_' + extId);
+                // Also try the msgInfo.id if available
+                if (msgInfo && msgInfo.id && msgInfo.id._serialized) candidates.push(msgInfo.id._serialized);
+                var storeHits = {};
+                for (var ci = 0; ci < candidates.length; ci++) {
+                    var cand = candidates[ci];
+                    var found = _Msg.get(cand);
+                    if (found) {
+                        storeHits[cand] = { type: found.type, subtype: found.subtype || null };
+                    }
+                }
+                logData.storeCheckAtReceipt = {
+                    candidateIds: candidates,
+                    hits: storeHits,
+                    hitCount: Object.keys(storeHits).length,
+                };
+                if (msgInfo && msgInfo.id) {
+                    logData.msgInfoId = msgInfo.id._serialized || null;
+                    logData.msgInfoIdRemote = wid(msgInfo.id.remote) || null;
+                }
+            } catch(e) {
+                logData.storeCheckError = String(e);
+            }
+        }
         safeDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', logData);
         return func.apply(this, args);
     });
@@ -1190,5 +1224,61 @@ exports.InjectDiagHooks = () => {
             });
             safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.add (ciphertext add tracking)');
         }
+    } catch(e) {}
+
+    // --- Hook generatePlaceholder to see exactly when placeholders are created ---
+    try {
+        window.injectToFunction({
+            module: 'WAWebMsgProcessingApiUtils',
+            function: 'generatePlaceholder'
+        }, function(func, ...args) {
+            var opts = args[0] || {};
+            var msgInfo = opts.msgInfo;
+            var placeholderType = opts.placeholderType;
+            var placeholderAddReason = opts.placeholderAddReason;
+            var msgMeta = opts.msgMeta || {};
+            safeDiagLog('info', 'GENERATE_PLACEHOLDER', {
+                traceId: msgInfo && msgInfo.id ? (msgInfo.id._serialized || msgInfo.id.id || '') : '',
+                from: msgInfo ? wid(msgInfo.from || msgInfo.id?.remote) : null,
+                type: msgInfo ? msgInfo.type : null,
+                placeholderType: placeholderType,
+                placeholderAddReason: placeholderAddReason,
+                isUnavailable: !!msgMeta.isUnavailable,
+                isHostedMsgUnavailable: !!msgMeta.isHostedMsgUnavailable,
+                isViewOnceUnavailable: !!msgMeta.isViewOnceUnavailable,
+            });
+            return func.apply(this, args);
+        });
+    } catch(e) {}
+
+    // --- Hook handlePlaceholderMsgsSeen to see what messages are sent for resend ---
+    try {
+        window.injectToFunction({
+            module: 'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+            function: 'handlePlaceholderMsgsSeen'
+        }, function(func, ...args) {
+            var msgs = args[0];
+            var flag = args[1];
+            var eligible = [];
+            try {
+                if (msgs && msgs.length) {
+                    for (var hi = 0; hi < msgs.length && hi < 20; hi++) {
+                        var hm = msgs[hi];
+                        eligible.push({
+                            traceId: hm && hm.id ? (hm.id._serialized || '') : '',
+                            type: hm ? hm.type : null,
+                            subtype: hm ? hm.subtype : null,
+                            timestamp: hm ? hm.t : null,
+                        });
+                    }
+                }
+            } catch(e) {}
+            safeDiagLog('info', 'PLACEHOLDER_MSGS_SEEN', {
+                totalCount: msgs ? msgs.length : 0,
+                flag: flag,
+                msgs: eligible,
+            });
+            return func.apply(this, args);
+        });
     } catch(e) {}
 };
