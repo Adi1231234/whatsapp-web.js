@@ -1150,6 +1150,8 @@ exports.InjectDiagHooks = () => {
             _MsgForRemove.on('remove', function(msg) {
                 try {
                     if (msg && (msg.type === 'ciphertext' || msg.subtype === 'fanout' || msg.subtype === 'hosted_unavailable_fanout' || msg.subtype === 'bot_unavailable_fanout')) {
+                        var removeStack = '';
+                        try { removeStack = new Error().stack.split('\n').slice(1, 8).join(' | '); } catch(_e) {}
                         safeDiagLog('warn', 'CIPHERTEXT_STORE_REMOVE', {
                             traceId: msg.id ? msg.id._serialized : '',
                             type: msg.type,
@@ -1158,6 +1160,7 @@ exports.InjectDiagHooks = () => {
                             to: wid(msg.to),
                             isNewMsg: !!msg.isNewMsg,
                             timestamp: msg.t,
+                            stack: removeStack,
                         });
                     }
                 } catch(e) {}
