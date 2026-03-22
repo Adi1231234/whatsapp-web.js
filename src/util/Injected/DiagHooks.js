@@ -108,6 +108,40 @@ exports.InjectDiagHooks = () => {
             logData.msgInfoRaw = safeStr(msgInfo);
             logData.decryptResultRaw = safeStr(decryptResult);
         }
+        // For SUCCESS after a BACKFILL - check store state to understand if processMsgs worked
+        if (resultStr && resultStr.indexOf('SUCCESS') !== -1 && receipt.externalId) {
+            try {
+                var _Msg = window.require('WAWebCollections').Msg;
+                // Build the possible serialized IDs for this message
+                var senderLid = wid(receipt.senderLid);
+                var senderPn = wid(receipt.senderPn);
+                var extId = receipt.externalId;
+                var candidates = [];
+                if (senderLid) candidates.push('false_' + senderLid + '_' + extId);
+                if (senderPn) candidates.push('false_' + senderPn + '_' + extId);
+                // Also try the msgInfo.id if available
+                if (msgInfo && msgInfo.id && msgInfo.id._serialized) candidates.push(msgInfo.id._serialized);
+                var storeHits = {};
+                for (var ci = 0; ci < candidates.length; ci++) {
+                    var cand = candidates[ci];
+                    var found = _Msg.get(cand);
+                    if (found) {
+                        storeHits[cand] = { type: found.type, subtype: found.subtype || null };
+                    }
+                }
+                logData.storeCheckAtReceipt = {
+                    candidateIds: candidates,
+                    hits: storeHits,
+                    hitCount: Object.keys(storeHits).length,
+                };
+                if (msgInfo && msgInfo.id) {
+                    logData.msgInfoId = msgInfo.id._serialized || null;
+                    logData.msgInfoIdRemote = wid(msgInfo.id.remote) || null;
+                }
+            } catch(e) {
+                logData.storeCheckError = String(e);
+            }
+        }
         safeDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', logData);
         return func.apply(this, args);
     });
@@ -961,6 +995,289 @@ exports.InjectDiagHooks = () => {
                     type: msg ? msg.type : null,
                 });
             }
+            return func.apply(this, args);
+        });
+    } catch(e) {}
+
+    // =====================================================================
+    // CIPHERTEXT_TIMEOUT deep-investigation hooks
+    // =====================================================================
+
+    // --- Hook processMultipleMessages to see what happens when messages are processed ---
+    try {
+        var _MsgCollection = window.require('WAWebCollections').Msg;
+        if (_MsgCollection && _MsgCollection.processMultipleMessages) {
+            var _origPMM = _MsgCollection.processMultipleMessages.bind(_MsgCollection);
+            _MsgCollection.processMultipleMessages = function(chatId, msgs, overwriteOption, origin, extraOpts, sequential) {
+                var msgSummaries = [];
+                try {
+                    if (msgs && msgs.length) {
+                        for (var mi = 0; mi < msgs.length && mi < 10; mi++) {
+                            var m = msgs[mi];
+                            var mId = m && m.id ? (m.id._serialized || m.id.id || '') : '';
+                            var existsInStore = mId ? !!_MsgCollection.get(mId) : false;
+                            var existingType = existsInStore ? _MsgCollection.get(mId).type : null;
+                            msgSummaries.push({
+                                traceId: mId,
+                                type: m ? m.type : null,
+                                subtype: m ? m.subtype : null,
+                                isNewMsg: m ? !!m.isNewMsg : null,
+                                existsInStore: existsInStore,
+                                existingType: existingType,
+                                hasDirectPath: m ? !!m.directPath : false,
+                                hasMediaKey: m ? !!m.mediaKey : false,
+                                hasBody: m ? !!m.body : false,
+                            });
+                        }
+                    }
+                } catch(e) {}
+                var hasCiphertext = msgSummaries.some(function(s) { return s.type === 'ciphertext' || s.existingType === 'ciphertext'; });
+                if (hasCiphertext || (overwriteOption != null && overwriteOption !== 0)) {
+                    safeDiagLog('info', 'PROCESS_MULTIPLE_MSGS', {
+                        chatId: chatId ? String(chatId) : null,
+                        msgCount: msgs ? msgs.length : 0,
+                        overwriteOption: overwriteOption,
+                        origin: origin,
+                        sequential: sequential,
+                        msgs: msgSummaries,
+                    });
+                }
+                var result = _origPMM(chatId, msgs, overwriteOption, origin, extraOpts, sequential);
+                if (result && typeof result.then === 'function') {
+                    return result.then(function(res) {
+                        if (hasCiphertext) {
+                            var afterState = [];
+                            try {
+                                for (var ai = 0; ai < msgSummaries.length; ai++) {
+                                    var tid = msgSummaries[ai].traceId;
+                                    if (!tid) continue;
+                                    var afterMsg = _MsgCollection.get(tid);
+                                    afterState.push({
+                                        traceId: tid,
+                                        existsAfter: !!afterMsg,
+                                        typeAfter: afterMsg ? afterMsg.type : null,
+                                        subtypeAfter: afterMsg ? afterMsg.subtype : null,
+                                    });
+                                }
+                            } catch(e) {}
+                            safeDiagLog('info', 'PROCESS_MULTIPLE_MSGS_DONE', {
+                                chatId: chatId ? String(chatId) : null,
+                                overwriteOption: overwriteOption,
+                                origin: origin,
+                                afterState: afterState,
+                            });
+                        }
+                        return res;
+                    }).catch(function(err) {
+                        safeDiagLog('error', 'PROCESS_MULTIPLE_MSGS_ERROR', {
+                            chatId: chatId ? String(chatId) : null,
+                            overwriteOption: overwriteOption,
+                            origin: origin,
+                            error: err ? (err.message || String(err)) : 'unknown',
+                            msgs: msgSummaries,
+                        });
+                        throw err;
+                    });
+                }
+                return result;
+            };
+            safeDiagLog('debug', 'HOOK_OK', 'WAWebCollections.Msg.processMultipleMessages');
+        }
+    } catch(e) {
+        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'Msg.processMultipleMessages', reason: e ? (e.message || String(e)) : 'unknown' });
+    }
+
+    // --- Hook handlePlaceholderResendOperationRequestResponse for PDO response details ---
+    try {
+        window.injectToFunction({
+            module: 'WAWebNonMessageDataRequestHandlerPlaceholderResend',
+            function: 'handlePlaceholderResendOperationRequestResponse'
+        }, function(func, ...args) {
+            var results = args[0];
+            var requestMsgKeys = args[1];
+            var logData = {
+                resultCount: results ? results.length : 0,
+                requestMsgKeyCount: requestMsgKeys ? requestMsgKeys.length : 0,
+            };
+            try {
+                if (requestMsgKeys && requestMsgKeys.length) {
+                    logData.requestMsgIds = requestMsgKeys.slice(0, 10).map(function(k) {
+                        return k ? (k.id || k._serialized || String(k)) : null;
+                    });
+                }
+                if (results && results.length) {
+                    logData.results = results.slice(0, 10).map(function(r, idx) {
+                        var info = {
+                            index: idx,
+                            hasPlaceholderResponse: !!(r && r.placeholderMessageResendResponse),
+                            hasMediaUploadResult: !!(r && r.mediaUploadResult),
+                        };
+                        if (r && r.placeholderMessageResendResponse) {
+                            var pr = r.placeholderMessageResendResponse;
+                            info.hasWebMessageInfoBytes = !!(pr.webMessageInfoBytes && pr.webMessageInfoBytes.length > 0);
+                            info.webMessageInfoBytesLength = pr.webMessageInfoBytes ? pr.webMessageInfoBytes.length : 0;
+                        }
+                        return info;
+                    });
+                }
+            } catch(e) { logData.parseError = String(e); }
+            safeDiagLog('info', 'PDO_RESEND_RESPONSE', logData);
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(res) {
+                    safeDiagLog('debug', 'PDO_RESEND_RESPONSE_DONE', {
+                        requestMsgIds: logData.requestMsgIds,
+                        success: true,
+                    });
+                    return res;
+                }).catch(function(err) {
+                    safeDiagLog('error', 'PDO_RESEND_RESPONSE_ERROR', {
+                        requestMsgIds: logData.requestMsgIds,
+                        error: err ? (err.message || String(err)) : 'unknown',
+                    });
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    // --- Hook handlePeerMsg to ALWAYS log PDO_RESPONSE (not just on error) ---
+    // This overrides the existing hook that only logs on error
+    try {
+        window.injectToFunction({ module: 'WAWebHandlePeerMsg', function: 'handlePeerMsg' }, function(func, ...args) {
+            var peerMsg = args[0];
+            try {
+                if (peerMsg && peerMsg.peerDataOperationRequestResponseMessage) {
+                    var resp = peerMsg.peerDataOperationRequestResponseMessage;
+                    var respResults = [];
+                    if (resp.peerDataOperationResult) {
+                        for (var ri = 0; ri < resp.peerDataOperationResult.length && ri < 10; ri++) {
+                            var r = resp.peerDataOperationResult[ri];
+                            var info = {
+                                hasPlaceholder: !!(r && r.placeholderMessageResendResponse),
+                                hasMedia: !!(r && r.mediaUploadResult),
+                            };
+                            if (r && r.placeholderMessageResendResponse) {
+                                var pr = r.placeholderMessageResendResponse;
+                                info.hasWebMsgBytes = !!(pr.webMessageInfoBytes && pr.webMessageInfoBytes.length > 0);
+                                info.bytesLen = pr.webMessageInfoBytes ? pr.webMessageInfoBytes.length : 0;
+                            }
+                            respResults.push(info);
+                        }
+                    }
+                    safeDiagLog('info', 'PDO_RESPONSE_RECEIVED', {
+                        requestType: resp.peerDataOperationRequestType,
+                        resultCount: resp.peerDataOperationResult ? resp.peerDataOperationResult.length : 0,
+                        results: respResults,
+                    });
+                }
+            } catch(e) {}
+            return func.apply(this, args);
+        });
+    } catch(e) {}
+
+    // --- Track ciphertext placeholder removal from Store.Msg ---
+    try {
+        var _MsgForRemove = window.require('WAWebCollections').Msg;
+        if (_MsgForRemove) {
+            _MsgForRemove.on('remove', function(msg) {
+                try {
+                    if (msg && (msg.type === 'ciphertext' || msg.subtype === 'fanout' || msg.subtype === 'hosted_unavailable_fanout' || msg.subtype === 'bot_unavailable_fanout')) {
+                        var removeStack = '';
+                        try { removeStack = new Error().stack.split('\n').slice(1, 8).join(' | '); } catch(_e) {}
+                        safeDiagLog('warn', 'CIPHERTEXT_STORE_REMOVE', {
+                            traceId: msg.id ? msg.id._serialized : '',
+                            type: msg.type,
+                            subtype: msg.subtype,
+                            from: wid(msg.from),
+                            to: wid(msg.to),
+                            isNewMsg: !!msg.isNewMsg,
+                            timestamp: msg.t,
+                            stack: removeStack,
+                        });
+                    }
+                } catch(e) {}
+            });
+            safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.remove (ciphertext tracking)');
+        }
+    } catch(e) {}
+
+    // --- Track ciphertext add events with full detail ---
+    try {
+        var _MsgForAdd = window.require('WAWebCollections').Msg;
+        if (_MsgForAdd) {
+            _MsgForAdd.on('add', function(msg) {
+                try {
+                    if (!msg || msg.type !== 'ciphertext') return;
+                    if (window.__diag?.shouldSkipMsg?.(msg)) return;
+                    safeDiagLog('info', 'CIPHERTEXT_STORE_ADD', {
+                        traceId: msg.id ? msg.id._serialized : '',
+                        from: wid(msg.from),
+                        to: wid(msg.to),
+                        subtype: msg.subtype || null,
+                        isNewMsg: !!msg.isNewMsg,
+                        timestamp: msg.t,
+                        isPlaceholder: typeof msg.isPlaceholder === 'function' ? msg.isPlaceholder() : null,
+                    });
+                } catch(e) {}
+            });
+            safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.add (ciphertext add tracking)');
+        }
+    } catch(e) {}
+
+    // --- Hook generatePlaceholder to see exactly when placeholders are created ---
+    try {
+        window.injectToFunction({
+            module: 'WAWebMsgProcessingApiUtils',
+            function: 'generatePlaceholder'
+        }, function(func, ...args) {
+            var opts = args[0] || {};
+            var msgInfo = opts.msgInfo;
+            var placeholderType = opts.placeholderType;
+            var placeholderAddReason = opts.placeholderAddReason;
+            var msgMeta = opts.msgMeta || {};
+            safeDiagLog('info', 'GENERATE_PLACEHOLDER', {
+                traceId: msgInfo && msgInfo.id ? (msgInfo.id._serialized || msgInfo.id.id || '') : '',
+                from: msgInfo ? wid(msgInfo.from || msgInfo.id?.remote) : null,
+                type: msgInfo ? msgInfo.type : null,
+                placeholderType: placeholderType,
+                placeholderAddReason: placeholderAddReason,
+                isUnavailable: !!msgMeta.isUnavailable,
+                isHostedMsgUnavailable: !!msgMeta.isHostedMsgUnavailable,
+                isViewOnceUnavailable: !!msgMeta.isViewOnceUnavailable,
+            });
+            return func.apply(this, args);
+        });
+    } catch(e) {}
+
+    // --- Hook handlePlaceholderMsgsSeen to see what messages are sent for resend ---
+    try {
+        window.injectToFunction({
+            module: 'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+            function: 'handlePlaceholderMsgsSeen'
+        }, function(func, ...args) {
+            var msgs = args[0];
+            var flag = args[1];
+            var eligible = [];
+            try {
+                if (msgs && msgs.length) {
+                    for (var hi = 0; hi < msgs.length && hi < 20; hi++) {
+                        var hm = msgs[hi];
+                        eligible.push({
+                            traceId: hm && hm.id ? (hm.id._serialized || '') : '',
+                            type: hm ? hm.type : null,
+                            subtype: hm ? hm.subtype : null,
+                            timestamp: hm ? hm.t : null,
+                        });
+                    }
+                }
+            } catch(e) {}
+            safeDiagLog('info', 'PLACEHOLDER_MSGS_SEEN', {
+                totalCount: msgs ? msgs.length : 0,
+                flag: flag,
+                msgs: eligible,
+            });
             return func.apply(this, args);
         });
     } catch(e) {}
