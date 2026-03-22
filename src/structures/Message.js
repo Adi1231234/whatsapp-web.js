@@ -562,43 +562,33 @@ class Message extends Base {
                 return undefined;
             }
 
-            try {
-                const mockQpl = {
-                    addAnnotations: function () {
-                        return this;
-                    },
-                    addPoint: function () {
-                        return this;
-                    },
-                };
-                const decryptedMedia = await window
-                    .require('WAWebDownloadManager')
-                    .downloadManager.downloadAndMaybeDecrypt({
-                        directPath: msg.directPath,
-                        encFilehash: msg.encFilehash,
-                        filehash: msg.filehash,
-                        mediaKey: msg.mediaKey,
-                        mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                        type: msg.type,
-                        signal: new AbortController().signal,
-                        downloadQpl: mockQpl,
-                    });
+            // Read decrypted data from where WhatsApp stored it (no re-download)
+            const cached = window
+                .require('WAWebMediaInMemoryBlobCache')
+                .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
 
-                const data =
-                    await window.WWebJS.arrayBufferToBase64Async(
-                        decryptedMedia,
-                    );
-
-                return {
-                    data,
-                    mimetype: msg.mimetype,
-                    filename: msg.filename,
-                    filesize: msg.size,
-                };
-            } catch (e) {
-                if (e.status && e.status === 404) return undefined;
-                throw e;
+            let arrayBuffer;
+            if (cached) {
+                arrayBuffer = await cached.arrayBuffer();
+            } else if (msg.mediaObject?.mediaBlob) {
+                arrayBuffer = await window
+                    .require('WAWebMediaDataUtils')
+                    .opaqueDataToArrayBuffer(msg.mediaObject.mediaBlob);
             }
+
+            if (!arrayBuffer) {
+                return undefined;
+            }
+
+            const data =
+                await window.WWebJS.arrayBufferToBase64Async(arrayBuffer);
+
+            return {
+                data,
+                mimetype: msg.mimetype,
+                filename: msg.filename,
+                filesize: msg.size,
+            };
         }, this.id._serialized);
 
         if (!result) return undefined;
