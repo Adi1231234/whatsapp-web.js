@@ -547,68 +547,37 @@ class Message extends Base {
                 return null;
             }
             if (msg.mediaData.mediaStage != 'RESOLVED') {
-                try {
-                    await msg.downloadMedia({
-                        downloadEvenIfExpensive: true,
-                        rmrReason: 1,
-                    });
-                } catch (_) {
-                    /* resolve may throw */
-                }
-
-                // RMR recovery: if resolve failed, mark entry off-server to force RMR
-                if (msg.mediaData.mediaStage === 'NEED_POKE') {
-                    var entry =
-                        msg.mediaObject?.entries?.getDownloadEntry?.(true);
-                    if (entry?.markWhetherOnServer) {
-                        entry.markWhetherOnServer(false);
-                        try {
-                            await msg.downloadMedia({
-                                downloadEvenIfExpensive: true,
-                                rmrReason: 1,
-                            });
-                        } catch (_) {
-                            /* resolve may throw */
-                        }
-                    }
-                }
+                // try to resolve media
+                await msg.downloadMedia({
+                    downloadEvenIfExpensive: true,
+                    rmrReason: 1,
+                });
             }
 
             if (
                 msg.mediaData.mediaStage.includes('ERROR') ||
-                msg.mediaData.mediaStage === 'FETCHING' ||
-                msg.mediaData.mediaStage === 'NEED_POKE' ||
-                msg.mediaData.mediaStage === 'REUPLOADING'
+                msg.mediaData.mediaStage === 'FETCHING'
             ) {
-                throw new Error(
-                    'downloadMedia: media not available (stage: ' +
-                        msg.mediaData.mediaStage +
-                        ')',
-                );
+                // media could not be downloaded
+                return undefined;
             }
 
             // Read decrypted data from where WhatsApp stored it (no re-download)
-            var arrayBuffer;
-
-            // Path A: InMemoryMediaBlobCache (images, small files)
-            var cached = window
+            const cached = window
                 .require('WAWebMediaInMemoryBlobCache')
                 .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
+
+            let arrayBuffer;
             if (cached) {
                 arrayBuffer = await cached.arrayBuffer();
-            }
-
-            // Path B: mediaObject.mediaBlob (videos, large files, OpaqueData)
-            if (!arrayBuffer && msg.mediaObject?.mediaBlob) {
+            } else if (msg.mediaObject?.mediaBlob) {
                 arrayBuffer = await window
                     .require('WAWebMediaDataUtils')
                     .opaqueDataToArrayBuffer(msg.mediaObject.mediaBlob);
             }
 
             if (!arrayBuffer) {
-                throw new Error(
-                    'downloadMedia: resolved but data not found in cache or mediaBlob',
-                );
+                return undefined;
             }
 
             const data =
