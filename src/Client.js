@@ -1727,9 +1727,12 @@ class Client extends EventEmitter {
                         JSON.stringify({
                             traceId: _id || '',
                             from: msg.from?._serialized || '',
+                            to: msg.to?._serialized || '',
                             subtype: msg.subtype || null,
+                            isPlaceholder: typeof msg.isPlaceholder === 'function' ? msg.isPlaceholder() : null,
                             pendingCount: pendingResend.size + 1,
                             flushScheduled: !!resendFlush,
+                            timestamp: msg.t,
                         }),
                     );
 
@@ -1748,6 +1751,26 @@ class Client extends EventEmitter {
                             );
                             return;
                         }
+                        // Log detailed state at 15s failure
+                        var existsInStore = !!window
+                            .require('WAWebCollections')
+                            .Msg.get(_id);
+                        window.onDiagLog?.(
+                            'warn',
+                            'CIPHERTEXT_FAIL_TIMER',
+                            JSON.stringify({
+                                traceId: _id || '',
+                                elapsed: Date.now() - _arrivalTs,
+                                existsInStore: existsInStore,
+                                currentType: msg.type,
+                                subtype: msg.subtype || null,
+                                from:
+                                    msg.from?._serialized || '',
+                                hasDirectPath: !!msg.directPath,
+                                hasMediaKey: !!msg.mediaKey,
+                                hasBody: !!msg.body,
+                            }),
+                        );
                         window.onCiphertextFailedEvent(
                             window.WWebJS.getMessageModel(msg),
                         );

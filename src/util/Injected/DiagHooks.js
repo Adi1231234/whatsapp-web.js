@@ -964,4 +964,228 @@ exports.InjectDiagHooks = () => {
             return func.apply(this, args);
         });
     } catch(e) {}
+
+    // =====================================================================
+    // CIPHERTEXT_TIMEOUT deep-investigation hooks
+    // =====================================================================
+
+    // --- Hook processMultipleMessages to see what happens when messages are processed ---
+    try {
+        var _MsgCollection = window.require('WAWebCollections').Msg;
+        if (_MsgCollection && _MsgCollection.processMultipleMessages) {
+            var _origPMM = _MsgCollection.processMultipleMessages.bind(_MsgCollection);
+            _MsgCollection.processMultipleMessages = function(chatId, msgs, overwriteOption, origin, extraOpts, sequential) {
+                var msgSummaries = [];
+                try {
+                    if (msgs && msgs.length) {
+                        for (var mi = 0; mi < msgs.length && mi < 10; mi++) {
+                            var m = msgs[mi];
+                            var mId = m && m.id ? (m.id._serialized || m.id.id || '') : '';
+                            var existsInStore = mId ? !!_MsgCollection.get(mId) : false;
+                            var existingType = existsInStore ? _MsgCollection.get(mId).type : null;
+                            msgSummaries.push({
+                                traceId: mId,
+                                type: m ? m.type : null,
+                                subtype: m ? m.subtype : null,
+                                isNewMsg: m ? !!m.isNewMsg : null,
+                                existsInStore: existsInStore,
+                                existingType: existingType,
+                                hasDirectPath: m ? !!m.directPath : false,
+                                hasMediaKey: m ? !!m.mediaKey : false,
+                                hasBody: m ? !!m.body : false,
+                            });
+                        }
+                    }
+                } catch(e) {}
+                var hasCiphertext = msgSummaries.some(function(s) { return s.type === 'ciphertext' || s.existingType === 'ciphertext'; });
+                if (hasCiphertext || (overwriteOption != null && overwriteOption !== 0)) {
+                    safeDiagLog('info', 'PROCESS_MULTIPLE_MSGS', {
+                        chatId: chatId ? String(chatId) : null,
+                        msgCount: msgs ? msgs.length : 0,
+                        overwriteOption: overwriteOption,
+                        origin: origin,
+                        sequential: sequential,
+                        msgs: msgSummaries,
+                    });
+                }
+                var result = _origPMM(chatId, msgs, overwriteOption, origin, extraOpts, sequential);
+                if (result && typeof result.then === 'function') {
+                    return result.then(function(res) {
+                        if (hasCiphertext) {
+                            var afterState = [];
+                            try {
+                                for (var ai = 0; ai < msgSummaries.length; ai++) {
+                                    var tid = msgSummaries[ai].traceId;
+                                    if (!tid) continue;
+                                    var afterMsg = _MsgCollection.get(tid);
+                                    afterState.push({
+                                        traceId: tid,
+                                        existsAfter: !!afterMsg,
+                                        typeAfter: afterMsg ? afterMsg.type : null,
+                                        subtypeAfter: afterMsg ? afterMsg.subtype : null,
+                                    });
+                                }
+                            } catch(e) {}
+                            safeDiagLog('info', 'PROCESS_MULTIPLE_MSGS_DONE', {
+                                chatId: chatId ? String(chatId) : null,
+                                overwriteOption: overwriteOption,
+                                origin: origin,
+                                afterState: afterState,
+                            });
+                        }
+                        return res;
+                    }).catch(function(err) {
+                        safeDiagLog('error', 'PROCESS_MULTIPLE_MSGS_ERROR', {
+                            chatId: chatId ? String(chatId) : null,
+                            overwriteOption: overwriteOption,
+                            origin: origin,
+                            error: err ? (err.message || String(err)) : 'unknown',
+                            msgs: msgSummaries,
+                        });
+                        throw err;
+                    });
+                }
+                return result;
+            };
+            safeDiagLog('debug', 'HOOK_OK', 'WAWebCollections.Msg.processMultipleMessages');
+        }
+    } catch(e) {
+        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'Msg.processMultipleMessages', reason: e ? (e.message || String(e)) : 'unknown' });
+    }
+
+    // --- Hook handlePlaceholderResendOperationRequestResponse for PDO response details ---
+    try {
+        window.injectToFunction({
+            module: 'WAWebNonMessageDataRequestHandlerPlaceholderResend',
+            function: 'handlePlaceholderResendOperationRequestResponse'
+        }, function(func, ...args) {
+            var results = args[0];
+            var requestMsgKeys = args[1];
+            var logData = {
+                resultCount: results ? results.length : 0,
+                requestMsgKeyCount: requestMsgKeys ? requestMsgKeys.length : 0,
+            };
+            try {
+                if (requestMsgKeys && requestMsgKeys.length) {
+                    logData.requestMsgIds = requestMsgKeys.slice(0, 10).map(function(k) {
+                        return k ? (k.id || k._serialized || String(k)) : null;
+                    });
+                }
+                if (results && results.length) {
+                    logData.results = results.slice(0, 10).map(function(r, idx) {
+                        var info = {
+                            index: idx,
+                            hasPlaceholderResponse: !!(r && r.placeholderMessageResendResponse),
+                            hasMediaUploadResult: !!(r && r.mediaUploadResult),
+                        };
+                        if (r && r.placeholderMessageResendResponse) {
+                            var pr = r.placeholderMessageResendResponse;
+                            info.hasWebMessageInfoBytes = !!(pr.webMessageInfoBytes && pr.webMessageInfoBytes.length > 0);
+                            info.webMessageInfoBytesLength = pr.webMessageInfoBytes ? pr.webMessageInfoBytes.length : 0;
+                        }
+                        return info;
+                    });
+                }
+            } catch(e) { logData.parseError = String(e); }
+            safeDiagLog('info', 'PDO_RESEND_RESPONSE', logData);
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(res) {
+                    safeDiagLog('debug', 'PDO_RESEND_RESPONSE_DONE', {
+                        requestMsgIds: logData.requestMsgIds,
+                        success: true,
+                    });
+                    return res;
+                }).catch(function(err) {
+                    safeDiagLog('error', 'PDO_RESEND_RESPONSE_ERROR', {
+                        requestMsgIds: logData.requestMsgIds,
+                        error: err ? (err.message || String(err)) : 'unknown',
+                    });
+                    throw err;
+                });
+            }
+            return result;
+        });
+    } catch(e) {}
+
+    // --- Hook handlePeerMsg to ALWAYS log PDO_RESPONSE (not just on error) ---
+    // This overrides the existing hook that only logs on error
+    try {
+        window.injectToFunction({ module: 'WAWebHandlePeerMsg', function: 'handlePeerMsg' }, function(func, ...args) {
+            var peerMsg = args[0];
+            try {
+                if (peerMsg && peerMsg.peerDataOperationRequestResponseMessage) {
+                    var resp = peerMsg.peerDataOperationRequestResponseMessage;
+                    var respResults = [];
+                    if (resp.peerDataOperationResult) {
+                        for (var ri = 0; ri < resp.peerDataOperationResult.length && ri < 10; ri++) {
+                            var r = resp.peerDataOperationResult[ri];
+                            var info = {
+                                hasPlaceholder: !!(r && r.placeholderMessageResendResponse),
+                                hasMedia: !!(r && r.mediaUploadResult),
+                            };
+                            if (r && r.placeholderMessageResendResponse) {
+                                var pr = r.placeholderMessageResendResponse;
+                                info.hasWebMsgBytes = !!(pr.webMessageInfoBytes && pr.webMessageInfoBytes.length > 0);
+                                info.bytesLen = pr.webMessageInfoBytes ? pr.webMessageInfoBytes.length : 0;
+                            }
+                            respResults.push(info);
+                        }
+                    }
+                    safeDiagLog('info', 'PDO_RESPONSE_RECEIVED', {
+                        requestType: resp.peerDataOperationRequestType,
+                        resultCount: resp.peerDataOperationResult ? resp.peerDataOperationResult.length : 0,
+                        results: respResults,
+                    });
+                }
+            } catch(e) {}
+            return func.apply(this, args);
+        });
+    } catch(e) {}
+
+    // --- Track ciphertext placeholder removal from Store.Msg ---
+    try {
+        var _MsgForRemove = window.require('WAWebCollections').Msg;
+        if (_MsgForRemove) {
+            _MsgForRemove.on('remove', function(msg) {
+                try {
+                    if (msg && (msg.type === 'ciphertext' || msg.subtype === 'fanout' || msg.subtype === 'hosted_unavailable_fanout' || msg.subtype === 'bot_unavailable_fanout')) {
+                        safeDiagLog('warn', 'CIPHERTEXT_STORE_REMOVE', {
+                            traceId: msg.id ? msg.id._serialized : '',
+                            type: msg.type,
+                            subtype: msg.subtype,
+                            from: wid(msg.from),
+                            to: wid(msg.to),
+                            isNewMsg: !!msg.isNewMsg,
+                            timestamp: msg.t,
+                        });
+                    }
+                } catch(e) {}
+            });
+            safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.remove (ciphertext tracking)');
+        }
+    } catch(e) {}
+
+    // --- Track ciphertext add events with full detail ---
+    try {
+        var _MsgForAdd = window.require('WAWebCollections').Msg;
+        if (_MsgForAdd) {
+            _MsgForAdd.on('add', function(msg) {
+                try {
+                    if (!msg || msg.type !== 'ciphertext') return;
+                    if (window.__diag?.shouldSkipMsg?.(msg)) return;
+                    safeDiagLog('info', 'CIPHERTEXT_STORE_ADD', {
+                        traceId: msg.id ? msg.id._serialized : '',
+                        from: wid(msg.from),
+                        to: wid(msg.to),
+                        subtype: msg.subtype || null,
+                        isNewMsg: !!msg.isNewMsg,
+                        timestamp: msg.t,
+                        isPlaceholder: typeof msg.isPlaceholder === 'function' ? msg.isPlaceholder() : null,
+                    });
+                } catch(e) {}
+            });
+            safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.add (ciphertext add tracking)');
+        }
+    } catch(e) {}
 };
