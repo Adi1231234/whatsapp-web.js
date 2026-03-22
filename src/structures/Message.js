@@ -693,97 +693,33 @@ class Message extends Base {
                 }
             }
 
-            try {
-                const mockQpl = {
-                    addAnnotations: function () {
-                        return this;
-                    },
-                    addAnnotation: function () {
-                        return this;
-                    },
-                    addPoint: function () {
-                        return this;
-                    },
-                    start: function () {
-                        return this;
-                    },
-                    end: function () {
-                        return this;
-                    },
-                    cancel: function () {
-                        return this;
-                    },
-                    success: function () {
-                        return this;
-                    },
-                    fail: function () {
-                        return this;
-                    },
-                };
-                const decryptedMedia = await window
-                    .require('WAWebDownloadManager')
-                    .downloadManager.downloadAndMaybeDecrypt({
-                        directPath: msg.directPath,
-                        encFilehash: msg.encFilehash,
-                        filehash: msg.filehash,
-                        mediaKey: msg.mediaKey,
-                        mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                        type: msg.type,
-                        signal: new AbortController().signal,
-                        downloadQpl: mockQpl,
-                    });
-                const data =
-                    await window.WWebJS.arrayBufferToBase64Async(
-                        decryptedMedia,
-                    );
+            // Read decrypted data from where WhatsApp stored it (no re-download)
+            const cached = window
+                .require('WAWebMediaInMemoryBlobCache')
+                .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
 
-                return {
-                    data,
-                    mimetype: msg.mimetype,
-                    filename: msg.filename,
-                    filesize: msg.size,
-                };
-            } catch (e) {
-                // [L13] Detailed error analysis for download failures
-                const errorDetail = {
-                    id: msgId,
-                    name: e?.name,
-                    message: String(e?.message || e).substring(0, 500),
-                    status: e?.status,
-                    code: e?.code,
-                    mediaKeyType: typeof msg.mediaKey,
-                    mediaKeyLength:
-                        msg.mediaKey?.length || msg.mediaKey?.byteLength || 0,
-                    mediaStage: msg.mediaData?.mediaStage,
-                    directPath: msg.directPath,
-                    filehash: msg.filehash,
-                    props: {},
-                };
-                try {
-                    for (const k of Object.keys(e || {})) {
-                        if (!['message', 'stack', 'name'].includes(k)) {
-                            errorDetail.props[k] =
-                                typeof e[k] === 'object'
-                                    ? JSON.stringify(e[k]).substring(0, 200)
-                                    : String(e[k]);
-                        }
-                    }
-                } catch (_) {
-                    /* ignore */
-                }
-
-                if (window.onDiagLog)
-                    window.onDiagLog(
-                        'error',
-                        'downloadMedia: downloadAndMaybeDecrypt failed',
-                        JSON.stringify(errorDetail),
-                    );
-
-                if (e.status && e.status === 404) {
-                    return undefined;
-                }
-                throw e;
+            let arrayBuffer;
+            if (cached) {
+                arrayBuffer = await cached.arrayBuffer();
+            } else if (msg.mediaObject?.mediaBlob) {
+                arrayBuffer = await window
+                    .require('WAWebMediaDataUtils')
+                    .opaqueDataToArrayBuffer(msg.mediaObject.mediaBlob);
             }
+
+            if (!arrayBuffer) {
+                return undefined;
+            }
+
+            const data =
+                await window.WWebJS.arrayBufferToBase64Async(arrayBuffer);
+
+            return {
+                data,
+                mimetype: msg.mimetype,
+                filename: msg.filename,
+                filesize: msg.size,
+            };
         }, this.id._serialized);
 
         if (!result) return undefined;
