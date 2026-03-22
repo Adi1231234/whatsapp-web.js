@@ -1142,40 +1142,8 @@ exports.InjectDiagHooks = () => {
         });
     } catch(e) {}
 
-    // --- Hook handlePeerMsg to ALWAYS log PDO_RESPONSE (not just on error) ---
-    // This overrides the existing hook that only logs on error
-    try {
-        window.injectToFunction({ module: 'WAWebHandlePeerMsg', function: 'handlePeerMsg' }, function(func, ...args) {
-            var peerMsg = args[0];
-            try {
-                if (peerMsg && peerMsg.peerDataOperationRequestResponseMessage) {
-                    var resp = peerMsg.peerDataOperationRequestResponseMessage;
-                    var respResults = [];
-                    if (resp.peerDataOperationResult) {
-                        for (var ri = 0; ri < resp.peerDataOperationResult.length && ri < 10; ri++) {
-                            var r = resp.peerDataOperationResult[ri];
-                            var info = {
-                                hasPlaceholder: !!(r && r.placeholderMessageResendResponse),
-                                hasMedia: !!(r && r.mediaUploadResult),
-                            };
-                            if (r && r.placeholderMessageResendResponse) {
-                                var pr = r.placeholderMessageResendResponse;
-                                info.hasWebMsgBytes = !!(pr.webMessageInfoBytes && pr.webMessageInfoBytes.length > 0);
-                                info.bytesLen = pr.webMessageInfoBytes ? pr.webMessageInfoBytes.length : 0;
-                            }
-                            respResults.push(info);
-                        }
-                    }
-                    safeDiagLog('info', 'PDO_RESPONSE_RECEIVED', {
-                        requestType: resp.peerDataOperationRequestType,
-                        resultCount: resp.peerDataOperationResult ? resp.peerDataOperationResult.length : 0,
-                        results: respResults,
-                    });
-                }
-            } catch(e) {}
-            return func.apply(this, args);
-        });
-    } catch(e) {}
+    // NOTE: WAWebHandlePeerMsg does not exist in current WAWeb versions.
+    // PDO responses are captured via handlePlaceholderResendOperationRequestResponse hook above.
 
     // --- Track ciphertext placeholder removal from Store.Msg ---
     try {

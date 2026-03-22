@@ -1776,8 +1776,24 @@ class Client extends EventEmitter {
                         );
                     }, 15000);
 
+                    // Track if this specific msg object gets destroyed/removed before change:type fires
+                    const _onRemove = () => {
+                        window.onDiagLog?.(
+                            'warn',
+                            'CIPHERTEXT_MSG_OBJECT_REMOVED',
+                            JSON.stringify({
+                                traceId: _id || '',
+                                elapsed: Date.now() - _arrivalTs,
+                                typeAtRemoval: msg.type,
+                                subtype: msg.subtype || null,
+                            }),
+                        );
+                    };
+                    msg.once('remove', _onRemove);
+
                     msg.once('change:type', (_msg) => {
                         clearTimeout(failTimer);
+                        msg.off('remove', _onRemove);
                         const wasPending = pendingResend.delete(_msg);
                         window.onDiagLog?.(
                             'debug',
@@ -1795,20 +1811,6 @@ class Client extends EventEmitter {
                         if (_msg.type === 'revoked') return;
                         window.onAddMessageEvent(
                             window.WWebJS.getMessageModel(_msg),
-                        );
-                    });
-
-                    // Track if this specific msg object gets destroyed/removed before change:type fires
-                    msg.once('remove', () => {
-                        window.onDiagLog?.(
-                            'warn',
-                            'CIPHERTEXT_MSG_OBJECT_REMOVED',
-                            JSON.stringify({
-                                traceId: _id || '',
-                                elapsed: Date.now() - _arrivalTs,
-                                typeAtRemoval: msg.type,
-                                subtype: msg.subtype || null,
-                            }),
                         );
                     });
 
