@@ -546,13 +546,13 @@ class Message extends Base {
             ) {
                 return null;
             }
-            if (msg.mediaData.mediaStage != 'RESOLVED') {
-                // try to resolve media
-                await msg.downloadMedia({
-                    downloadEvenIfExpensive: true,
-                    rmrReason: 1,
-                });
-            }
+            // Always call internal downloadMedia - never skip based on
+            // mediaStage, because cache eviction can leave stage=RESOLVED
+            // with empty InMemoryMediaBlobCache.
+            await msg.downloadMedia({
+                downloadEvenIfExpensive: true,
+                rmrReason: 1,
+            });
 
             if (
                 msg.mediaData.mediaStage.includes('ERROR') ||
