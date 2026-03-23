@@ -1077,18 +1077,21 @@ exports.LoadUtils = () => {
         const start = Date.now();
         const isLid =
             typeof contactId === 'string' && contactId.endsWith('@lid');
+        const contactWid = window
+            .require('WAWebWidFactory')
+            .createWid(contactId);
         let findTook = -1;
         let bizTook = -1;
         try {
             const contact = await window
                 .require('WAWebCollections')
-                .Contact.find(contactId);
+                .Contact.find(contactWid);
             findTook = Date.now() - start;
             if (contact.isBusiness || contact.isEnterprise) {
                 const bizStart = Date.now();
                 const bizProfile = await window
                     .require('WAWebCollections')
-                    .BusinessProfile.find(contactId);
+                    .BusinessProfile.find(contact.id);
                 bizTook = Date.now() - bizStart;
                 bizProfile.profileOptions &&
                     (contact.businessProfile = bizProfile);
