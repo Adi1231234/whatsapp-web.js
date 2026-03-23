@@ -1047,13 +1047,16 @@ exports.LoadUtils = () => {
     };
 
     window.WWebJS.getContact = async (contactId) => {
+        const contactWid = window
+            .require('WAWebWidFactory')
+            .createWid(contactId);
         const contact = await window
             .require('WAWebCollections')
-            .Contact.find(contactId);
+            .Contact.find(contactWid);
         if (contact.isBusiness || contact.isEnterprise) {
             const bizProfile = await window
                 .require('WAWebCollections')
-                .BusinessProfile.find(contactId);
+                .BusinessProfile.find(contact.id);
             bizProfile.profileOptions && (contact.businessProfile = bizProfile);
         }
         return window.WWebJS.getContactModel(contact);
