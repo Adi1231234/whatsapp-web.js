@@ -693,7 +693,7 @@ class Message extends Base {
                 }
             }
 
-            // Read decrypted data from where WhatsApp stored it (no re-download)
+            // Try reading decrypted data from WhatsApp's cache first (fast path)
             const cached = window
                 .require('WAWebMediaInMemoryBlobCache')
                 .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
@@ -705,6 +705,49 @@ class Message extends Base {
                 arrayBuffer = await window
                     .require('WAWebMediaDataUtils')
                     .opaqueDataToArrayBuffer(msg.mediaObject.mediaBlob);
+            }
+
+            // Cache miss (e.g. chat not open) - download from CDN as fallback
+            if (!arrayBuffer) {
+                const mockQpl = {
+                    addAnnotations: function () {
+                        return this;
+                    },
+                    addAnnotation: function () {
+                        return this;
+                    },
+                    addPoint: function () {
+                        return this;
+                    },
+                    start: function () {
+                        return this;
+                    },
+                    end: function () {
+                        return this;
+                    },
+                    cancel: function () {
+                        return this;
+                    },
+                    success: function () {
+                        return this;
+                    },
+                    fail: function () {
+                        return this;
+                    },
+                };
+                const decryptedMedia = await window
+                    .require('WAWebDownloadManager')
+                    .downloadManager.downloadAndMaybeDecrypt({
+                        directPath: msg.directPath,
+                        encFilehash: msg.encFilehash,
+                        filehash: msg.filehash,
+                        mediaKey: msg.mediaKey,
+                        mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                        type: msg.type,
+                        signal: new AbortController().signal,
+                        downloadQpl: mockQpl,
+                    });
+                arrayBuffer = decryptedMedia;
             }
 
             if (!arrayBuffer) {
