@@ -552,6 +552,7 @@ class Message extends Base {
             await msg.downloadMedia({
                 downloadEvenIfExpensive: true,
                 rmrReason: 1,
+                isUserInitiated: true,
             });
 
             if (
