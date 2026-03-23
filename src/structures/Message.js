@@ -588,202 +588,94 @@ class Message extends Base {
                     );
                 return null;
             }
-            if (msg.mediaData.mediaStage != 'RESOLVED') {
-                // [L13] Snapshot crypto fields BEFORE resolve attempt
-                const cryptoBefore = {
-                    directPath: msg.directPath,
-                    mediaKey:
-                        typeof msg.mediaKey === 'string'
-                            ? msg.mediaKey.substring(0, 8)
-                            : null,
-                    mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                    encFilehash: msg.encFilehash,
-                    filehash: msg.filehash,
-                    mediaStage: msg.mediaData.mediaStage,
-                    mediaStageTimestamp: msg.mediaData.mediaStageTimestamp,
-                    isBackfill: !!(msg.__x_isBackfill || msg.isBackfill),
-                    protocolMessageType: msg.protocolMessageType,
-                    ephemeralDuration: msg.ephemeralDuration,
-                    messageSecret: !!msg.messageSecret,
+            // Always call internal downloadMedia - never skip based on
+            // mediaStage, because cache eviction can leave stage=RESOLVED
+            // with empty InMemoryMediaBlobCache.
+            // The internal function checks cache first and only downloads
+            // from CDN on miss.
+            let resolveError = null;
+            try {
+                await msg.downloadMedia({
+                    downloadEvenIfExpensive: true,
+                    rmrReason: 1,
+                });
+            } catch (re) {
+                resolveError = {
+                    message: String(re?.message || re),
+                    name: re?.name,
                 };
-                // try to resolve media
-                let resolveError = null;
-                try {
-                    await msg.downloadMedia({
-                        downloadEvenIfExpensive: true,
-                        rmrReason: 1,
-                    });
-                } catch (re) {
-                    resolveError = {
-                        message: String(re?.message || re),
-                        name: re?.name,
-                    };
-                }
+            }
 
-                // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
-                var rmrAttempted = false;
-                var rmrError = null;
-                var stageAfterFirstResolve = msg.mediaData.mediaStage;
-                if (stageAfterFirstResolve === 'NEED_POKE') {
-                    var entry =
-                        msg.mediaObject?.entries?.getDownloadEntry?.(true);
-                    if (entry?.markWhetherOnServer) {
-                        rmrAttempted = true;
-                        entry.markWhetherOnServer(false);
-                        try {
-                            await msg.downloadMedia({
-                                downloadEvenIfExpensive: true,
-                                rmrReason: 1,
-                            });
-                        } catch (re2) {
-                            rmrError = String(re2?.message || re2);
-                        }
+            // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
+            if (msg.mediaData.mediaStage === 'NEED_POKE') {
+                var entry = msg.mediaObject?.entries?.getDownloadEntry?.(true);
+                if (entry?.markWhetherOnServer) {
+                    entry.markWhetherOnServer(false);
+                    try {
+                        await msg.downloadMedia({
+                            downloadEvenIfExpensive: true,
+                            rmrReason: 1,
+                        });
+                    } catch (re2) {
+                        /* ignore */
                     }
-                }
-
-                // [L13] Snapshot AFTER resolve attempt (includes RMR result if attempted)
-                const cryptoAfter = {
-                    directPath: msg.directPath,
-                    mediaKey:
-                        typeof msg.mediaKey === 'string'
-                            ? msg.mediaKey.substring(0, 8)
-                            : null,
-                    encFilehash: msg.encFilehash,
-                    filehash: msg.filehash,
-                    mediaStage: msg.mediaData.mediaStage,
-                    mediaStageTimestamp: msg.mediaData.mediaStageTimestamp,
-                };
-                const fieldsChanged = {
-                    directPath:
-                        cryptoBefore.directPath !== cryptoAfter.directPath,
-                    mediaKey: cryptoBefore.mediaKey !== cryptoAfter.mediaKey,
-                    encFilehash:
-                        cryptoBefore.encFilehash !== cryptoAfter.encFilehash,
-                    filehash: cryptoBefore.filehash !== cryptoAfter.filehash,
-                };
-
-                if (
-                    msg.mediaData.mediaStage.includes('ERROR') ||
-                    msg.mediaData.mediaStage === 'FETCHING' ||
-                    msg.mediaData.mediaStage === 'NEED_POKE' ||
-                    msg.mediaData.mediaStage === 'REUPLOADING'
-                ) {
-                    if (window.onDiagLog)
-                        window.onDiagLog(
-                            'error',
-                            'downloadMedia: failed',
-                            JSON.stringify({
-                                id: msgId,
-                                stageBefore: cryptoBefore.mediaStage,
-                                stageAfter: msg.mediaData.mediaStage,
-                                stageAfterFirstResolve,
-                                resolveError,
-                                rmrAttempted,
-                                rmrError,
-                                fieldsChanged,
-                                cryptoBefore,
-                                cryptoAfter,
-                            }),
-                        );
-                    throw new Error(
-                        'downloadMedia: media not available (stage: ' +
-                            msg.mediaData.mediaStage +
-                            ')',
-                    );
                 }
             }
 
-            try {
-                const mockQpl = {
-                    addAnnotations: function () {
-                        return this;
-                    },
-                    addAnnotation: function () {
-                        return this;
-                    },
-                    addPoint: function () {
-                        return this;
-                    },
-                    start: function () {
-                        return this;
-                    },
-                    end: function () {
-                        return this;
-                    },
-                    cancel: function () {
-                        return this;
-                    },
-                    success: function () {
-                        return this;
-                    },
-                    fail: function () {
-                        return this;
-                    },
-                };
-                const decryptedMedia = await window
-                    .require('WAWebDownloadManager')
-                    .downloadManager.downloadAndMaybeDecrypt({
-                        directPath: msg.directPath,
-                        encFilehash: msg.encFilehash,
-                        filehash: msg.filehash,
-                        mediaKey: msg.mediaKey,
-                        mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                        type: msg.type,
-                        signal: new AbortController().signal,
-                        downloadQpl: mockQpl,
-                    });
-                const data =
-                    await window.WWebJS.arrayBufferToBase64Async(
-                        decryptedMedia,
-                    );
-
-                return {
-                    data,
-                    mimetype: msg.mimetype,
-                    filename: msg.filename,
-                    filesize: msg.size,
-                };
-            } catch (e) {
-                // [L13] Detailed error analysis for download failures
-                const errorDetail = {
-                    id: msgId,
-                    name: e?.name,
-                    message: String(e?.message || e).substring(0, 500),
-                    status: e?.status,
-                    code: e?.code,
-                    mediaKeyType: typeof msg.mediaKey,
-                    mediaKeyLength:
-                        msg.mediaKey?.length || msg.mediaKey?.byteLength || 0,
-                    mediaStage: msg.mediaData?.mediaStage,
-                    directPath: msg.directPath,
-                    filehash: msg.filehash,
-                    props: {},
-                };
-                try {
-                    for (const k of Object.keys(e || {})) {
-                        if (!['message', 'stack', 'name'].includes(k)) {
-                            errorDetail.props[k] =
-                                typeof e[k] === 'object'
-                                    ? JSON.stringify(e[k]).substring(0, 200)
-                                    : String(e[k]);
-                        }
-                    }
-                } catch (_) {
-                    /* ignore */
-                }
-
+            if (
+                msg.mediaData.mediaStage.includes('ERROR') ||
+                msg.mediaData.mediaStage === 'FETCHING' ||
+                msg.mediaData.mediaStage === 'NEED_POKE' ||
+                msg.mediaData.mediaStage === 'REUPLOADING'
+            ) {
                 if (window.onDiagLog)
                     window.onDiagLog(
                         'error',
-                        'downloadMedia: downloadAndMaybeDecrypt failed',
-                        JSON.stringify(errorDetail),
+                        'downloadMedia: failed',
+                        JSON.stringify({
+                            id: msgId,
+                            stageAfter: msg.mediaData.mediaStage,
+                            resolveError,
+                        }),
                     );
-
-                if (e.status && e.status === 404) {
-                    return undefined;
-                }
-                throw e;
+                throw new Error(
+                    'downloadMedia: media not available (stage: ' +
+                        msg.mediaData.mediaStage +
+                        ')',
+                );
             }
+
+            // Read from where WhatsApp stored the decrypted data.
+            // InMemoryMediaBlobCache: images, docs, audio, stickers (no per-file limit, 250MB total)
+            // mediaObject.mediaBlob: video (as OpaqueData)
+            // This avoids downloadAndMaybeDecrypt which goes through
+            // LruMediaStore that has a 30MB per-file limit.
+            const cached = window
+                .require('WAWebMediaInMemoryBlobCache')
+                .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
+
+            let arrayBuffer;
+            if (cached) {
+                arrayBuffer = await cached.arrayBuffer();
+            } else if (msg.mediaObject?.mediaBlob) {
+                arrayBuffer = await window
+                    .require('WAWebMediaDataUtils')
+                    .opaqueDataToArrayBuffer(msg.mediaObject.mediaBlob);
+            }
+
+            if (!arrayBuffer) {
+                return undefined;
+            }
+
+            const data =
+                await window.WWebJS.arrayBufferToBase64Async(arrayBuffer);
+
+            return {
+                data,
+                mimetype: msg.mimetype,
+                filename: msg.filename,
+                filesize: msg.size,
+            };
         }, this.id._serialized);
 
         if (!result) return undefined;
