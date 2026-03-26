@@ -83,6 +83,12 @@ class Message extends Base {
         this.type = data.type;
 
         /**
+         * Message subtype (e.g. fanout type for placeholder messages)
+         * @type {?string}
+         */
+        this.subtype = data.subtype || null;
+
+        /**
          * Unix timestamp for when the message was created
          * @type {number}
          */
