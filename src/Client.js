@@ -1729,12 +1729,25 @@ class Client extends EventEmitter {
                             from: msg.from?._serialized || '',
                             to: msg.to?._serialized || '',
                             subtype: msg.subtype || null,
-                            isPlaceholder: typeof msg.isPlaceholder === 'function' ? msg.isPlaceholder() : null,
+                            isPlaceholder:
+                                typeof msg.isPlaceholder === 'function'
+                                    ? msg.isPlaceholder()
+                                    : null,
                             pendingCount: pendingResend.size + 1,
                             flushScheduled: !!resendFlush,
                             timestamp: msg.t,
                         }),
                     );
+
+                    window.onAddMessageCiphertextEvent(
+                        window.WWebJS.getMessageModel(msg),
+                    );
+
+                    if (
+                        msg.subtype &&
+                        msg.subtype.endsWith('_unavailable_fanout')
+                    )
+                        return;
 
                     requestResend(msg);
                     const _arrivalTs = Date.now();
@@ -1764,8 +1777,7 @@ class Client extends EventEmitter {
                                 existsInStore: existsInStore,
                                 currentType: msg.type,
                                 subtype: msg.subtype || null,
-                                from:
-                                    msg.from?._serialized || '',
+                                from: msg.from?._serialized || '',
                                 hasDirectPath: !!msg.directPath,
                                 hasMediaKey: !!msg.mediaKey,
                                 hasBody: !!msg.body,
@@ -1813,10 +1825,6 @@ class Client extends EventEmitter {
                             window.WWebJS.getMessageModel(_msg),
                         );
                     });
-
-                    window.onAddMessageCiphertextEvent(
-                        window.WWebJS.getMessageModel(msg),
-                    );
                 }
             });
 
