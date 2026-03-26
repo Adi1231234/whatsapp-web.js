@@ -1175,6 +1175,13 @@ class Client extends EventEmitter {
                     return;
                 }
 
+                window.onAddMessageCiphertextEvent(
+                    window.WWebJS.getMessageModel(msg),
+                );
+
+                if (msg.subtype && msg.subtype.endsWith('_unavailable_fanout'))
+                    return;
+
                 requestResend(msg);
 
                 const failTimer = setTimeout(() => {
@@ -1192,10 +1199,6 @@ class Client extends EventEmitter {
                         window.WWebJS.getMessageModel(_msg),
                     );
                 });
-
-                window.onAddMessageCiphertextEvent(
-                    window.WWebJS.getMessageModel(msg),
-                );
             });
             Chat.on('change:unreadCount', (chat) => {
                 window.onChatUnreadCountEvent(chat);
