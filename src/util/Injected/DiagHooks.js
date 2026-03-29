@@ -4,7 +4,7 @@
  * Diagnostic hooks for monitoring WhatsApp Web internals.
  *
  * This file is meant to be injected via page.evaluate() AFTER both
- * DiagCommon (window.__diag) and Utils (window.WWebJS) have been loaded.
+ * DiagCommon (window.__metrics) and Utils (window.WWebJS) have been loaded.
  *
  * It hooks into WAWeb modules to log encryption, decryption, media download,
  * signal session, receipt, identity change, and message pipeline events.
@@ -15,13 +15,13 @@
  */
 exports.InjectDiagHooks = () => {
     // Use shared helpers from DiagCommon (injected before this file)
-    var safeDiagLog = window.__diag.safeDiagLog;
-    var safeStr = window.__diag.safeStr;
-    var wid = window.__diag.wid;
-    var _isStatusOrGroup = window.__diag.isStatusOrGroup;
-    var _isThumbnailType = window.__diag.isThumbnailType;
-    var _shouldSkipDiag = window.__diag.shouldSkipMsg;
-    var _shouldSkipReceipt = window.__diag.shouldSkipReceipt;
+    var safeDiagLog = window.__metrics.safeDiagLog;
+    var safeStr = window.__metrics.safeStr;
+    var wid = window.__metrics.wid;
+    var _isStatusOrGroup = window.__metrics.isStatusOrGroup;
+    var _isThumbnailType = window.__metrics.isThumbnailType;
+    var _shouldSkipDiag = window.__metrics.shouldSkipMsg;
+    var _shouldSkipReceipt = window.__metrics.shouldSkipReceipt;
 
     /**
      * Hook a function inside a WAWeb module.
@@ -1178,7 +1178,7 @@ exports.InjectDiagHooks = () => {
             _MsgForAdd.on('add', function(msg) {
                 try {
                     if (!msg || msg.type !== 'ciphertext') return;
-                    if (window.__diag?.shouldSkipMsg?.(msg)) return;
+                    if (window.__metrics?.shouldSkipMsg?.(msg)) return;
                     safeDiagLog('info', 'CIPHERTEXT_STORE_ADD', {
                         traceId: msg.id ? msg.id._serialized : '',
                         from: wid(msg.from),

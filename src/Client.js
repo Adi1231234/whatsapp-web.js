@@ -1488,8 +1488,8 @@ class Client extends EventEmitter {
 
         await this.pupPage.evaluate(() => {
             // Helper namespace for diagnostic functions
-            window.__wwjsDiag = window.__wwjsDiag || {};
-            window.__wwjsDiag.resolvePhone = (wid) => {
+            window.__telemetry = window.__telemetry || {};
+            window.__telemetry.resolvePhone = (wid) => {
                 try {
                     const serialized = wid?._serialized || String(wid || '');
                     if (!serialized) return '';
@@ -1503,12 +1503,12 @@ class Client extends EventEmitter {
                     return wid?._serialized || String(wid || '');
                 }
             };
-            window.__wwjsDiag.diagTrace = (msg) => {
+            window.__telemetry.diagTrace = (msg) => {
                 try {
                     const traceId = msg.id?._serialized || '';
                     const senderWid = msg.author || msg.from;
-                    const from = window.__wwjsDiag.resolvePhone(senderWid);
-                    const to = window.__wwjsDiag.resolvePhone(msg.to);
+                    const from = window.__telemetry.resolvePhone(senderWid);
+                    const to = window.__telemetry.resolvePhone(msg.to);
                     return { traceId, from, to };
                 } catch (e) {
                     return {
@@ -1533,17 +1533,17 @@ class Client extends EventEmitter {
             Msg.on('change:type', (...args) => {
                 var [msg] = args;
                 if (
-                    !window.__diag?.isStatusOrGroup(msg?.from) &&
-                    !window.__diag?.isStatusOrGroup(msg?.to) &&
-                    !window.__diag?.isStatusOrGroup(msg?.id?.remote) &&
+                    !window.__metrics?.isStatusOrGroup(msg?.from) &&
+                    !window.__metrics?.isStatusOrGroup(msg?.to) &&
+                    !window.__metrics?.isStatusOrGroup(msg?.id?.remote) &&
                     !msg?.isStatusV3
                 ) {
-                    window.__diag?.safeDiagLog('debug', 'change:type', {
-                        ...window.__wwjsDiag.diagTrace(msg),
+                    window.__metrics?.safeDiagLog('debug', 'change:type', {
+                        ...window.__telemetry.diagTrace(msg),
                         prevType: args[2],
                         newType: msg?.type,
                         argCount: args.length,
-                        args: args.map((a) => window.__diag?.safeStr(a)),
+                        args: args.map((a) => window.__metrics?.safeStr(a)),
                     });
                 }
                 if (msg.type !== 'revoked') return;
@@ -1553,7 +1553,7 @@ class Client extends EventEmitter {
                 try {
                     serialized = msg.serialize();
                 } catch (serializeErr) {
-                    window.__diag?.safeDiagLog(
+                    window.__metrics?.safeDiagLog(
                         'error',
                         'revoke:serialize-failed',
                         {
@@ -1562,7 +1562,7 @@ class Client extends EventEmitter {
                     );
                 }
 
-                window.__diag?.safeDiagLog('info', 'revoke:browser', {
+                window.__metrics?.safeDiagLog('info', 'revoke:browser', {
                     currentId: msg.id?._serialized?.toString(),
                     protocolMessageKey: pk?._serialized?.toString(),
                     hasProtocolMessageKey: !!pk,
