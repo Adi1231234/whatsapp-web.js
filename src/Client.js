@@ -116,14 +116,31 @@ class Client extends EventEmitter {
      * Injection logic
      * Private function
      */
-    async inject() {
-        if (this._injectInProgress) {
-            console.warn('[wwjs-diag] inject:SKIPPED (already in progress)', {
+    /**
+     * Abort a running inject() so a fresh one can start on the new page.
+     * Called by the framenavigated handler when a full navigation is detected.
+     */
+    abortInject() {
+        if (this._injectAbort) {
+            console.log('[wwjs-diag] inject:abort requested', {
                 ts: Date.now(),
             });
+            this._injectAbort.abort();
+        }
+    }
+
+    async inject() {
+        if (this._injectInProgress) {
+            this._reinjectNeeded = true;
+            console.warn(
+                '[wwjs-diag] inject:SKIPPED (already in progress, queued re-inject)',
+                { ts: Date.now() },
+            );
             return;
         }
         this._injectInProgress = true;
+        this._reinjectNeeded = false;
+        this._injectAbort = new AbortController();
 
         try {
             const _injectStart = Date.now();
@@ -140,13 +157,27 @@ class Client extends EventEmitter {
             this._hasSyncedTriggered = false;
 
             const authTimeout = this.options.authTimeoutMs || 30000;
-            await this.pupPage
-                .waitForFunction('window.Debug?.VERSION != undefined', {
-                    timeout: authTimeout,
-                })
-                .catch(() => {
-                    throw 'auth timeout';
-                });
+
+            // Race waitForFunction against abort signal so navigation
+            // doesn't leave us stuck waiting 30s on a dead context
+            const abortPromise = new Promise((_, reject) => {
+                this._injectAbort.signal.addEventListener(
+                    'abort',
+                    () => reject(new Error('inject aborted (navigation)')),
+                    { once: true },
+                );
+            });
+            await Promise.race([
+                this.pupPage.waitForFunction(
+                    'window.Debug?.VERSION != undefined',
+                    { timeout: authTimeout },
+                ),
+                abortPromise,
+            ]).catch((err) => {
+                throw err?.message?.includes('aborted')
+                    ? err
+                    : new Error('auth timeout');
+            });
             await this.setDeviceName(
                 this.options.deviceName,
                 this.options.browserName,
@@ -354,6 +385,7 @@ class Client extends EventEmitter {
                 },
             );
 
+            this._hasSyncedNavRetries = 0;
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onAppStateHasSyncedEvent',
@@ -367,6 +399,7 @@ class Client extends EventEmitter {
                     this._hasSyncedTriggered = true;
                     console.log('[wwjs-diag] onAppStateHasSyncedEvent CALLED', {
                         ts: Date.now(),
+                        retryCount: this._hasSyncedNavRetries,
                     });
                     try {
                         const authEventPayload =
@@ -465,19 +498,42 @@ class Client extends EventEmitter {
                                 { ts: Date.now() },
                             );
                         }
+                        this._hasSyncedNavRetries = 0;
                         this.emit(Events.READY);
                         console.log(
                             '[wwjs-diag] onAppStateHasSyncedEvent READY emitted',
                         );
                         this.authStrategy.afterAuthReady();
                     } catch (err) {
+                        const errMsg = String(err?.message || err);
+                        const isNavigation =
+                            errMsg.includes('context was destroyed') ||
+                            errMsg.includes('because of a navigation') ||
+                            errMsg.includes('Navigating frame was detached') ||
+                            errMsg.includes('detached Frame') ||
+                            errMsg.includes('Promise was collected') ||
+                            errMsg.includes('Target closed') ||
+                            errMsg.includes('Session closed');
                         console.warn(
                             '[wwjs-diag] onAppStateHasSyncedEvent ERROR',
                             {
-                                error: String(err?.message || err),
+                                error: errMsg,
+                                isNavigation,
+                                retryCount: this._hasSyncedNavRetries,
                                 ts: Date.now(),
                             },
                         );
+                        if (isNavigation) {
+                            this._hasSyncedNavRetries++;
+                            if (this._hasSyncedNavRetries <= 5) {
+                                // Allow framenavigated -> inject -> hasSynced to retry
+                                this._hasSyncedTriggered = false;
+                            } else {
+                                console.warn(
+                                    '[wwjs-diag] onAppStateHasSyncedEvent MAX RETRIES reached, giving up',
+                                );
+                            }
+                        }
                         throw err;
                     }
                 },
@@ -637,6 +693,14 @@ class Client extends EventEmitter {
             });
         } finally {
             this._injectInProgress = false;
+            if (this._reinjectNeeded) {
+                this._reinjectNeeded = false;
+                console.log(
+                    '[wwjs-diag] inject:re-inject (queued during previous inject)',
+                    { ts: Date.now() },
+                );
+                setTimeout(() => this.inject().catch(() => {}), 0);
+            }
         }
     }
 
@@ -807,6 +871,13 @@ class Client extends EventEmitter {
                 isLogout,
                 lastLoggedOut: this.lastLoggedOut,
             });
+
+            // Abort any in-progress inject so it doesn't block for 30s
+            // on a dead execution context. _reinjectNeeded ensures a
+            // fresh inject starts after the abort.
+            if (this._injectInProgress) {
+                this.abortInject();
+            }
 
             if (isLogout) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
@@ -1519,22 +1590,8 @@ class Client extends EventEmitter {
                 }
             };
 
-            console.warn(
-                '[wwjs-diag] attachEventListeners:BEFORE_REQUIRE ts=' +
-                    Date.now(),
-            );
-            const _reqResult = window.require('WAWebCollections');
-            console.warn(
-                '[wwjs-diag] attachEventListeners:AFTER_REQUIRE ts=' +
-                    Date.now() +
-                    ' result=' +
-                    typeof _reqResult +
-                    ' keys=' +
-                    (_reqResult
-                        ? Object.keys(_reqResult).slice(0, 5).join(',')
-                        : 'null'),
-            );
-            const { Msg, Chat, WAWebCallCollection } = _reqResult;
+            const { Msg, Chat, WAWebCallCollection } =
+                window.require('WAWebCollections');
             const AppState = window.require('WAWebSocketModel').Socket;
 
             // Enable placeholder message resend (recovery for ciphertext messages)
