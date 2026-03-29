@@ -79,7 +79,7 @@ return { isStatusOrGroup, isThumbnailType, wid, safeStr, shouldSkipMsg, shouldSk
 
 exports.InjectDiagCommon = new Function(`
 ${HELPERS_SOURCE}
-window.__diag = {
+window.__metrics = {
     safeDiagLog: function(level, tag, data) {
         try { window.onDiagLog(level, tag, typeof data === 'string' ? data : JSON.stringify(data)); } catch(e) {}
     },
