@@ -158,6 +158,24 @@ class Client extends EventEmitter {
 
             const authTimeout = this.options.authTimeoutMs || 30000;
 
+            // DEBUG: simulate navigation during waitForFunction via puppeteer transport
+            if (this.options._debugReloadDuringInject) {
+                const page = this.pupPage;
+                setTimeout(async () => {
+                    console.warn(
+                        '[wwjs-diag] DEBUG: triggering page.evaluate(location.reload) via puppeteer transport',
+                    );
+                    try {
+                        await page.evaluate(() => location.reload());
+                    } catch (e) {
+                        console.warn(
+                            '[wwjs-diag] DEBUG: reload evaluate error (expected):',
+                            String(e?.message || e),
+                        );
+                    }
+                }, 1000);
+            }
+
             // Race waitForFunction against abort signal so navigation
             // doesn't leave us stuck waiting 30s on a dead context
             const abortPromise = new Promise((_, reject) => {
