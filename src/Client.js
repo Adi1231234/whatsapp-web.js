@@ -162,21 +162,23 @@ class Client extends EventEmitter {
             // In real scenarios, Electron fires framenavigated which calls abortInject.
             // Here we simulate both: reload (breaks waitForFunction) + abort (the fix).
             if (this.options._debugReloadDuringInject) {
+                // Fire reload immediately (0ms) so it races with waitForFunction
                 setTimeout(() => {
                     console.warn(
-                        '[wwjs-diag] DEBUG: reload + abort to simulate navigation',
+                        '[wwjs-diag] DEBUG: reload + abort NOW ts=' +
+                            Date.now(),
                     );
                     this.pupPage
                         .evaluate(() => window.location.reload())
                         .catch(() => {});
-                    // Abort after 500ms (simulates framenavigated calling abortInject)
+                    // Abort after 200ms
                     setTimeout(() => {
                         console.warn(
-                            '[wwjs-diag] DEBUG: calling abortInject()',
+                            '[wwjs-diag] DEBUG: abortInject ts=' + Date.now(),
                         );
                         this.abortInject();
-                    }, 500);
-                }, 1000);
+                    }, 200);
+                }, 0);
             }
 
             // Race waitForFunction against abort signal so navigation
