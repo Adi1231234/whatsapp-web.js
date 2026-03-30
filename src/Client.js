@@ -158,44 +158,24 @@ class Client extends EventEmitter {
 
             const authTimeout = this.options.authTimeoutMs || 30000;
 
-            // DEBUG: simulate navigation during waitForFunction via puppeteer transport
+            // DEBUG: simulate what happens when WA Web navigates during inject
+            // In real scenarios, Electron fires framenavigated which calls abortInject.
+            // Here we simulate both: reload (breaks waitForFunction) + abort (the fix).
             if (this.options._debugReloadDuringInject) {
-                const page = this.pupPage;
-                const abortCtrl = this._injectAbort;
-                console.warn(
-                    '[wwjs-diag] DEBUG: scheduling reload in 1s, _injectInProgress=' +
-                        this._injectInProgress +
-                        ' abortSignal.aborted=' +
-                        abortCtrl?.signal?.aborted,
-                );
-                setTimeout(async () => {
+                setTimeout(() => {
                     console.warn(
-                        '[wwjs-diag] DEBUG: triggering page.evaluate(location.reload) via puppeteer transport, _injectInProgress=' +
-                            this._injectInProgress,
+                        '[wwjs-diag] DEBUG: reload + abort to simulate navigation',
                     );
-                    try {
-                        await page.evaluate(() => location.reload());
+                    this.pupPage
+                        .evaluate(() => window.location.reload())
+                        .catch(() => {});
+                    // Abort after 500ms (simulates framenavigated calling abortInject)
+                    setTimeout(() => {
                         console.warn(
-                            '[wwjs-diag] DEBUG: reload evaluate resolved (unexpected)',
-                        );
-                    } catch (e) {
-                        console.warn(
-                            '[wwjs-diag] DEBUG: reload evaluate error: ' +
-                                String(e?.message || e),
-                        );
-                        // Manually call abortInject since framenavigated might not fire
-                        console.warn(
-                            '[wwjs-diag] DEBUG: manually calling abortInject(), _injectInProgress=' +
-                                this._injectInProgress +
-                                ' abortSignal.aborted=' +
-                                abortCtrl?.signal?.aborted,
+                            '[wwjs-diag] DEBUG: calling abortInject()',
                         );
                         this.abortInject();
-                        console.warn(
-                            '[wwjs-diag] DEBUG: after abortInject(), abortSignal.aborted=' +
-                                abortCtrl?.signal?.aborted,
-                        );
-                    }
+                    }, 500);
                 }, 1000);
             }
 
