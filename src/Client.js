@@ -161,16 +161,39 @@ class Client extends EventEmitter {
             // DEBUG: simulate navigation during waitForFunction via puppeteer transport
             if (this.options._debugReloadDuringInject) {
                 const page = this.pupPage;
+                const abortCtrl = this._injectAbort;
+                console.warn(
+                    '[wwjs-diag] DEBUG: scheduling reload in 1s, _injectInProgress=' +
+                        this._injectInProgress +
+                        ' abortSignal.aborted=' +
+                        abortCtrl?.signal?.aborted,
+                );
                 setTimeout(async () => {
                     console.warn(
-                        '[wwjs-diag] DEBUG: triggering page.evaluate(location.reload) via puppeteer transport',
+                        '[wwjs-diag] DEBUG: triggering page.evaluate(location.reload) via puppeteer transport, _injectInProgress=' +
+                            this._injectInProgress,
                     );
                     try {
                         await page.evaluate(() => location.reload());
+                        console.warn(
+                            '[wwjs-diag] DEBUG: reload evaluate resolved (unexpected)',
+                        );
                     } catch (e) {
                         console.warn(
-                            '[wwjs-diag] DEBUG: reload evaluate error (expected):',
-                            String(e?.message || e),
+                            '[wwjs-diag] DEBUG: reload evaluate error: ' +
+                                String(e?.message || e),
+                        );
+                        // Manually call abortInject since framenavigated might not fire
+                        console.warn(
+                            '[wwjs-diag] DEBUG: manually calling abortInject(), _injectInProgress=' +
+                                this._injectInProgress +
+                                ' abortSignal.aborted=' +
+                                abortCtrl?.signal?.aborted,
+                        );
+                        this.abortInject();
+                        console.warn(
+                            '[wwjs-diag] DEBUG: after abortInject(), abortSignal.aborted=' +
+                                abortCtrl?.signal?.aborted,
                         );
                     }
                 }, 1000);
@@ -178,10 +201,16 @@ class Client extends EventEmitter {
 
             // Race waitForFunction against abort signal so navigation
             // doesn't leave us stuck waiting 30s on a dead context
+            console.log('[wwjs-diag] inject:setting up abort race');
             const abortPromise = new Promise((_, reject) => {
                 this._injectAbort.signal.addEventListener(
                     'abort',
-                    () => reject(new Error('inject aborted (navigation)')),
+                    () => {
+                        console.warn(
+                            '[wwjs-diag] inject:ABORT SIGNAL FIRED - rejecting waitForFunction race',
+                        );
+                        reject(new Error('inject aborted (navigation)'));
+                    },
                     { once: true },
                 );
             });
