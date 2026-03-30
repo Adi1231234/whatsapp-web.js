@@ -182,29 +182,53 @@ class Client extends EventEmitter {
             // Race waitForFunction against abort signal so navigation
             // doesn't leave us stuck waiting 30s on a dead context
             console.log('[wwjs-diag] inject:setting up abort race');
+            const waitPromise = this.pupPage.waitForFunction(
+                'window.Debug?.VERSION != undefined',
+                { timeout: authTimeout },
+            );
+            waitPromise.then(
+                () =>
+                    console.log('[wwjs-diag] inject:waitForFunction RESOLVED'),
+                (e) =>
+                    console.warn(
+                        '[wwjs-diag] inject:waitForFunction REJECTED: ' +
+                            String(e?.message || e),
+                    ),
+            );
             const abortPromise = new Promise((_, reject) => {
                 this._injectAbort.signal.addEventListener(
                     'abort',
                     () => {
                         console.warn(
-                            '[wwjs-diag] inject:ABORT SIGNAL FIRED - rejecting waitForFunction race',
+                            '[wwjs-diag] inject:ABORT SIGNAL FIRED ts=' +
+                                Date.now(),
                         );
                         reject(new Error('inject aborted (navigation)'));
                     },
                     { once: true },
                 );
             });
-            await Promise.race([
-                this.pupPage.waitForFunction(
-                    'window.Debug?.VERSION != undefined',
-                    { timeout: authTimeout },
-                ),
-                abortPromise,
-            ]).catch((err) => {
-                throw err?.message?.includes('aborted')
-                    ? err
-                    : new Error('auth timeout');
-            });
+            console.log(
+                '[wwjs-diag] inject:starting Promise.race ts=' + Date.now(),
+            );
+            await Promise.race([waitPromise, abortPromise])
+                .then(() =>
+                    console.log(
+                        '[wwjs-diag] inject:race WON by waitForFunction ts=' +
+                            Date.now(),
+                    ),
+                )
+                .catch((err) => {
+                    console.warn(
+                        '[wwjs-diag] inject:race LOST err=' +
+                            String(err?.message || err) +
+                            ' ts=' +
+                            Date.now(),
+                    );
+                    throw err?.message?.includes('aborted')
+                        ? err
+                        : new Error('auth timeout');
+                });
             await this.setDeviceName(
                 this.options.deviceName,
                 this.options.browserName,
