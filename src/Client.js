@@ -142,6 +142,17 @@ class Client extends EventEmitter {
             this._hasSyncedTriggered = false;
 
             const authTimeout = this.options.authTimeoutMs || 30000;
+            // DEBUG: simulate WA Web location.reload() during waitForFunction
+            if (this.options._debugReloadDuringInject) {
+                const page = this.pupPage;
+                setTimeout(() => {
+                    console.warn(
+                        '[wwjs-diag] DEBUG: page.evaluate(location.reload)',
+                    );
+                    page.evaluate(() => location.reload()).catch(() => {});
+                }, 0);
+            }
+
             console.log('[wwjs-diag] inject:waitForDebugVersion START', {
                 ts: Date.now(),
             });
