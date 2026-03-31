@@ -117,13 +117,15 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
-        if (this._injectInProgress) {
-            console.warn('[wwjs-diag] inject:SKIPPED (already in progress)', {
+        // Cancel any previous inject still running
+        if (this._injectAbort) {
+            console.warn('[wwjs-diag] inject:CANCELLING previous inject', {
                 ts: Date.now(),
             });
-            return;
+            this._injectAbort.abort();
         }
-        this._injectInProgress = true;
+        const abort = new AbortController();
+        this._injectAbort = abort;
 
         try {
             const _injectStart = Date.now();
@@ -143,10 +145,13 @@ class Client extends EventEmitter {
             await this.pupPage
                 .waitForFunction('window.Debug?.VERSION != undefined', {
                     timeout: authTimeout,
+                    signal: abort.signal,
                 })
-                .catch(() => {
+                .catch((err) => {
+                    if (abort.signal.aborted) throw err;
                     throw 'auth timeout';
                 });
+            if (abort.signal.aborted) return;
             await this.setDeviceName(
                 this.options.deviceName,
                 this.options.browserName,
@@ -478,6 +483,7 @@ class Client extends EventEmitter {
                                 ts: Date.now(),
                             },
                         );
+                        this._hasSyncedTriggered = false;
                         throw err;
                     }
                 },
@@ -635,8 +641,19 @@ class Client extends EventEmitter {
                 ts: Date.now(),
                 durationMs: Date.now() - _injectStart,
             });
+        } catch (err) {
+            if (abort.signal.aborted) {
+                console.warn(
+                    '[wwjs-diag] inject:SUPERSEDED (newer inject running)',
+                    { error: String(err?.message || err), ts: Date.now() },
+                );
+                return;
+            }
+            throw err;
         } finally {
-            this._injectInProgress = false;
+            if (this._injectAbort === abort) {
+                this._injectAbort = null;
+            }
         }
     }
 
@@ -710,6 +727,10 @@ class Client extends EventEmitter {
             timeout: 0,
             referer: 'https://whatsapp.com/',
         });
+
+        // Register framenavigated BEFORE inject so that if navigation
+        // interrupts inject, the handler triggers a fresh inject.
+        this._registerFramenavigatedHandler();
 
         console.log('[wwjs-diag] initialize:inject START (first call)');
         await this.inject();
@@ -791,6 +812,11 @@ class Client extends EventEmitter {
                 self._diagEvalInflight--;
             }
         };
+    }
+
+    _registerFramenavigatedHandler() {
+        if (this._framenavigatedRegistered) return;
+        this._framenavigatedRegistered = true;
 
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.parentFrame() !== null) return;
@@ -1999,6 +2025,8 @@ class Client extends EventEmitter {
      * Closes the client
      */
     async destroy() {
+        if (this._injectAbort) this._injectAbort.abort();
+
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
         console.warn('[wwjs-diag] destroy CALLED', {
