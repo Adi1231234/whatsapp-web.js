@@ -119,6 +119,9 @@ class Client extends EventEmitter {
     async inject() {
         // Cancel any previous inject still running
         if (this._injectAbort) {
+            console.warn('[wwjs-diag] inject:CANCELLING previous inject', {
+                ts: Date.now(),
+            });
             this._injectAbort.abort();
         }
         const abort = new AbortController();
@@ -139,16 +142,37 @@ class Client extends EventEmitter {
             this._hasSyncedTriggered = false;
 
             const authTimeout = this.options.authTimeoutMs || 30000;
+            console.log('[wwjs-diag] inject:waitForDebugVersion START', {
+                ts: Date.now(),
+            });
             await this.pupPage
                 .waitForFunction('window.Debug?.VERSION != undefined', {
                     timeout: authTimeout,
                     signal: abort.signal,
                 })
                 .catch((err) => {
+                    console.warn(
+                        '[wwjs-diag] inject:waitForDebugVersion CATCH',
+                        {
+                            aborted: abort.signal.aborted,
+                            error: String(err?.message || err),
+                            ts: Date.now(),
+                        },
+                    );
                     if (abort.signal.aborted) throw err;
                     throw 'auth timeout';
                 });
-            if (abort.signal.aborted) return;
+            console.log('[wwjs-diag] inject:waitForDebugVersion OK', {
+                aborted: abort.signal.aborted,
+                ts: Date.now(),
+            });
+            if (abort.signal.aborted) {
+                console.warn(
+                    '[wwjs-diag] inject:ABORTED after waitForDebugVersion',
+                    { ts: Date.now() },
+                );
+                return;
+            }
             await this.setDeviceName(
                 this.options.deviceName,
                 this.options.browserName,
@@ -647,12 +671,31 @@ class Client extends EventEmitter {
                 durationMs: Date.now() - _injectStart,
             });
         } catch (err) {
-            if (abort.signal.aborted) return; // superseded by newer inject
+            if (abort.signal.aborted) {
+                console.warn(
+                    '[wwjs-diag] inject:SUPERSEDED (newer inject running)',
+                    {
+                        error: String(err?.message || err),
+                        ts: Date.now(),
+                    },
+                );
+                return;
+            }
+            console.warn('[wwjs-diag] inject:ERROR', {
+                error: String(err?.message || err),
+                ts: Date.now(),
+            });
             throw err;
         } finally {
-            if (this._injectAbort === abort) {
+            const wasCurrent = this._injectAbort === abort;
+            if (wasCurrent) {
                 this._injectAbort = null;
             }
+            console.log('[wwjs-diag] inject:FINALLY', {
+                wasCurrent,
+                aborted: abort.signal.aborted,
+                ts: Date.now(),
+            });
         }
     }
 
