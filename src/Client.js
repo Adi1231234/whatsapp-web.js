@@ -1519,22 +1519,8 @@ class Client extends EventEmitter {
                 }
             };
 
-            console.warn(
-                '[wwjs-diag] attachEventListeners:BEFORE_REQUIRE ts=' +
-                    Date.now(),
-            );
-            const _reqResult = window.require('WAWebCollections');
-            console.warn(
-                '[wwjs-diag] attachEventListeners:AFTER_REQUIRE ts=' +
-                    Date.now() +
-                    ' result=' +
-                    typeof _reqResult +
-                    ' keys=' +
-                    (_reqResult
-                        ? Object.keys(_reqResult).slice(0, 5).join(',')
-                        : 'null'),
-            );
-            const { Msg, Chat, WAWebCallCollection } = _reqResult;
+            const { Msg, Chat, WAWebCallCollection } =
+                window.require('WAWebCollections');
             const AppState = window.require('WAWebSocketModel').Socket;
 
             // Enable placeholder message resend (recovery for ciphertext messages)
