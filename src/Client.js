@@ -482,10 +482,10 @@ class Client extends EventEmitter {
         await this.authStrategy.beforeBrowserInitialized();
 
         const puppeteerOpts = this.options.puppeteer;
-        if (puppeteerOpts && puppeteerOpts.browser && puppeteerOpts.page) {
-            // External browser + page provided by caller
+        if (puppeteerOpts && puppeteerOpts.browser) {
+            // External browser provided by caller
             browser = puppeteerOpts.browser;
-            page = puppeteerOpts.page;
+            page = puppeteerOpts.page || (await browser.newPage());
         } else if (
             puppeteerOpts &&
             (puppeteerOpts.browserWSEndpoint || puppeteerOpts.browserURL)
