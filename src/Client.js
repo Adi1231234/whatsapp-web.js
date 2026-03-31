@@ -112,18 +112,23 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
-        if (this._injectInProgress) return;
-        this._injectInProgress = true;
+        // Cancel any previous inject still running
+        if (this._injectAbort) this._injectAbort.abort();
+        const abort = new AbortController();
+        this._injectAbort = abort;
 
         try {
             const authTimeout = this.options.authTimeoutMs || 30000;
             await this.pupPage
                 .waitForFunction('window.Debug?.VERSION != undefined', {
                     timeout: authTimeout,
+                    signal: abort.signal,
                 })
-                .catch(() => {
+                .catch((err) => {
+                    if (abort.signal.aborted) throw err;
                     throw 'auth timeout';
                 });
+            if (abort.signal.aborted) return;
             await this.setDeviceName(
                 this.options.deviceName,
                 this.options.browserName,
@@ -458,8 +463,13 @@ class Client extends EventEmitter {
                     window.onAppStateHasSyncedEvent();
                 }
             });
+        } catch (err) {
+            if (abort.signal.aborted) return; // superseded by newer inject
+            throw err;
         } finally {
-            this._injectInProgress = false;
+            if (this._injectAbort === abort) {
+                this._injectAbort = null;
+            }
         }
     }
 
@@ -534,7 +544,16 @@ class Client extends EventEmitter {
             referer: 'https://whatsapp.com/',
         });
 
+        // Register framenavigated BEFORE inject so that if navigation
+        // interrupts inject, the handler triggers a fresh inject.
+        this._registerFramenavigatedHandler();
+
         await this.inject();
+    }
+
+    _registerFramenavigatedHandler() {
+        if (this._framenavigatedRegistered) return;
+        this._framenavigatedRegistered = true;
 
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.parentFrame() !== null) return;
@@ -1314,6 +1333,8 @@ class Client extends EventEmitter {
      * Closes the client
      */
     async destroy() {
+        if (this._injectAbort) this._injectAbort.abort();
+
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
         if (isConnected) {
