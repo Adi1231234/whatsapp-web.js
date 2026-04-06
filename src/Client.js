@@ -2013,13 +2013,15 @@ class Client extends EventEmitter {
                 }
             });
         } else {
-            this.pupPage
-                .waitForResponse((res) => res.ok() && res.url() === WhatsWebURL)
-                .then((res) => res.text())
-                .then((indexHtml) => {
-                    this.currentIndexHtml = indexHtml;
-                })
-                .catch((_) => _);
+            this.pupPage.on('response', (res) => {
+                if (res.ok() && res.url() === WhatsWebURL) {
+                    res.text()
+                        .then((indexHtml) => {
+                            this.currentIndexHtml = indexHtml;
+                        })
+                        .catch((_) => _);
+                }
+            });
         }
     }
 
