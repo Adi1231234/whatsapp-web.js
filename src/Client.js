@@ -1303,13 +1303,12 @@ class Client extends EventEmitter {
                 }
             });
         } else {
-            this.pupPage
-                .waitForResponse((res) => res.ok() && res.url() === WhatsWebURL)
-                .then((res) => res.text())
-                .then((indexHtml) => {
+            this.pupPage.on('response', async (res) => {
+                if (res.ok() && res.url() === WhatsWebURL) {
+                    const indexHtml = await res.text();
                     this.currentIndexHtml = indexHtml;
-                })
-                .catch(() => {});
+                }
+            });
         }
     }
 
