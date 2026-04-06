@@ -47,3 +47,78 @@ jobs:
                     echo "❌ PR title does not match the required format!"
                     exit 1
                   fi
+
+    validate-body:
+        name: Validate body
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Validate pull request body
+              env:
+                  BODY: ${{ github.event.pull_request.body }}
+              run: |
+                  TEMPLATE=".github/pull_request_template.md"
+                  if [ ! -f "$TEMPLATE" ]; then
+                    echo "No PR template found, skipping validation"
+                    exit 0
+                  fi
+
+                  errors=()
+
+                  # Strip HTML comments from both template and body
+                  clean_body=$(echo "$BODY" | perl -0777 -pe 's/<!--.*?-->//gs')
+                  clean_tmpl=$(perl -0777 -pe 's/<!--.*?-->//gs' "$TEMPLATE")
+
+                  # Extract required sections (## headings) from template
+                  sections=$(echo "$clean_tmpl" | grep -E '^## ' || true)
+                  while IFS= read -r section; do
+                    [ -z "$section" ] && continue
+                    if ! echo "$BODY" | grep -qF "$section"; then
+                      errors+=("Missing section: $section")
+                    fi
+                  done <<< "$sections"
+
+                  # Extract subsections (### headings) that require user content
+                  subsections=$(echo "$clean_tmpl" | grep -E '^### ' || true)
+                  while IFS= read -r sub; do
+                    [ -z "$sub" ] && continue
+                    content=$(echo "$clean_body" | sed -n "/^$(echo "$sub" | sed 's/[[\.*^$()+?{|]/\\&/g')/,/^##/p" | sed '1d;$d' | xargs)
+                    if [ -z "$content" ]; then
+                      errors+=("$sub is empty")
+                    fi
+                  done <<< "$subsections"
+
+                  # Extract "- Label:" fields from template and check they are filled
+                  fields=$(echo "$clean_tmpl" | grep -E '^- .+:$' | sed 's/^- //' | sed 's/:$//' || true)
+                  while IFS= read -r field; do
+                    [ -z "$field" ] && continue
+                    line=$(echo "$clean_body" | grep -E "^- ${field}:" || true)
+                    value=$(echo "$line" | sed "s/^- ${field}://" | xargs)
+                    if [ -z "$value" ]; then
+                      errors+=("Field not filled: $field")
+                    fi
+                  done <<< "$fields"
+
+                  # Find sections in the template that contain checkboxes, then verify at least one is checked
+                  checkbox_sections=$(echo "$clean_tmpl" | awk '/^## /{section=$0} /^- \[ \]/{print section}' | sort -u || true)
+                  while IFS= read -r cs; do
+                    [ -z "$cs" ] && continue
+                    section_body=$(echo "$BODY" | awk -v h="$cs" '$0 == h {found=1; next} /^## / && found {exit} found')
+                    if ! echo "$section_body" | grep -q "\[x\]"; then
+                      errors+=("No checkbox checked in: $cs")
+                    fi
+                  done <<< "$checkbox_sections"
+
+                  if [ ${#errors[@]} -gt 0 ]; then
+                    echo "❌ PR body does not match the required template:"
+                    for err in "${errors[@]}"; do
+                      echo "  - $err"
+                    done
+                    echo ""
+                    echo "Please follow the PR template: $TEMPLATE"
+                    exit 1
+                  fi
+
+                  echo "✅ PR body matches the template"
