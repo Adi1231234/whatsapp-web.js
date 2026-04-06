@@ -585,46 +585,25 @@ class Message extends Base {
         const blobSize = await blobHandle.evaluate((b) => b.size);
         await resultHandle.dispose();
 
-        let offset = 0;
-        const stream = new Readable({
-            read() {
-                if (offset >= blobSize) {
-                    this.push(null);
-                    blobHandle.dispose();
-                    return;
+        async function* readChunks() {
+            try {
+                for (let offset = 0; offset < blobSize; offset += chunkSize) {
+                    const base64 = await blobHandle.evaluate(
+                        async (blob, s, e) => {
+                            const ab = await blob.slice(s, e).arrayBuffer();
+                            return window.WWebJS.arrayBufferToBase64Async(ab);
+                        },
+                        offset,
+                        Math.min(offset + chunkSize, blobSize),
+                    );
+                    yield Buffer.from(base64, 'base64');
                 }
-                const start = offset;
-                const end = Math.min(offset + chunkSize, blobSize);
-                offset = end;
-                blobHandle
-                    .evaluate(
-                        (blob, s, e) =>
-                            new Promise((resolve) => {
-                                const r = new FileReader();
-                                r.onload = () =>
-                                    resolve(r.result.split(',')[1]);
-                                r.readAsDataURL(blob.slice(s, e));
-                            }),
-                        start,
-                        end,
-                    )
-                    .then((base64) => {
-                        this.push(Buffer.from(base64, 'base64'));
-                    })
-                    .catch((err) => {
-                        blobHandle.dispose();
-                        this.destroy(err);
-                    });
-            },
-            destroy(err, callback) {
-                blobHandle.dispose().then(
-                    () => callback(err),
-                    () => callback(err),
-                );
-            },
-        });
+            } finally {
+                await blobHandle.dispose();
+            }
+        }
 
-        return { stream, ...metadata };
+        return { stream: Readable.from(readChunks()), ...metadata };
     }
 
     /**
