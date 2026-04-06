@@ -597,7 +597,7 @@ class Message extends Base {
                                 r.readAsDataURL(blob.slice(s, e));
                             }),
                         offset,
-                        Math.min(offset + chunkSize, blobSize),
+                        offset + chunkSize,
                     );
                     yield Buffer.from(base64, 'base64');
                 }
