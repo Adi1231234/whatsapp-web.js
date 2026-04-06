@@ -1,5 +1,6 @@
 'use strict';
 
+const { Readable } = require('stream');
 const Base = require('./Base');
 const MessageMedia = require('./MessageMedia');
 const Location = require('./Location');
@@ -547,142 +548,32 @@ class Message extends Base {
     }
 
     /**
-     * Downloads and returns the attatched message media
-     * @returns {Promise<MessageMedia>}
+     * Downloads and returns the attached message media
+     * @returns {Promise<MessageMedia|undefined>}
      */
     async downloadMedia() {
         if (!this.hasMedia) {
-            // [L12] Log when downloadMedia called but hasMedia=false
             this.client?.emit?.(
                 'diag',
                 'warn',
                 'downloadMedia: hasMedia=false',
-                JSON.stringify({
-                    id: this.id?._serialized,
-                    type: this.type,
-                }),
+                JSON.stringify({ id: this.id?._serialized, type: this.type }),
             );
             return undefined;
         }
 
         const result = await this.client.pupPage.evaluate(async (msgId) => {
-            const msg =
-                window.require('WAWebCollections').Msg.get(msgId) ||
-                (
-                    await window
-                        .require('WAWebCollections')
-                        .Msg.getMessagesById([msgId])
-                )?.messages?.[0];
+            const resolved = await window.WWebJS.resolveMediaBlob(msgId);
+            if (!resolved) return null;
 
-            // REUPLOADING mediaStage means the media is expired and the download button is spinning, cannot be downloaded now
-            if (
-                !msg ||
-                !msg.mediaData ||
-                msg.mediaData.mediaStage === 'REUPLOADING'
-            ) {
-                // [L12] Log silent null return
-                if (window.onDiagLog)
-                    window.onDiagLog(
-                        'warn',
-                        'downloadMedia: returning null',
-                        JSON.stringify({
-                            id: msgId,
-                            hasMsg: !!msg,
-                            hasMediaData: !!msg?.mediaData,
-                            mediaStage: msg?.mediaData?.mediaStage,
-                        }),
-                    );
-                return null;
-            }
-            // Always call internal downloadMedia - never skip based on
-            // mediaStage, because cache eviction can leave stage=RESOLVED
-            // with empty InMemoryMediaBlobCache.
-            // The internal function checks cache first and only downloads
-            // from CDN on miss.
-            let resolveError = null;
-            try {
-                await msg.downloadMedia({
-                    downloadEvenIfExpensive: true,
-                    rmrReason: 1,
-                    isUserInitiated: true,
-                });
-            } catch (re) {
-                resolveError = {
-                    message: String(re?.message || re),
-                    name: re?.name,
-                };
-            }
-
-            // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
-            if (msg.mediaData.mediaStage === 'NEED_POKE') {
-                var entry = msg.mediaObject?.entries?.getDownloadEntry?.(true);
-                if (entry?.markWhetherOnServer) {
-                    entry.markWhetherOnServer(false);
-                    try {
-                        await msg.downloadMedia({
-                            downloadEvenIfExpensive: true,
-                            rmrReason: 1,
-                            isUserInitiated: true,
-                        });
-                    } catch (re2) {
-                        /* ignore */
-                    }
-                }
-            }
-
-            if (
-                msg.mediaData.mediaStage.includes('ERROR') ||
-                msg.mediaData.mediaStage === 'FETCHING' ||
-                msg.mediaData.mediaStage === 'NEED_POKE' ||
-                msg.mediaData.mediaStage === 'REUPLOADING'
-            ) {
-                if (window.onDiagLog)
-                    window.onDiagLog(
-                        'error',
-                        'downloadMedia: failed',
-                        JSON.stringify({
-                            id: msgId,
-                            stageAfter: msg.mediaData.mediaStage,
-                            resolveError,
-                        }),
-                    );
-                throw new Error(
-                    'downloadMedia: media not available (stage: ' +
-                        msg.mediaData.mediaStage +
-                        ')',
-                );
-            }
-
-            // Read from where WhatsApp stored the decrypted data.
-            // InMemoryMediaBlobCache: images, docs, audio, stickers (no per-file limit, 250MB total)
-            // mediaObject.mediaBlob: video (as OpaqueData)
-            // This avoids downloadAndMaybeDecrypt which goes through
-            // LruMediaStore that has a 30MB per-file limit.
-            const cached = window
-                .require('WAWebMediaInMemoryBlobCache')
-                .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
-
-            let arrayBuffer;
-            if (cached) {
-                arrayBuffer = await cached.arrayBuffer();
-            } else if (msg.mediaObject?.mediaBlob) {
-                arrayBuffer = await window
-                    .require('WAWebMediaDataUtils')
-                    .opaqueDataToArrayBuffer(msg.mediaObject.mediaBlob);
-            }
-
-            if (!arrayBuffer) {
-                return undefined;
-            }
-
-            const data =
-                await window.WWebJS.arrayBufferToBase64Async(arrayBuffer);
-
+            const data = await window.WWebJS.arrayBufferToBase64Async(
+                await resolved.blob.arrayBuffer(),
+            );
             return {
                 data,
-                mimetype: msg.mimetype,
-                filename: msg.filename,
-                filesize: msg.size,
+                mimetype: resolved.mimetype,
+                filename: resolved.filename,
+                filesize: resolved.filesize,
             };
         }, this.id._serialized);
 
@@ -693,6 +584,140 @@ class Message extends Base {
             result.filename,
             result.filesize,
         );
+    }
+
+    /**
+     * Like downloadMedia(), but returns a Readable stream instead of loading the entire file into memory.
+     * @returns {Promise<MessageMediaStream|undefined>} undefined if media is unavailable
+     */
+    async downloadMediaStream() {
+        if (!this.hasMedia) {
+            this.client?.emit?.(
+                'diag',
+                'warn',
+                'downloadMediaStream: hasMedia=false',
+                JSON.stringify({ id: this.id?._serialized, type: this.type }),
+            );
+            return undefined;
+        }
+
+        const page = this.client.pupPage;
+        const resultHandle = await page.evaluateHandle(
+            (msgId) => window.WWebJS.resolveMediaBlob(msgId),
+            this.id._serialized,
+        );
+
+        const metadata = await resultHandle.evaluate((r) =>
+            r
+                ? {
+                      mimetype: r.mimetype,
+                      filename: r.filename,
+                      filesize: r.filesize,
+                  }
+                : null,
+        );
+        if (!metadata) {
+            await resultHandle.dispose();
+            return undefined;
+        }
+
+        const blobHandle = await resultHandle.evaluateHandle((r) => r.blob);
+        await resultHandle.dispose();
+
+        let cdp, ioHandle;
+        try {
+            cdp = await page.createCDPSession();
+            const { uuid } = await cdp.send('IO.resolveBlob', {
+                objectId: blobHandle.remoteObject().objectId,
+            });
+            ioHandle = `blob:${uuid}`;
+        } catch (err) {
+            await Promise.all([
+                cdp?.detach().catch(() => {}),
+                blobHandle.dispose(),
+            ]);
+            throw err;
+        }
+
+        this.client?.emit?.(
+            'diag',
+            'debug',
+            'downloadMediaStream: streaming started',
+            JSON.stringify({
+                id: this.id?._serialized,
+                filesize: metadata.filesize,
+            }),
+        );
+
+        const client = this.client;
+        const msgId = this.id?._serialized;
+        const cleanup = () =>
+            Promise.all([
+                cdp.send('IO.close', { handle: ioHandle }).catch(() => {}),
+                cdp.detach().catch(() => {}),
+                blobHandle.dispose(),
+            ]);
+
+        let bytesRead = 0;
+        const stream = new Readable({
+            read() {
+                cdp.send('IO.read', { handle: ioHandle, size: 65536 })
+                    .then(({ data, base64Encoded, eof }) => {
+                        const buf = Buffer.from(
+                            data,
+                            base64Encoded ? 'base64' : 'utf8',
+                        );
+                        bytesRead += buf.length;
+                        this.push(buf);
+                        if (eof) {
+                            this.push(null);
+                            client?.emit?.(
+                                'diag',
+                                'debug',
+                                'downloadMediaStream: complete',
+                                JSON.stringify({ id: msgId, bytesRead }),
+                            );
+                            cleanup();
+                        }
+                    })
+                    .catch((err) => {
+                        client?.emit?.(
+                            'diag',
+                            'error',
+                            'downloadMediaStream: IO.read error',
+                            JSON.stringify({
+                                id: msgId,
+                                bytesRead,
+                                error: err.message,
+                            }),
+                        );
+                        cleanup().then(
+                            () => this.destroy(err),
+                            () => this.destroy(err),
+                        );
+                    });
+            },
+            destroy(err, callback) {
+                if (err) {
+                    client?.emit?.(
+                        'diag',
+                        'warn',
+                        'downloadMediaStream: destroyed with error',
+                        JSON.stringify({
+                            id: msgId,
+                            bytesRead,
+                            error: err.message,
+                        }),
+                    );
+                }
+                cleanup().then(
+                    () => callback(err),
+                    () => callback(err),
+                );
+            },
+        });
+
+        return { stream, ...metadata };
     }
 
     /**
