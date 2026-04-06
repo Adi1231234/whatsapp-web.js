@@ -555,7 +555,7 @@ class Client extends EventEmitter {
         if (this._framenavigatedRegistered) return;
         this._framenavigatedRegistered = true;
 
-        this.pupPage.on('framenavigated', async (frame) => {
+        this._framenavigatedHandler = async (frame) => {
             if (frame.parentFrame() !== null) return;
 
             const isLogout =
@@ -576,7 +576,8 @@ class Client extends EventEmitter {
             if (!isLogout && storeAvailable) return;
 
             await this.inject();
-        });
+        };
+        this.pupPage.on('framenavigated', this._framenavigatedHandler);
     }
 
     /**
@@ -1332,6 +1333,14 @@ class Client extends EventEmitter {
         if (this._injectAbort) this._injectAbort.abort();
 
         if (this.pupPage) {
+            if (this._framenavigatedHandler) {
+                this.pupPage.removeListener(
+                    'framenavigated',
+                    this._framenavigatedHandler,
+                );
+                this._framenavigatedHandler = null;
+            }
+            this._framenavigatedRegistered = false;
             if (this._webCacheRequestHandler) {
                 this.pupPage.removeListener(
                     'request',
