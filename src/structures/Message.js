@@ -653,7 +653,7 @@ class Message extends Base {
                                 r.readAsDataURL(blob.slice(s, e));
                             }),
                         offset,
-                        Math.min(offset + chunkSize, blobSize),
+                        offset + chunkSize,
                     );
                     const buf = Buffer.from(base64, 'base64');
                     bytesRead += buf.length;
