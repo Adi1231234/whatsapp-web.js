@@ -1,5 +1,6 @@
 'use strict';
 
+const { Readable } = require('stream');
 const Base = require('./Base');
 const MessageMedia = require('./MessageMedia');
 const Location = require('./Location');
@@ -521,73 +522,24 @@ class Message extends Base {
     }
 
     /**
-     * Downloads and returns the attatched message media
-     * @returns {Promise<MessageMedia>}
+     * Downloads and returns the attached message media
+     * @returns {Promise<MessageMedia|undefined>}
      */
     async downloadMedia() {
-        if (!this.hasMedia) {
-            return undefined;
-        }
+        if (!this.hasMedia) return undefined;
 
         const result = await this.client.pupPage.evaluate(async (msgId) => {
-            const msg =
-                window.require('WAWebCollections').Msg.get(msgId) ||
-                (
-                    await window
-                        .require('WAWebCollections')
-                        .Msg.getMessagesById([msgId])
-                )?.messages?.[0];
+            const resolved = await window.WWebJS.resolveMediaBlob(msgId);
+            if (!resolved) return null;
 
-            // REUPLOADING mediaStage means the media is expired and the download button is spinning, cannot be downloaded now
-            if (
-                !msg ||
-                !msg.mediaData ||
-                msg.mediaData.mediaStage === 'REUPLOADING'
-            ) {
-                return null;
-            }
-            if (msg.mediaData.mediaStage != 'RESOLVED') {
-                // try to resolve media
-                await msg.downloadMedia({
-                    downloadEvenIfExpensive: true,
-                    rmrReason: 1,
-                });
-            }
-
-            if (
-                msg.mediaData.mediaStage.includes('ERROR') ||
-                msg.mediaData.mediaStage === 'FETCHING'
-            ) {
-                // media could not be downloaded
-                return undefined;
-            }
-
-            // Read decrypted data from where WhatsApp stored it (no re-download)
-            const cached = window
-                .require('WAWebMediaInMemoryBlobCache')
-                .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
-
-            let arrayBuffer;
-            if (cached) {
-                arrayBuffer = await cached.arrayBuffer();
-            } else if (msg.mediaObject?.mediaBlob) {
-                arrayBuffer = await window
-                    .require('WAWebMediaDataUtils')
-                    .opaqueDataToArrayBuffer(msg.mediaObject.mediaBlob);
-            }
-
-            if (!arrayBuffer) {
-                return undefined;
-            }
-
-            const data =
-                await window.WWebJS.arrayBufferToBase64Async(arrayBuffer);
-
+            const data = await window.WWebJS.arrayBufferToBase64Async(
+                await resolved.blob.arrayBuffer(),
+            );
             return {
                 data,
-                mimetype: msg.mimetype,
-                filename: msg.filename,
-                filesize: msg.size,
+                mimetype: resolved.mimetype,
+                filename: resolved.filename,
+                filesize: resolved.filesize,
             };
         }, this.id._serialized);
 
@@ -598,6 +550,91 @@ class Message extends Base {
             result.filename,
             result.filesize,
         );
+    }
+
+    /**
+     * Like downloadMedia(), but returns a Readable stream instead of loading the entire file into memory.
+     * @returns {Promise<MessageMediaStream|undefined>} undefined if media is unavailable
+     */
+    async downloadMediaStream() {
+        if (!this.hasMedia) return undefined;
+
+        const page = this.client.pupPage;
+        const resultHandle = await page.evaluateHandle(
+            (msgId) => window.WWebJS.resolveMediaBlob(msgId),
+            this.id._serialized,
+        );
+
+        const metadata = await resultHandle.evaluate((r) =>
+            r
+                ? {
+                      mimetype: r.mimetype,
+                      filename: r.filename,
+                      filesize: r.filesize,
+                  }
+                : null,
+        );
+        if (!metadata) {
+            await resultHandle.dispose();
+            return undefined;
+        }
+
+        const blobHandle = await resultHandle.evaluateHandle((r) => r.blob);
+        await resultHandle.dispose();
+
+        let cdp, ioHandle;
+        try {
+            cdp = await page.createCDPSession();
+            const { uuid } = await cdp.send('IO.resolveBlob', {
+                objectId: blobHandle.remoteObject().objectId,
+            });
+            ioHandle = `blob:${uuid}`;
+        } catch (err) {
+            await Promise.all([
+                cdp?.detach().catch(() => {}),
+                blobHandle.dispose(),
+            ]);
+            throw err;
+        }
+
+        const cleanup = () =>
+            Promise.all([
+                cdp.send('IO.close', { handle: ioHandle }).catch(() => {}),
+                cdp.detach().catch(() => {}),
+                blobHandle.dispose(),
+            ]);
+
+        const stream = new Readable({
+            read() {
+                cdp.send('IO.read', { handle: ioHandle, size: 65536 })
+                    .then(({ data, base64Encoded, eof }) => {
+                        this.push(
+                            Buffer.from(
+                                data,
+                                base64Encoded ? 'base64' : 'utf8',
+                            ),
+                        );
+                        if (eof) {
+                            this.push(null);
+                            cleanup();
+                        }
+                    })
+                    .catch((err) => {
+                        cleanup().then(
+                            () => this.destroy(err),
+                            () => this.destroy(err),
+                        );
+                    });
+            },
+            destroy(err, callback) {
+                cleanup().then(
+                    () => callback(err),
+                    () => callback(err),
+                );
+            },
+        });
+
+        return { stream, ...metadata };
     }
 
     /**
