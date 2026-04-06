@@ -603,43 +603,29 @@ class Message extends Base {
             return undefined;
         }
 
-        const page = this.client.pupPage;
-        const resultHandle = await page.evaluateHandle(
+        const resultHandle = await this.client.pupPage.evaluateHandle(
             (msgId) => window.WWebJS.resolveMediaBlob(msgId),
             this.id._serialized,
         );
 
-        const metadata = await resultHandle.evaluate((r) =>
+        const info = await resultHandle.evaluate((r) =>
             r
                 ? {
                       mimetype: r.mimetype,
                       filename: r.filename,
                       filesize: r.filesize,
+                      blobSize: r.blob.size,
                   }
                 : null,
         );
-        if (!metadata) {
+        if (!info) {
             await resultHandle.dispose();
             return undefined;
         }
 
         const blobHandle = await resultHandle.evaluateHandle((r) => r.blob);
         await resultHandle.dispose();
-
-        let cdp, ioHandle;
-        try {
-            cdp = await page.createCDPSession();
-            const { uuid } = await cdp.send('IO.resolveBlob', {
-                objectId: blobHandle.remoteObject().objectId,
-            });
-            ioHandle = `blob:${uuid}`;
-        } catch (err) {
-            await Promise.all([
-                cdp?.detach().catch(() => {}),
-                blobHandle.dispose(),
-            ]);
-            throw err;
-        }
+        const { blobSize, ...metadata } = info;
 
         this.client?.emit?.(
             'diag',
@@ -653,73 +639,35 @@ class Message extends Base {
 
         const client = this.client;
         const msgId = this.id?._serialized;
-        const cleanup = () =>
-            Promise.all([
-                cdp.send('IO.close', { handle: ioHandle }).catch(() => {}),
-                cdp.detach().catch(() => {}),
-                blobHandle.dispose(),
-            ]);
 
-        let bytesRead = 0;
-        const stream = new Readable({
-            read() {
-                cdp.send('IO.read', { handle: ioHandle, size: chunkSize })
-                    .then(({ data, base64Encoded, eof }) => {
-                        const buf = Buffer.from(
-                            data,
-                            base64Encoded ? 'base64' : 'utf8',
-                        );
-                        bytesRead += buf.length;
-                        this.push(buf);
-                        if (eof) {
-                            this.push(null);
-                            client?.emit?.(
-                                'diag',
-                                'debug',
-                                'downloadMediaStream: complete',
-                                JSON.stringify({ id: msgId, bytesRead }),
-                            );
-                            cleanup();
-                        }
-                    })
-                    .catch((err) => {
-                        client?.emit?.(
-                            'diag',
-                            'error',
-                            'downloadMediaStream: IO.read error',
-                            JSON.stringify({
-                                id: msgId,
-                                bytesRead,
-                                error: err.message,
-                            }),
-                        );
-                        cleanup().then(
-                            () => this.destroy(err),
-                            () => this.destroy(err),
-                        );
-                    });
-            },
-            destroy(err, callback) {
-                if (err) {
-                    client?.emit?.(
-                        'diag',
-                        'warn',
-                        'downloadMediaStream: destroyed with error',
-                        JSON.stringify({
-                            id: msgId,
-                            bytesRead,
-                            error: err.message,
-                        }),
+        async function* readChunks() {
+            let bytesRead = 0;
+            try {
+                for (let offset = 0; offset < blobSize; offset += chunkSize) {
+                    const base64 = await blobHandle.evaluate(
+                        async (blob, s, e) =>
+                            window.WWebJS.arrayBufferToBase64Async(
+                                await blob.slice(s, e).arrayBuffer(),
+                            ),
+                        offset,
+                        offset + chunkSize,
                     );
+                    const buf = Buffer.from(base64, 'base64');
+                    bytesRead += buf.length;
+                    yield buf;
                 }
-                cleanup().then(
-                    () => callback(err),
-                    () => callback(err),
+                client?.emit?.(
+                    'diag',
+                    'debug',
+                    'downloadMediaStream: complete',
+                    JSON.stringify({ id: msgId, bytesRead }),
                 );
-            },
-        });
+            } finally {
+                await blobHandle.dispose();
+            }
+        }
 
-        return { stream, ...metadata };
+        return { stream: Readable.from(readChunks()), ...metadata };
     }
 
     /**
