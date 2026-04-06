@@ -561,38 +561,41 @@ class Message extends Base {
     async downloadMediaStream({ chunkSize = 10 * 1024 * 1024 } = {}) {
         if (!this.hasMedia) return undefined;
 
-        const page = this.client.pupPage;
-        const resultHandle = await page.evaluateHandle(
+        const resultHandle = await this.client.pupPage.evaluateHandle(
             (msgId) => window.WWebJS.resolveMediaBlob(msgId),
             this.id._serialized,
         );
 
-        const metadata = await resultHandle.evaluate((r) =>
+        const info = await resultHandle.evaluate((r) =>
             r
                 ? {
                       mimetype: r.mimetype,
                       filename: r.filename,
                       filesize: r.filesize,
+                      blobSize: r.blob.size,
                   }
                 : null,
         );
-        if (!metadata) {
+        if (!info) {
             await resultHandle.dispose();
             return undefined;
         }
 
         const blobHandle = await resultHandle.evaluateHandle((r) => r.blob);
-        const blobSize = await blobHandle.evaluate((b) => b.size);
         await resultHandle.dispose();
+        const { blobSize, ...metadata } = info;
 
         async function* readChunks() {
             try {
                 for (let offset = 0; offset < blobSize; offset += chunkSize) {
                     const base64 = await blobHandle.evaluate(
-                        async (blob, s, e) => {
-                            const ab = await blob.slice(s, e).arrayBuffer();
-                            return window.WWebJS.arrayBufferToBase64Async(ab);
-                        },
+                        (blob, s, e) =>
+                            new Promise((resolve) => {
+                                const r = new FileReader();
+                                r.onload = () =>
+                                    resolve(r.result.split(',')[1]);
+                                r.readAsDataURL(blob.slice(s, e));
+                            }),
                         offset,
                         Math.min(offset + chunkSize, blobSize),
                     );
