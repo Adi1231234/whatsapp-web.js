@@ -2015,8 +2015,12 @@ class Client extends EventEmitter {
         } else {
             this.pupPage.on('response', async (res) => {
                 if (res.ok() && res.url() === WhatsWebURL) {
-                    const indexHtml = await res.text();
-                    this.currentIndexHtml = indexHtml;
+                    try {
+                        const indexHtml = await res.text();
+                        this.currentIndexHtml = indexHtml;
+                    } catch (e) {
+                        // CDP connection may close before response body is read
+                    }
                 }
             });
         }
