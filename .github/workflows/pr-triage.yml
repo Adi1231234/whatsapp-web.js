@@ -47,3 +47,40 @@ jobs:
                     echo "❌ PR title does not match the required format!"
                     exit 1
                   fi
+
+    validate-body:
+        name: Validate body
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Validate pull request body
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const fs = require('fs');
+                      const tmplPath = '.github/pull_request_template.md';
+                      if (!fs.existsSync(tmplPath)) return;
+
+                      const body = context.payload.pull_request.body || '';
+                      const tmpl = fs.readFileSync(tmplPath, 'utf8');
+                      const strip = s => s.replace(/<!--[\s\S]*?-->/g, '');
+                      const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                      const after = (t, h) => (t.match(new RegExp(esc(h) + '\\n([\\s\\S]*?)(?=\\n## |$)')) || [])[1] || '';
+                      const ct = strip(tmpl), cb = strip(body), errors = [];
+
+                      for (const h of ct.match(/^## .+$/gm) || [])
+                        if (!body.includes(h)) errors.push(`Missing: ${h}`);
+                      for (const h of ct.match(/^### .+$/gm) || [])
+                        if (!after(cb, h).trim()) errors.push(`Empty: ${h}`);
+                      for (const [, f] of ct.matchAll(/^- (.+):$/gm))
+                        if (!cb.match(new RegExp(`(?:^|\\n)- ${esc(f)}:.*\\S`))) errors.push(`Unfilled: - ${f}`);
+
+                      let sec = '';
+                      const cbs = new Set();
+                      for (const l of ct.split('\n')) { if (l.startsWith('## ')) sec = l; if (l.startsWith('- [ ]')) cbs.add(sec); }
+                      for (const s of cbs)
+                        if (!after(body, s).includes('[x]')) errors.push(`Unchecked: ${s}`);
+
+                      if (errors.length) core.setFailed('PR body does not follow the template:\n' + errors.map(e => `  - ${e}`).join('\n'));
