@@ -1298,7 +1298,7 @@ class Client extends EventEmitter {
 
         if (versionContent) {
             await this.pupPage.setRequestInterception(true);
-            this.pupPage.on('request', async (req) => {
+            this._webCacheRequestHandler = async (req) => {
                 if (req.url() === WhatsWebURL) {
                     req.respond({
                         status: 200,
@@ -1308,9 +1308,10 @@ class Client extends EventEmitter {
                 } else {
                     req.continue();
                 }
-            });
+            };
+            this.pupPage.on('request', this._webCacheRequestHandler);
         } else {
-            this.pupPage.on('response', async (res) => {
+            this._webCacheResponseHandler = async (res) => {
                 if (res.ok() && res.url() === WhatsWebURL) {
                     try {
                         const indexHtml = await res.text();
@@ -1319,7 +1320,8 @@ class Client extends EventEmitter {
                         // CDP connection may close before response body is read
                     }
                 }
-            });
+            };
+            this.pupPage.on('response', this._webCacheResponseHandler);
         }
     }
 
@@ -1328,6 +1330,23 @@ class Client extends EventEmitter {
      */
     async destroy() {
         if (this._injectAbort) this._injectAbort.abort();
+
+        if (this.pupPage) {
+            if (this._webCacheRequestHandler) {
+                this.pupPage.removeListener(
+                    'request',
+                    this._webCacheRequestHandler,
+                );
+                this._webCacheRequestHandler = null;
+            }
+            if (this._webCacheResponseHandler) {
+                this.pupPage.removeListener(
+                    'response',
+                    this._webCacheResponseHandler,
+                );
+                this._webCacheResponseHandler = null;
+            }
+        }
 
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
