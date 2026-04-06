@@ -2028,11 +2028,6 @@ class Client extends EventEmitter {
      */
     async destroy() {
         if (this._injectAbort) this._injectAbort.abort();
-        this._framenavigatedRegistered = false;
-
-        if (this.pupPage) {
-            this.pupPage.removeAllListeners();
-        }
 
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
