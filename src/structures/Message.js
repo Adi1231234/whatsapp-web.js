@@ -639,77 +639,35 @@ class Message extends Base {
 
         const client = this.client;
         const msgId = this.id?._serialized;
-        let offset = 0;
-        let bytesRead = 0;
-        const stream = new Readable({
-            read() {
-                if (offset >= blobSize) {
-                    this.push(null);
-                    client?.emit?.(
-                        'diag',
-                        'debug',
-                        'downloadMediaStream: complete',
-                        JSON.stringify({ id: msgId, bytesRead }),
-                    );
-                    blobHandle.dispose();
-                    return;
-                }
-                const start = offset;
-                const end = Math.min(offset + chunkSize, blobSize);
-                offset = end;
-                blobHandle
-                    .evaluate(
-                        (blob, s, e) =>
-                            new Promise((resolve) => {
-                                const r = new FileReader();
-                                r.onload = () =>
-                                    resolve(r.result.split(',')[1]);
-                                r.readAsDataURL(blob.slice(s, e));
-                            }),
-                        start,
-                        end,
-                    )
-                    .then((base64) => {
-                        const buf = Buffer.from(base64, 'base64');
-                        bytesRead += buf.length;
-                        this.push(buf);
-                    })
-                    .catch((err) => {
-                        client?.emit?.(
-                            'diag',
-                            'error',
-                            'downloadMediaStream: read error',
-                            JSON.stringify({
-                                id: msgId,
-                                bytesRead,
-                                error: err.message,
-                            }),
-                        );
-                        blobHandle.dispose();
-                        this.destroy(err);
-                    });
-            },
-            destroy(err, callback) {
-                if (err) {
-                    client?.emit?.(
-                        'diag',
-                        'warn',
-                        'downloadMediaStream: destroyed with error',
-                        JSON.stringify({
-                            id: msgId,
-                            bytesRead,
-                            error: err.message,
-                        }),
-                    );
-                }
-                blobHandle.dispose().then(
-                    () => callback(err),
-                    () => callback(err),
-                );
-            },
-        });
 
-        return { stream, ...metadata };
+        async function* readChunks() {
+            let bytesRead = 0;
+            try {
+                for (let offset = 0; offset < blobSize; offset += chunkSize) {
+                    const base64 = await blobHandle.evaluate(
+                        async (blob, s, e) => {
+                            const ab = await blob.slice(s, e).arrayBuffer();
+                            return window.WWebJS.arrayBufferToBase64Async(ab);
+                        },
+                        offset,
+                        Math.min(offset + chunkSize, blobSize),
+                    );
+                    const buf = Buffer.from(base64, 'base64');
+                    bytesRead += buf.length;
+                    yield buf;
+                }
+                client?.emit?.(
+                    'diag',
+                    'debug',
+                    'downloadMediaStream: complete',
+                    JSON.stringify({ id: msgId, bytesRead }),
+                );
+            } finally {
+                await blobHandle.dispose();
+            }
+        }
+
+        return { stream: Readable.from(readChunks()), ...metadata };
     }
 
     /**
