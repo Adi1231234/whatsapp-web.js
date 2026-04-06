@@ -47,3 +47,30 @@ jobs:
                     echo "❌ PR title does not match the required format!"
                     exit 1
                   fi
+
+    validate-body:
+        name: Validate body
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/github-script@v7
+              with:
+                  script: |
+                      const tmpl = require('fs').readFileSync('.github/pull_request_template.md', 'utf8');
+                      const body = context.payload.pull_request.body || '';
+                      const clean = s => s.replace(/<!--[\s\S]*?-->/g, '');
+                      const [ct, cb] = [clean(tmpl), clean(body)];
+                      const err = [];
+
+                      for (const [, h] of ct.matchAll(/^(#{2,3} .+)$/gm))
+                        if (!body.includes(h)) err.push(`Missing: ${h}`);
+                      for (const [, h, c] of cb.matchAll(/^(### .+)\n([\s\S]*?)(?=\n##|$(?![\s\S]))/gm))
+                        if (!c.trim()) err.push(`Empty: ${h}`);
+                      for (const [, f] of ct.matchAll(/^- (.+):\s*$/gm)) {
+                        const line = cb.split('\n').find(l => l.startsWith(`- ${f}:`));
+                        if (!line || !line.slice(f.length + 3).trim()) err.push(`Unfilled: - ${f}`);
+                      }
+                      for (const [, h, c] of body.matchAll(/^(## .+)\n([\s\S]*?)(?=\n## |$(?![\s\S]))/gm))
+                        if (/\[ \]/.test(c) && !/\[x\]/i.test(c)) err.push(`Unchecked: ${h}`);
+
+                      if (err.length) core.setFailed(err.join('\n'));
