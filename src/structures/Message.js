@@ -554,9 +554,11 @@ class Message extends Base {
 
     /**
      * Like downloadMedia(), but returns a Readable stream instead of loading the entire file into memory.
+     * @param {Object} [options]
+     * @param {number} [options.chunkSize=10485760] Size in bytes of each chunk read from the browser (default 10MB)
      * @returns {Promise<MessageMediaStream|undefined>} undefined if media is unavailable
      */
-    async downloadMediaStream() {
+    async downloadMediaStream({ chunkSize = 10 * 1024 * 1024 } = {}) {
         if (!this.hasMedia) return undefined;
 
         const page = this.client.pupPage;
@@ -606,7 +608,7 @@ class Message extends Base {
 
         const stream = new Readable({
             read() {
-                cdp.send('IO.read', { handle: ioHandle, size: 65536 })
+                cdp.send('IO.read', { handle: ioHandle, size: chunkSize })
                     .then(({ data, base64Encoded, eof }) => {
                         this.push(
                             Buffer.from(
