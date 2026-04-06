@@ -582,54 +582,42 @@ class Message extends Base {
         }
 
         const blobHandle = await resultHandle.evaluateHandle((r) => r.blob);
+        const blobSize = await blobHandle.evaluate((b) => b.size);
         await resultHandle.dispose();
 
-        let cdp, ioHandle;
-        try {
-            cdp = await page.createCDPSession();
-            const { uuid } = await cdp.send('IO.resolveBlob', {
-                objectId: blobHandle.remoteObject().objectId,
-            });
-            ioHandle = `blob:${uuid}`;
-        } catch (err) {
-            await Promise.all([
-                cdp?.detach().catch(() => {}),
-                blobHandle.dispose(),
-            ]);
-            throw err;
-        }
-
-        const cleanup = () =>
-            Promise.all([
-                cdp.send('IO.close', { handle: ioHandle }).catch(() => {}),
-                cdp.detach().catch(() => {}),
-                blobHandle.dispose(),
-            ]);
-
+        let offset = 0;
         const stream = new Readable({
             read() {
-                cdp.send('IO.read', { handle: ioHandle, size: chunkSize })
-                    .then(({ data, base64Encoded, eof }) => {
-                        this.push(
-                            Buffer.from(
-                                data,
-                                base64Encoded ? 'base64' : 'utf8',
-                            ),
-                        );
-                        if (eof) {
-                            this.push(null);
-                            cleanup();
-                        }
+                if (offset >= blobSize) {
+                    this.push(null);
+                    blobHandle.dispose();
+                    return;
+                }
+                const start = offset;
+                const end = Math.min(offset + chunkSize, blobSize);
+                offset = end;
+                blobHandle
+                    .evaluate(
+                        (blob, s, e) =>
+                            new Promise((resolve) => {
+                                const r = new FileReader();
+                                r.onload = () =>
+                                    resolve(r.result.split(',')[1]);
+                                r.readAsDataURL(blob.slice(s, e));
+                            }),
+                        start,
+                        end,
+                    )
+                    .then((base64) => {
+                        this.push(Buffer.from(base64, 'base64'));
                     })
                     .catch((err) => {
-                        cleanup().then(
-                            () => this.destroy(err),
-                            () => this.destroy(err),
-                        );
+                        blobHandle.dispose();
+                        this.destroy(err);
                     });
             },
             destroy(err, callback) {
-                cleanup().then(
+                blobHandle.dispose().then(
                     () => callback(err),
                     () => callback(err),
                 );
