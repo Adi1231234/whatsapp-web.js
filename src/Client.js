@@ -1861,6 +1861,7 @@ class Client extends EventEmitter {
                     if (!id || __handledByAdd.has(id)) return;
                     if (!msg.isNewMsg) return;
                     if (msg.type === 'ciphertext') return;
+                    if (msg.type === 'revoked') return;
                     __handledByAdd.add(id);
                     window.onDiagLog?.(
                         'warn',
