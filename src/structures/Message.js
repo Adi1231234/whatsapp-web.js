@@ -645,13 +645,10 @@ class Message extends Base {
             try {
                 for (let offset = 0; offset < blobSize; offset += chunkSize) {
                     const base64 = await blobHandle.evaluate(
-                        (blob, s, e) =>
-                            new Promise((resolve) => {
-                                const r = new FileReader();
-                                r.onload = () =>
-                                    resolve(r.result.split(',')[1]);
-                                r.readAsDataURL(blob.slice(s, e));
-                            }),
+                        async (blob, s, e) =>
+                            window.WWebJS.arrayBufferToBase64Async(
+                                await blob.slice(s, e).arrayBuffer(),
+                            ),
                         offset,
                         offset + chunkSize,
                     );
