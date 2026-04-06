@@ -624,22 +624,8 @@ class Message extends Base {
         }
 
         const blobHandle = await resultHandle.evaluateHandle((r) => r.blob);
+        const blobSize = await blobHandle.evaluate((b) => b.size);
         await resultHandle.dispose();
-
-        let cdp, ioHandle;
-        try {
-            cdp = await page.createCDPSession();
-            const { uuid } = await cdp.send('IO.resolveBlob', {
-                objectId: blobHandle.remoteObject().objectId,
-            });
-            ioHandle = `blob:${uuid}`;
-        } catch (err) {
-            await Promise.all([
-                cdp?.detach().catch(() => {}),
-                blobHandle.dispose(),
-            ]);
-            throw err;
-        }
 
         this.client?.emit?.(
             'diag',
@@ -653,50 +639,54 @@ class Message extends Base {
 
         const client = this.client;
         const msgId = this.id?._serialized;
-        const cleanup = () =>
-            Promise.all([
-                cdp.send('IO.close', { handle: ioHandle }).catch(() => {}),
-                cdp.detach().catch(() => {}),
-                blobHandle.dispose(),
-            ]);
-
+        let offset = 0;
         let bytesRead = 0;
         const stream = new Readable({
             read() {
-                cdp.send('IO.read', { handle: ioHandle, size: chunkSize })
-                    .then(({ data, base64Encoded, eof }) => {
-                        const buf = Buffer.from(
-                            data,
-                            base64Encoded ? 'base64' : 'utf8',
-                        );
+                if (offset >= blobSize) {
+                    this.push(null);
+                    client?.emit?.(
+                        'diag',
+                        'debug',
+                        'downloadMediaStream: complete',
+                        JSON.stringify({ id: msgId, bytesRead }),
+                    );
+                    blobHandle.dispose();
+                    return;
+                }
+                const start = offset;
+                const end = Math.min(offset + chunkSize, blobSize);
+                offset = end;
+                blobHandle
+                    .evaluate(
+                        (blob, s, e) =>
+                            new Promise((resolve) => {
+                                const r = new FileReader();
+                                r.onload = () =>
+                                    resolve(r.result.split(',')[1]);
+                                r.readAsDataURL(blob.slice(s, e));
+                            }),
+                        start,
+                        end,
+                    )
+                    .then((base64) => {
+                        const buf = Buffer.from(base64, 'base64');
                         bytesRead += buf.length;
                         this.push(buf);
-                        if (eof) {
-                            this.push(null);
-                            client?.emit?.(
-                                'diag',
-                                'debug',
-                                'downloadMediaStream: complete',
-                                JSON.stringify({ id: msgId, bytesRead }),
-                            );
-                            cleanup();
-                        }
                     })
                     .catch((err) => {
                         client?.emit?.(
                             'diag',
                             'error',
-                            'downloadMediaStream: IO.read error',
+                            'downloadMediaStream: read error',
                             JSON.stringify({
                                 id: msgId,
                                 bytesRead,
                                 error: err.message,
                             }),
                         );
-                        cleanup().then(
-                            () => this.destroy(err),
-                            () => this.destroy(err),
-                        );
+                        blobHandle.dispose();
+                        this.destroy(err);
                     });
             },
             destroy(err, callback) {
@@ -712,7 +702,7 @@ class Message extends Base {
                         }),
                     );
                 }
-                cleanup().then(
+                blobHandle.dispose().then(
                     () => callback(err),
                     () => callback(err),
                 );
