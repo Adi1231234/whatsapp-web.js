@@ -47,3 +47,58 @@ jobs:
                     echo "❌ PR title does not match the required format!"
                     exit 1
                   fi
+
+    validate-body:
+        name: Validate body
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - run: npm i mdast-util-from-markdown micromark-extension-gfm mdast-util-gfm
+            - uses: actions/github-script@v7
+              with:
+                  script: |
+                      const { fromMarkdown } = await import('mdast-util-from-markdown');
+                      const { gfm } = await import('micromark-extension-gfm');
+                      const { gfmFromMarkdown } = await import('mdast-util-gfm');
+                      const fs = require('fs');
+                      const tmplPath = '.github/pull_request_template.md';
+                      if (!fs.existsSync(tmplPath)) return;
+
+                      const opts = { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] };
+                      const parse = md => fromMarkdown(md, opts);
+                      const text = n => n.type === 'text' ? n.value : (n.children || []).map(text).join('');
+                      const find = (nodes, type) => nodes.flatMap(n =>
+                        [...(n.type === type ? [n] : []), ...find(n.children || [], type)]
+                      );
+                      const sections = tree => {
+                        const s = [];
+                        for (const n of tree.children)
+                          n.type === 'heading' ? s.push({ name: text(n), depth: n.depth, nodes: [] }) : s.at(-1)?.nodes.push(n);
+                        return s;
+                      };
+
+                      const tmpl = sections(parse(fs.readFileSync(tmplPath, 'utf8')));
+                      const body = sections(parse(context.payload.pull_request.body || ''));
+                      const bodyMap = new Map(body.map(s => [s.name, s]));
+                      const errors = [];
+
+                      for (const t of tmpl) {
+                        const b = bodyMap.get(t.name);
+                        if (!b) { errors.push(`Missing: ${'#'.repeat(t.depth)} ${t.name}`); continue; }
+
+                        if (t.depth >= 3 && !b.nodes.some(n => n.type !== 'html' && text(n).trim()))
+                          errors.push(`Empty: ${'#'.repeat(t.depth)} ${t.name}`);
+
+                        for (const li of find(t.nodes, 'listItem'))
+                          if (li.checked === null && /:\s*$/.test(text(li))) {
+                            const field = text(li).replace(/:\s*$/, '');
+                            if (!find(b.nodes, 'listItem').some(bi => text(bi).startsWith(field + ':') && text(bi).slice(field.length + 1).trim()))
+                              errors.push(`Unfilled: - ${field}`);
+                          }
+
+                        if (find(t.nodes, 'listItem').some(li => li.checked !== null))
+                          if (!find(b.nodes, 'listItem').some(li => li.checked === true))
+                            errors.push(`Unchecked: ${'#'.repeat(t.depth)} ${t.name}`);
+                      }
+
+                      if (errors.length) core.setFailed('PR body does not follow the template:\n' + errors.map(e => `  - ${e}`).join('\n'));
