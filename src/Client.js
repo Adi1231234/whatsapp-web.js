@@ -1324,6 +1324,7 @@ class Client extends EventEmitter {
      */
     async destroy() {
         if (this._injectAbort) this._injectAbort.abort();
+        this._framenavigatedRegistered = false;
 
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
