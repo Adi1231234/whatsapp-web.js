@@ -584,25 +584,25 @@ class Message extends Base {
         const blobHandle = await resultHandle.evaluateHandle((r) => r.blob);
         await resultHandle.dispose();
 
-        let cdp, ioHandle;
+        if (!this.client._cdpSession) {
+            this.client._cdpSession = await page.createCDPSession();
+        }
+        const cdp = this.client._cdpSession;
+
+        let ioHandle;
         try {
-            cdp = await page.createCDPSession();
             const { uuid } = await cdp.send('IO.resolveBlob', {
                 objectId: blobHandle.remoteObject().objectId,
             });
             ioHandle = `blob:${uuid}`;
         } catch (err) {
-            await Promise.all([
-                cdp?.detach().catch(() => {}),
-                blobHandle.dispose(),
-            ]);
+            await blobHandle.dispose();
             throw err;
         }
 
         const cleanup = () =>
             Promise.all([
                 cdp.send('IO.close', { handle: ioHandle }).catch(() => {}),
-                cdp.detach().catch(() => {}),
                 blobHandle.dispose(),
             ]);
 
