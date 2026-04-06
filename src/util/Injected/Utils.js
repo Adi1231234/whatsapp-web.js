@@ -1161,6 +1161,143 @@ exports.LoadUtils = () => {
         });
     };
 
+    /**
+     * Resolves the media blob and metadata for a message.
+     * Shared by downloadMedia and downloadMediaStream.
+     * @param {string} msgId
+     * @returns {Promise<{blob: Blob, mimetype: string, filename: string, filesize: number}|null>}
+     */
+    window.WWebJS.resolveMediaBlob = async (msgId) => {
+        const { Msg } = window.require('WAWebCollections');
+        const msg =
+            Msg.get(msgId) ||
+            (await Msg.getMessagesById([msgId]))?.messages?.[0];
+
+        if (
+            !msg ||
+            !msg.mediaData ||
+            msg.mediaData.mediaStage === 'REUPLOADING'
+        ) {
+            if (window.onDiagLog)
+                window.onDiagLog(
+                    'warn',
+                    'resolveMediaBlob: returning null',
+                    JSON.stringify({
+                        id: msgId,
+                        hasMsg: !!msg,
+                        hasMediaData: !!msg?.mediaData,
+                        mediaStage: msg?.mediaData?.mediaStage,
+                    }),
+                );
+            return null;
+        }
+
+        // Always call internal downloadMedia - never skip based on
+        // mediaStage, because cache eviction can leave stage=RESOLVED
+        // with empty InMemoryMediaBlobCache.
+        let resolveError = null;
+        try {
+            await msg.downloadMedia({
+                downloadEvenIfExpensive: true,
+                rmrReason: 1,
+                isUserInitiated: true,
+            });
+        } catch (re) {
+            resolveError = {
+                message: String(re?.message || re),
+                name: re?.name,
+            };
+        }
+
+        // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
+        if (msg.mediaData.mediaStage === 'NEED_POKE') {
+            var entry = msg.mediaObject?.entries?.getDownloadEntry?.(true);
+            if (entry?.markWhetherOnServer) {
+                entry.markWhetherOnServer(false);
+                try {
+                    await msg.downloadMedia({
+                        downloadEvenIfExpensive: true,
+                        rmrReason: 1,
+                        isUserInitiated: true,
+                    });
+                } catch (re2) {
+                    /* ignore */
+                }
+            }
+        }
+
+        if (
+            msg.mediaData.mediaStage.includes('ERROR') ||
+            msg.mediaData.mediaStage === 'FETCHING' ||
+            msg.mediaData.mediaStage === 'NEED_POKE' ||
+            msg.mediaData.mediaStage === 'REUPLOADING'
+        ) {
+            if (window.onDiagLog)
+                window.onDiagLog(
+                    'error',
+                    'resolveMediaBlob: failed',
+                    JSON.stringify({
+                        id: msgId,
+                        stageAfter: msg.mediaData.mediaStage,
+                        resolveError,
+                    }),
+                );
+            throw new Error(
+                'resolveMediaBlob: media not available (stage: ' +
+                    msg.mediaData.mediaStage +
+                    ')',
+            );
+        }
+
+        const cached = window
+            .require('WAWebMediaInMemoryBlobCache')
+            .InMemoryMediaBlobCache.get(msg.mediaObject?.filehash);
+
+        let blob;
+        if (cached) {
+            blob = cached;
+        } else if (msg.mediaObject?.mediaBlob) {
+            const ab = await window
+                .require('WAWebMediaDataUtils')
+                .opaqueDataToArrayBuffer(msg.mediaObject.mediaBlob);
+            blob = new Blob([ab]);
+        }
+
+        if (!blob) {
+            if (window.onDiagLog)
+                window.onDiagLog(
+                    'error',
+                    'resolveMediaBlob: no blob found',
+                    JSON.stringify({
+                        id: msgId,
+                        mediaStage: msg.mediaData.mediaStage,
+                        hasFilehash: !!msg.mediaObject?.filehash,
+                        hasMediaBlob: !!msg.mediaObject?.mediaBlob,
+                    }),
+                );
+            return null;
+        }
+
+        if (window.onDiagLog)
+            window.onDiagLog(
+                'debug',
+                'resolveMediaBlob: success',
+                JSON.stringify({
+                    id: msgId,
+                    mediaStage: msg.mediaData.mediaStage,
+                    blobSize: blob.size,
+                    fromCache: !!cached,
+                }),
+            );
+
+        return {
+            blob,
+            mimetype: msg.mimetype,
+            filename: msg.filename,
+            filesize: msg.size,
+        };
+    };
+
     window.WWebJS.arrayBufferToBase64 = (arrayBuffer) => {
         let binary = '';
         const bytes = new Uint8Array(arrayBuffer);
