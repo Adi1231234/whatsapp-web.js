@@ -769,10 +769,49 @@ class Client extends EventEmitter {
             );
         }
 
+        // [diag:promise-collected] Enable CDP Performance metrics for heap tracking
+        try {
+            if (this._diagCdpSession) {
+                await this._diagCdpSession.send('Performance.enable');
+            }
+        } catch (e) {
+            // ignore - Performance domain may not be available
+        }
+
         // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
         this._diagEvalInflight = 0;
         const origEvaluate = this.pupPage.evaluate.bind(this.pupPage);
         const self = this;
+
+        async function getHeapMetrics() {
+            try {
+                if (!self._diagCdpSession) return null;
+                const { metrics } = await self._diagCdpSession.send(
+                    'Performance.getMetrics',
+                );
+                const get = (name) =>
+                    metrics.find((m) => m.name === name)?.value ?? null;
+                return {
+                    JSHeapUsedSize: get('JSHeapUsedSize'),
+                    JSHeapTotalSize: get('JSHeapTotalSize'),
+                };
+            } catch {
+                return null;
+            }
+        }
+
+        function getFnSnippet(args) {
+            try {
+                const fn = args[0];
+                if (typeof fn === 'function')
+                    return fn.toString().slice(0, 120);
+                if (typeof fn === 'string') return fn.slice(0, 120);
+                return null;
+            } catch {
+                return null;
+            }
+        }
+
         this.pupPage.evaluate = async function (...args) {
             self._diagEvalInflight++;
             const inflight = self._diagEvalInflight;
@@ -784,6 +823,7 @@ class Client extends EventEmitter {
                     JSON.stringify({ inflight, ts: Date.now() }),
                 );
             }
+            const startTs = Date.now();
             try {
                 return await origEvaluate(...args);
             } catch (err) {
@@ -794,6 +834,7 @@ class Client extends EventEmitter {
                     'Execution context was destroyed',
                 );
                 if (isPromiseCollected || isContextDestroyed) {
+                    const heap = await getHeapMetrics();
                     self.emit(
                         'diag',
                         'error',
@@ -803,6 +844,9 @@ class Client extends EventEmitter {
                             error: err.message,
                             isPromiseCollected,
                             isContextDestroyed,
+                            elapsed: Date.now() - startTs,
+                            heap,
+                            fnSnippet: getFnSnippet(args),
                             ts: Date.now(),
                         }),
                     );
@@ -818,6 +862,7 @@ class Client extends EventEmitter {
         );
         this.pupPage.evaluateHandle = async function (...args) {
             self._diagEvalInflight++;
+            const startTs = Date.now();
             try {
                 return await origEvaluateHandle(...args);
             } catch (err) {
@@ -828,6 +873,7 @@ class Client extends EventEmitter {
                     'Execution context was destroyed',
                 );
                 if (isPromiseCollected || isContextDestroyed) {
+                    const heap = await getHeapMetrics();
                     self.emit(
                         'diag',
                         'error',
@@ -838,6 +884,9 @@ class Client extends EventEmitter {
                             isPromiseCollected,
                             isContextDestroyed,
                             source: 'evaluateHandle',
+                            elapsed: Date.now() - startTs,
+                            heap,
+                            fnSnippet: getFnSnippet(args),
                             ts: Date.now(),
                         }),
                     );
