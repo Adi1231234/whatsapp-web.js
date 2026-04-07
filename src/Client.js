@@ -812,6 +812,41 @@ class Client extends EventEmitter {
                 self._diagEvalInflight--;
             }
         };
+
+        const origEvaluateHandle = this.pupPage.evaluateHandle.bind(
+            this.pupPage,
+        );
+        this.pupPage.evaluateHandle = async function (...args) {
+            self._diagEvalInflight++;
+            try {
+                return await origEvaluateHandle(...args);
+            } catch (err) {
+                const isPromiseCollected = err.message?.includes(
+                    'Promise was collected',
+                );
+                const isContextDestroyed = err.message?.includes(
+                    'Execution context was destroyed',
+                );
+                if (isPromiseCollected || isContextDestroyed) {
+                    self.emit(
+                        'diag',
+                        'error',
+                        'EVALUATE_CDP_ERROR',
+                        JSON.stringify({
+                            inflight: self._diagEvalInflight,
+                            error: err.message,
+                            isPromiseCollected,
+                            isContextDestroyed,
+                            source: 'evaluateHandle',
+                            ts: Date.now(),
+                        }),
+                    );
+                }
+                throw err;
+            } finally {
+                self._diagEvalInflight--;
+            }
+        };
     }
 
     _registerFramenavigatedHandler() {
