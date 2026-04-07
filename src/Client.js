@@ -769,10 +769,54 @@ class Client extends EventEmitter {
             );
         }
 
+        // [diag:gc-observer] Ring buffer of recent GC events in browser
+        try {
+            await this.pupPage.evaluate(() => {
+                if (typeof window.__recentGC !== 'undefined') return;
+                window.__recentGC = [];
+                new PerformanceObserver((list) => {
+                    for (const entry of list.getEntries()) {
+                        window.__recentGC.push({
+                            dur: Math.round(entry.duration),
+                            kind: entry.name,
+                            ts: Date.now(),
+                        });
+                        if (window.__recentGC.length > 20)
+                            window.__recentGC.shift();
+                    }
+                }).observe({ type: 'gc' });
+            });
+        } catch (e) {
+            // gc observer not supported - ignore
+        }
+
         // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
         this._diagEvalInflight = 0;
         const origEvaluate = this.pupPage.evaluate.bind(this.pupPage);
         const self = this;
+
+        async function collectErrorContext() {
+            try {
+                return await origEvaluate(() => {
+                    const gc =
+                        typeof window.__recentGC !== 'undefined'
+                            ? window.__recentGC
+                            : [];
+                    let mem = null;
+                    if (performance?.memory) {
+                        mem = {
+                            usedJSHeapSize: performance.memory.usedJSHeapSize,
+                            totalJSHeapSize: performance.memory.totalJSHeapSize,
+                            jsHeapSizeLimit: performance.memory.jsHeapSizeLimit,
+                        };
+                    }
+                    return { recentGC: gc, memory: mem };
+                });
+            } catch {
+                return null;
+            }
+        }
+
         this.pupPage.evaluate = async function (...args) {
             self._diagEvalInflight++;
             const inflight = self._diagEvalInflight;
@@ -784,6 +828,7 @@ class Client extends EventEmitter {
                     JSON.stringify({ inflight, ts: Date.now() }),
                 );
             }
+            const startTs = Date.now();
             try {
                 return await origEvaluate(...args);
             } catch (err) {
@@ -794,6 +839,9 @@ class Client extends EventEmitter {
                     'Execution context was destroyed',
                 );
                 if (isPromiseCollected || isContextDestroyed) {
+                    const errorContext = isPromiseCollected
+                        ? await collectErrorContext()
+                        : null;
                     self.emit(
                         'diag',
                         'error',
@@ -803,6 +851,8 @@ class Client extends EventEmitter {
                             error: err.message,
                             isPromiseCollected,
                             isContextDestroyed,
+                            elapsed: Date.now() - startTs,
+                            errorContext,
                             ts: Date.now(),
                         }),
                     );
@@ -818,6 +868,7 @@ class Client extends EventEmitter {
         );
         this.pupPage.evaluateHandle = async function (...args) {
             self._diagEvalInflight++;
+            const startTs = Date.now();
             try {
                 return await origEvaluateHandle(...args);
             } catch (err) {
@@ -828,6 +879,9 @@ class Client extends EventEmitter {
                     'Execution context was destroyed',
                 );
                 if (isPromiseCollected || isContextDestroyed) {
+                    const errorContext = isPromiseCollected
+                        ? await collectErrorContext()
+                        : null;
                     self.emit(
                         'diag',
                         'error',
@@ -838,6 +892,8 @@ class Client extends EventEmitter {
                             isPromiseCollected,
                             isContextDestroyed,
                             source: 'evaluateHandle',
+                            elapsed: Date.now() - startTs,
+                            errorContext,
                             ts: Date.now(),
                         }),
                     );

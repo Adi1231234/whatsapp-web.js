@@ -867,6 +867,7 @@ exports.LoadUtils = () => {
     };
 
     window.WWebJS.getChat = async (chatId, { getAsModel = true } = {}) => {
+        const _dl = window.__diag?.safeDiagLog;
         const isChannel = /@\w*newsletter\b/.test(chatId);
         const chatWid = window.require('WAWebWidFactory').createWid(chatId);
         let chat;
@@ -877,6 +878,7 @@ exports.LoadUtils = () => {
                     .require('WAWebCollections')
                     .WAWebNewsletterCollection.get(chatId);
                 if (!chat) {
+                    _dl?.('debug', 'getChat:newsletter:find', { chatId });
                     await window
                         .require('WAWebLoadNewsletterPreviewChatAction')
                         .loadNewsletterPreviewChat(chatId);
@@ -888,18 +890,31 @@ exports.LoadUtils = () => {
                 chat = null;
             }
         } else {
-            chat =
-                window.require('WAWebCollections').Chat.get(chatWid) ||
-                (
+            chat = window.require('WAWebCollections').Chat.get(chatWid);
+            if (!chat) {
+                _dl?.('debug', 'getChat:findOrCreate', { chatId });
+                chat = (
                     await window
                         .require('WAWebFindChatAction')
                         .findOrCreateLatestChat(chatWid)
                 )?.chat;
+                _dl?.('debug', 'getChat:findOrCreate:done', {
+                    chatId,
+                    found: !!chat,
+                });
+            }
         }
 
-        return getAsModel && chat
-            ? await window.WWebJS.getChatModel(chat, { isChannel: isChannel })
-            : chat;
+        if (getAsModel && chat) {
+            const isGroup = !!chat.groupMetadata;
+            _dl?.('debug', 'getChat:model:start', { chatId, isGroup });
+            const model = await window.WWebJS.getChatModel(chat, {
+                isChannel: isChannel,
+            });
+            _dl?.('debug', 'getChat:model:done', { chatId });
+            return model;
+        }
+        return chat;
     };
 
     window.WWebJS.getChannelMetadata = async (inviteCode) => {
@@ -984,7 +999,14 @@ exports.LoadUtils = () => {
             const groupMetadata =
                 window.require('WAWebCollections').GroupMetadata ||
                 window.require('WAWebCollections').WAWebGroupMetadataCollection;
+            const _dl = window.__diag?.safeDiagLog;
+            _dl?.('debug', 'getChatModel:groupMetadata.update:start', {
+                chatId: chat.id?._serialized,
+            });
             await groupMetadata.update(chatWid);
+            _dl?.('debug', 'getChatModel:groupMetadata.update:done', {
+                chatId: chat.id?._serialized,
+            });
             const { toPn } = window.require('WAWebLidMigrationUtils');
             const serializedMetadata = chat.groupMetadata.serialize();
             for (const p of serializedMetadata.participants || []) {
