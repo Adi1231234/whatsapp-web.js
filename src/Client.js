@@ -824,7 +824,6 @@ class Client extends EventEmitter {
                 );
             }
             const startTs = Date.now();
-            const heapBefore = await getHeapMetrics();
             try {
                 return await origEvaluate(...args);
             } catch (err) {
@@ -835,9 +834,7 @@ class Client extends EventEmitter {
                     'Execution context was destroyed',
                 );
                 if (isPromiseCollected || isContextDestroyed) {
-                    const heapAfter = isPromiseCollected
-                        ? await getHeapMetrics()
-                        : null;
+                    const heap = await getHeapMetrics();
                     self.emit(
                         'diag',
                         'error',
@@ -848,8 +845,7 @@ class Client extends EventEmitter {
                             isPromiseCollected,
                             isContextDestroyed,
                             elapsed: Date.now() - startTs,
-                            heapBefore,
-                            heapAfter,
+                            heap,
                             fnSnippet: getFnSnippet(args),
                             ts: Date.now(),
                         }),
@@ -867,7 +863,6 @@ class Client extends EventEmitter {
         this.pupPage.evaluateHandle = async function (...args) {
             self._diagEvalInflight++;
             const startTs = Date.now();
-            const heapBefore = await getHeapMetrics();
             try {
                 return await origEvaluateHandle(...args);
             } catch (err) {
@@ -878,9 +873,7 @@ class Client extends EventEmitter {
                     'Execution context was destroyed',
                 );
                 if (isPromiseCollected || isContextDestroyed) {
-                    const heapAfter = isPromiseCollected
-                        ? await getHeapMetrics()
-                        : null;
+                    const heap = await getHeapMetrics();
                     self.emit(
                         'diag',
                         'error',
@@ -892,8 +885,7 @@ class Client extends EventEmitter {
                             isContextDestroyed,
                             source: 'evaluateHandle',
                             elapsed: Date.now() - startTs,
-                            heapBefore,
-                            heapAfter,
+                            heap,
                             fnSnippet: getFnSnippet(args),
                             ts: Date.now(),
                         }),
