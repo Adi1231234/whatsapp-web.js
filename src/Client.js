@@ -769,25 +769,13 @@ class Client extends EventEmitter {
             );
         }
 
-        // [diag:gc-observer] Ring buffer of recent GC events in browser
+        // [diag:promise-collected] Enable CDP Performance metrics for heap tracking
         try {
-            await this.pupPage.evaluate(() => {
-                if (typeof window.__recentGC !== 'undefined') return;
-                window.__recentGC = [];
-                new PerformanceObserver((list) => {
-                    for (const entry of list.getEntries()) {
-                        window.__recentGC.push({
-                            dur: Math.round(entry.duration),
-                            kind: entry.name,
-                            ts: Date.now(),
-                        });
-                        if (window.__recentGC.length > 20)
-                            window.__recentGC.shift();
-                    }
-                }).observe({ type: 'gc' });
-            });
+            if (this._diagCdpSession) {
+                await this._diagCdpSession.send('Performance.enable');
+            }
         } catch (e) {
-            // gc observer not supported - ignore
+            // ignore - Performance domain may not be available
         }
 
         // [diag:promise-collected] Track concurrent evaluate calls to detect CDP congestion
@@ -795,23 +783,30 @@ class Client extends EventEmitter {
         const origEvaluate = this.pupPage.evaluate.bind(this.pupPage);
         const self = this;
 
-        async function collectErrorContext() {
+        async function getHeapMetrics() {
             try {
-                return await origEvaluate(() => {
-                    const gc =
-                        typeof window.__recentGC !== 'undefined'
-                            ? window.__recentGC
-                            : [];
-                    let mem = null;
-                    if (performance?.memory) {
-                        mem = {
-                            usedJSHeapSize: performance.memory.usedJSHeapSize,
-                            totalJSHeapSize: performance.memory.totalJSHeapSize,
-                            jsHeapSizeLimit: performance.memory.jsHeapSizeLimit,
-                        };
-                    }
-                    return { recentGC: gc, memory: mem };
-                });
+                if (!self._diagCdpSession) return null;
+                const { metrics } = await self._diagCdpSession.send(
+                    'Performance.getMetrics',
+                );
+                const get = (name) =>
+                    metrics.find((m) => m.name === name)?.value ?? null;
+                return {
+                    JSHeapUsedSize: get('JSHeapUsedSize'),
+                    JSHeapTotalSize: get('JSHeapTotalSize'),
+                };
+            } catch {
+                return null;
+            }
+        }
+
+        function getFnSnippet(args) {
+            try {
+                const fn = args[0];
+                if (typeof fn === 'function')
+                    return fn.toString().slice(0, 120);
+                if (typeof fn === 'string') return fn.slice(0, 120);
+                return null;
             } catch {
                 return null;
             }
@@ -829,6 +824,7 @@ class Client extends EventEmitter {
                 );
             }
             const startTs = Date.now();
+            const heapBefore = await getHeapMetrics();
             try {
                 return await origEvaluate(...args);
             } catch (err) {
@@ -839,8 +835,8 @@ class Client extends EventEmitter {
                     'Execution context was destroyed',
                 );
                 if (isPromiseCollected || isContextDestroyed) {
-                    const errorContext = isPromiseCollected
-                        ? await collectErrorContext()
+                    const heapAfter = isPromiseCollected
+                        ? await getHeapMetrics()
                         : null;
                     self.emit(
                         'diag',
@@ -852,7 +848,9 @@ class Client extends EventEmitter {
                             isPromiseCollected,
                             isContextDestroyed,
                             elapsed: Date.now() - startTs,
-                            errorContext,
+                            heapBefore,
+                            heapAfter,
+                            fnSnippet: getFnSnippet(args),
                             ts: Date.now(),
                         }),
                     );
@@ -869,6 +867,7 @@ class Client extends EventEmitter {
         this.pupPage.evaluateHandle = async function (...args) {
             self._diagEvalInflight++;
             const startTs = Date.now();
+            const heapBefore = await getHeapMetrics();
             try {
                 return await origEvaluateHandle(...args);
             } catch (err) {
@@ -879,8 +878,8 @@ class Client extends EventEmitter {
                     'Execution context was destroyed',
                 );
                 if (isPromiseCollected || isContextDestroyed) {
-                    const errorContext = isPromiseCollected
-                        ? await collectErrorContext()
+                    const heapAfter = isPromiseCollected
+                        ? await getHeapMetrics()
                         : null;
                     self.emit(
                         'diag',
@@ -893,7 +892,9 @@ class Client extends EventEmitter {
                             isContextDestroyed,
                             source: 'evaluateHandle',
                             elapsed: Date.now() - startTs,
-                            errorContext,
+                            heapBefore,
+                            heapAfter,
+                            fnSnippet: getFnSnippet(args),
                             ts: Date.now(),
                         }),
                     );
