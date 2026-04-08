@@ -561,29 +561,36 @@ class Message extends Base {
     async downloadMediaStream({ chunkSize = 10 * 1024 * 1024 } = {}) {
         if (!this.hasMedia) return undefined;
 
-        const resultHandle = await this.client.pupPage.evaluateHandle(
-            (msgId) => window.WWebJS.resolveMediaBlob(msgId),
+        const blobHandle = await this.client.pupPage.evaluateHandle(
+            async (msgId) => {
+                const result = await window.WWebJS.resolveMediaBlob(msgId);
+                return result?.blob ?? null;
+            },
             this.id._serialized,
         );
 
-        const info = await resultHandle.evaluate((r) =>
-            r
-                ? {
-                      mimetype: r.mimetype,
-                      filename: r.filename,
-                      filesize: r.filesize,
-                      blobSize: r.blob.size,
-                  }
-                : null,
-        );
-        if (!info) {
-            await resultHandle.dispose();
+        let metadata;
+        try {
+            metadata = await blobHandle.evaluate((blob, msgId) => {
+                if (!blob) return null;
+                const msg = window.require('WAWebCollections').Msg.get(msgId);
+                return {
+                    blobSize: blob.size,
+                    mimetype: msg?.mimetype,
+                    filename: msg?.filename,
+                    filesize: msg?.size,
+                };
+            }, this.id._serialized);
+        } catch (err) {
+            await blobHandle.dispose().catch(() => {});
+            throw err;
+        }
+        if (!metadata) {
+            await blobHandle.dispose().catch(() => {});
             return undefined;
         }
 
-        const blobHandle = await resultHandle.evaluateHandle((r) => r.blob);
-        await resultHandle.dispose();
-        const { blobSize, ...metadata } = info;
+        const { blobSize, ...rest } = metadata;
 
         async function* readChunks() {
             try {
@@ -599,11 +606,11 @@ class Message extends Base {
                     yield Buffer.from(base64, 'base64');
                 }
             } finally {
-                await blobHandle.dispose();
+                await blobHandle.dispose().catch(() => {});
             }
         }
 
-        return { stream: Readable.from(readChunks()), ...metadata };
+        return { stream: Readable.from(readChunks()), ...rest };
     }
 
     /**
