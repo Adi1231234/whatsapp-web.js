@@ -2099,7 +2099,23 @@ class Client extends EventEmitter {
         } else {
             this.pupPage.on('response', async (res) => {
                 if (res.ok() && res.url() === WhatsWebURL) {
+                    const reqId = res.request()?._requestId ?? 'unknown';
+                    console.warn(
+                        '[wwjs:initWebVersionCache] calling res.text()',
+                        {
+                            url: res.url(),
+                            status: res.status(),
+                            requestId: reqId,
+                        },
+                    );
                     const indexHtml = await res.text();
+                    console.warn(
+                        '[wwjs:initWebVersionCache] res.text() succeeded',
+                        {
+                            requestId: reqId,
+                            length: indexHtml?.length,
+                        },
+                    );
                     this.currentIndexHtml = indexHtml;
                 }
             });
