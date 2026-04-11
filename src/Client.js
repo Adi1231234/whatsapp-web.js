@@ -119,7 +119,7 @@ class Client extends EventEmitter {
     async inject() {
         // Cancel any previous inject still running
         if (this._injectAbort) {
-            console.warn('[wwjs-diag] inject:CANCELLING previous inject', {
+            console.log('[wwjs-diag] inject:CANCELLING previous inject', {
                 ts: Date.now(),
             });
             this._injectAbort.abort();
@@ -273,7 +273,7 @@ class Client extends EventEmitter {
                                     ts: Date.now(),
                                 });
                                 if (qrRetries > this.options.qrMaxRetries) {
-                                    console.warn(
+                                    console.log(
                                         '[wwjs-diag] onQRChangedEvent DISCONNECTED max retries reached',
                                     );
                                     this.emit(
@@ -364,7 +364,7 @@ class Client extends EventEmitter {
                 'onAppStateHasSyncedEvent',
                 async () => {
                     if (this._hasSyncedTriggered) {
-                        console.warn(
+                        console.log(
                             '[wwjs-diag] onAppStateHasSyncedEvent SKIPPED (already handled)',
                         );
                         return;
@@ -430,7 +430,7 @@ class Client extends EventEmitter {
                                     { timeout: 30000 },
                                 )
                                 .catch(() => {
-                                    console.warn(
+                                    console.log(
                                         '[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s',
                                     );
                                     throw 'ready timeout';
@@ -476,7 +476,7 @@ class Client extends EventEmitter {
                         );
                         this.authStrategy.afterAuthReady();
                     } catch (err) {
-                        console.warn(
+                        console.log(
                             '[wwjs-diag] onAppStateHasSyncedEvent ERROR',
                             {
                                 error: String(err?.message || err),
@@ -503,7 +503,7 @@ class Client extends EventEmitter {
                 this.pupPage,
                 'onLogoutEvent',
                 async () => {
-                    console.warn('[wwjs-diag] onLogoutEvent CALLED', {
+                    console.log('[wwjs-diag] onLogoutEvent CALLED', {
                         ts: Date.now(),
                     });
                     this.lastLoggedOut = true;
@@ -522,7 +522,7 @@ class Client extends EventEmitter {
                     state: Socket.state,
                     ts: Date.now(),
                 };
-                console.warn(
+                console.log(
                     '[wwjs-diag] listeners:registering ' +
                         JSON.stringify(_diagState),
                 );
@@ -533,7 +533,7 @@ class Client extends EventEmitter {
                         Socket,
                         'change:state',
                         (_AppState, state) => {
-                            console.warn(
+                            console.log(
                                 '[wwjs-diag] change:state FIRED ' +
                                     JSON.stringify({ state, ts: Date.now() }),
                             );
@@ -544,7 +544,7 @@ class Client extends EventEmitter {
                         Socket,
                         'change:hasSynced',
                         () => {
-                            console.warn(
+                            console.log(
                                 '[wwjs-diag] change:hasSynced FIRED ' +
                                     JSON.stringify({
                                         hasSynced: Socket.hasSynced,
@@ -570,7 +570,7 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout',
                         async () => {
-                            console.warn(
+                            console.log(
                                 '[wwjs-diag] Cmd:logout FIRED ' +
                                     JSON.stringify({ ts: Date.now() }),
                             );
@@ -581,7 +581,7 @@ class Client extends EventEmitter {
                         Cmd,
                         'logout_from_bridge',
                         async () => {
-                            console.warn(
+                            console.log(
                                 '[wwjs-diag] Cmd:logout_from_bridge FIRED ' +
                                     JSON.stringify({ ts: Date.now() }),
                             );
@@ -592,7 +592,7 @@ class Client extends EventEmitter {
 
                 // Clean up old listeners to prevent accumulation on re-inject
                 if (window._wwjsListeners) {
-                    console.warn(
+                    console.log(
                         '[wwjs-diag] inject:cleanupListeners removing ' +
                             window._wwjsListeners.length +
                             ' old listeners ts=' +
@@ -602,7 +602,7 @@ class Client extends EventEmitter {
                         obj.off(event, handler);
                     }
                 } else {
-                    console.warn(
+                    console.log(
                         '[wwjs-diag] inject:cleanupListeners no previous listeners ts=' +
                             Date.now(),
                     );
@@ -615,7 +615,7 @@ class Client extends EventEmitter {
 
                 // Atomic hasSynced check in the same synchronous block as listener registration.
                 const storeInjected = typeof window.WWebJS !== 'undefined';
-                console.warn(
+                console.log(
                     '[wwjs-diag] inject:hasSyncedCheck ' +
                         JSON.stringify({
                             hasSynced: Socket.hasSynced,
@@ -626,12 +626,12 @@ class Client extends EventEmitter {
                         }),
                 );
                 if (Socket.hasSynced === true && !storeInjected) {
-                    console.warn(
+                    console.log(
                         '[wwjs-diag] inject:hasSyncedFix TRIGGERING manual onAppStateHasSyncedEvent',
                     );
                     window.onAppStateHasSyncedEvent();
                 }
-                console.warn(
+                console.log(
                     '[wwjs-diag] listeners:registered ' +
                         JSON.stringify({ ts: Date.now() }),
                 );
@@ -643,7 +643,7 @@ class Client extends EventEmitter {
             });
         } catch (err) {
             if (abort.signal.aborted) {
-                console.warn(
+                console.log(
                     '[wwjs-diag] inject:SUPERSEDED (newer inject running)',
                     { error: String(err?.message || err), ts: Date.now() },
                 );
@@ -946,7 +946,7 @@ class Client extends EventEmitter {
                 await this.inject();
                 console.log('[wwjs-diag] framenavigated:inject END (success)');
             } catch (err) {
-                console.warn('[wwjs-diag] framenavigated:inject END (error)', {
+                console.log('[wwjs-diag] framenavigated:inject END (error)', {
                     error: String(err?.message || err),
                 });
             }
@@ -1402,7 +1402,7 @@ class Client extends EventEmitter {
                      * @event Client#disconnected
                      * @param {WAState|"LOGOUT"} reason reason that caused the disconnect
                      */
-                    console.warn(
+                    console.log(
                         '[wwjs-diag] onAppStateChangedEvent DISCONNECTED emitting',
                         { state, ts: Date.now() },
                     );
@@ -1420,7 +1420,7 @@ class Client extends EventEmitter {
                     } catch (_) {
                         /* page may be closing */
                     }
-                    console.warn(
+                    console.log(
                         '[wwjs-diag] onAppStateChangedEvent DISCONNECTED browserState',
                         { browserState, ts: Date.now() },
                     );
@@ -1736,7 +1736,7 @@ class Client extends EventEmitter {
                 );
             });
             AppState.on('change:state', (_AppState, state) => {
-                console.warn(
+                console.log(
                     '[wwjs-diag] attachListeners:change:state FIRED ' +
                         JSON.stringify({
                             state,
@@ -2099,7 +2099,23 @@ class Client extends EventEmitter {
         } else {
             this.pupPage.on('response', async (res) => {
                 if (res.ok() && res.url() === WhatsWebURL) {
+                    const reqId = res.request()?._requestId ?? 'unknown';
+                    console.log(
+                        '[wwjs:initWebVersionCache] calling res.text()',
+                        {
+                            url: res.url(),
+                            status: res.status(),
+                            requestId: reqId,
+                        },
+                    );
                     const indexHtml = await res.text();
+                    console.log(
+                        '[wwjs:initWebVersionCache] res.text() succeeded',
+                        {
+                            requestId: reqId,
+                            length: indexHtml?.length,
+                        },
+                    );
                     this.currentIndexHtml = indexHtml;
                 }
             });
@@ -2115,7 +2131,7 @@ class Client extends EventEmitter {
 
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
-        console.warn('[wwjs-diag] destroy CALLED', {
+        console.log('[wwjs-diag] destroy CALLED', {
             browserIsConnected: isConnected,
             ts: Date.now(),
             stack: new Error().stack?.split('\n').slice(1, 5).join(' | '),
@@ -2254,7 +2270,7 @@ class Client extends EventEmitter {
                     content[0] instanceof Contact,
             ].includes(true)
         ) {
-            console.warn(
+            console.log(
                 'The message type is currently not supported for sending in channels,\nthe supported message types are: text, image, sticker, gif, video, voice and poll.',
             );
             return null;
@@ -2276,7 +2292,7 @@ class Client extends EventEmitter {
                     content[0] instanceof Contact,
             ].includes(true)
         ) {
-            console.warn(
+            console.log(
                 'The message type is currently not supported for sending in status broadcast,\nthe supported message types are: text, image, gif, audio and video.',
             );
             return null;
@@ -2290,7 +2306,7 @@ class Client extends EventEmitter {
                     (possiblyContact) => possiblyContact instanceof Contact,
                 )
             ) {
-                console.warn(
+                console.log(
                     'Mentions with an array of Contact are now deprecated. See more at https://github.com/pedroslopez/whatsapp-web.js/pull/2166.',
                 );
                 options.mentions = options.mentions.map(
@@ -2353,7 +2369,7 @@ class Client extends EventEmitter {
             );
             content = '';
         } else if (content instanceof Buttons) {
-            console.warn(
+            console.log(
                 'Buttons are now deprecated. See more at https://www.youtube.com/watch?v=hv1R1rLeVVE.',
             );
             if (content.type !== 'chat') {
@@ -2362,7 +2378,7 @@ class Client extends EventEmitter {
             internalOptions.buttons = content;
             content = '';
         } else if (content instanceof List) {
-            console.warn(
+            console.log(
                 'Lists are now deprecated. See more at https://www.youtube.com/watch?v=hv1R1rLeVVE.',
             );
             internalOptions.list = content;
