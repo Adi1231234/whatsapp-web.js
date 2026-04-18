@@ -151,7 +151,7 @@ client.on('message', async (msg) => {
          * }
          *
          * For more usage examples:
-         * @see https://github.com/pedroslopez/whatsapp-web.js/pull/2344#usage-example1
+         * @see https://github.com/wwebjs/whatsapp-web.js/pull/2344#usage-example1
          */
         console.log(result);
     } else if (msg.body === '!creategroup') {
@@ -202,7 +202,7 @@ client.on('message', async (msg) => {
          * }
          *
          * For more usage examples:
-         * @see https://github.com/pedroslopez/whatsapp-web.js/pull/2344#usage-example2
+         * @see https://github.com/wwebjs/whatsapp-web.js/pull/2344#usage-example2
          */
         console.log(result);
     } else if (msg.body === '!groupinfo') {
