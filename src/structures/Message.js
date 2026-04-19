@@ -807,6 +807,7 @@ class Message extends Base {
         }
         return undefined;
     }
+
     /**
      * Gets the payment details associated with a given message
      * @return {Promise<Payment>}
@@ -992,6 +993,7 @@ class Message extends Base {
 
         return edittedEventMsg && new Message(this.client, edittedEventMsg);
     }
+
     /**
      * Returns the PollVote this poll message
      * @returns {Promise<PollVote[]>}
