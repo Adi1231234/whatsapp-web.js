@@ -107,6 +107,7 @@ class Client extends EventEmitter {
 
         Util.setFfmpegPath(this.options.ffmpegPath);
     }
+
     /**
      * Injection logic
      * Private function
@@ -319,7 +320,7 @@ class Client extends EventEmitter {
                             );
                         }
 
-                        //Load util functions (serializers, helper functions)
+                        // Load util functions (serializers, helper functions)
                         await this.pupPage.evaluate(LoadUtils);
 
                         await this.pupPage
@@ -2433,7 +2434,7 @@ class Client extends EventEmitter {
                             },
                             participantWids,
                         );
-                } catch (err) {
+                } catch (ignoredError) {
                     return 'CreateGroupError: An unknown error occupied while creating a group';
                 }
 
@@ -2672,7 +2673,7 @@ class Client extends EventEmitter {
                                     meContact,
                                 ));
                     }
-                } catch (error) {
+                } catch (ignoredError) {
                     return false;
                 }
 
