@@ -12,7 +12,6 @@ const {
     WAState,
     MessageTypes,
 } = require('./util/Constants');
-const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { LoadUtils } = require('./util/Injected/Utils');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
@@ -137,8 +136,6 @@ class Client extends EventEmitter {
             const pairWithPhoneNumber = this.options.pairWithPhoneNumber;
             const version = await this.getWWebVersion();
 
-            await this.pupPage.evaluate(ExposeAuthStore);
-
             const needAuthHandle = await this.pupPage.waitForFunction(
                 () => {
                     const state =
@@ -220,22 +217,24 @@ class Client extends EventEmitter {
                     );
 
                     await this.pupPage.evaluate(async () => {
-                        const registrationInfo =
-                            await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-                        const noiseKeyPair =
-                            await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-                        const staticKeyB64 =
-                            window.AuthStore.Base64Tools.encodeB64(
-                                noiseKeyPair.staticKeyPair.pubKey,
-                            );
-                        const identityKeyB64 =
-                            window.AuthStore.Base64Tools.encodeB64(
-                                registrationInfo.identityKeyPair.pubKey,
-                            );
-                        const advSecretKey =
-                            await window.AuthStore.RegistrationUtils.getADVSecretKey();
-                        const platform =
-                            window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
+                        const registrationInfo = await window
+                            .require('WAWebSignalStoreApi')
+                            .waSignalStore.getRegistrationInfo();
+                        const noiseKeyPair = await window
+                            .require('WAWebUserPrefsInfoStore')
+                            .waNoiseInfo.get();
+                        const staticKeyB64 = window
+                            .require('WABase64')
+                            .encodeB64(noiseKeyPair.staticKeyPair.pubKey);
+                        const identityKeyB64 = window
+                            .require('WABase64')
+                            .encodeB64(registrationInfo.identityKeyPair.pubKey);
+                        const advSecretKey = await window
+                            .require('WAWebUserPrefsMultiDevice')
+                            .getADVSecretKey();
+                        const platform = window.require(
+                            'WAWebCompanionRegClientUtils',
+                        ).DEVICE_PLATFORM;
                         const getQR = (ref) =>
                             ref +
                             ',' +
@@ -253,18 +252,19 @@ class Client extends EventEmitter {
                         };
 
                         window.onQRChangedEvent(
-                            getQR(window.AuthStore.Conn.ref),
+                            getQR(window.require('WAWebConnModel').Conn.ref),
                         ); // initial qr
-                        window.AuthStore.Conn.on('change:ref', onRefChange); // future QR changes
+                        window
+                            .require('WAWebConnModel')
+                            .Conn.on('change:ref', onRefChange); // future QR changes
 
                         // Remove QR listener once authentication succeeds
                         window
                             .require('WAWebSocketModel')
                             .Socket.on('change:hasSynced', () => {
-                                window.AuthStore.Conn.off(
-                                    'change:ref',
-                                    onRefChange,
-                                );
+                                window
+                                    .require('WAWebConnModel')
+                                    .Conn.off('change:ref', onRefChange);
                             });
                     });
                 }
@@ -411,7 +411,9 @@ class Client extends EventEmitter {
                         'offline_progress_update_from_bridge',
                         () => {
                             window.onOfflineProgressUpdateEvent(
-                                window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress(),
+                                window
+                                    .require('WAWebOfflineHandler')
+                                    .OfflineMessageHandler.getOfflineDeliveryProgress(),
                             );
                         },
                     ],
@@ -586,19 +588,15 @@ class Client extends EventEmitter {
         return await this.pupPage.evaluate(
             async (phoneNumber, showNotification, intervalMs) => {
                 const getCode = async () => {
-                    while (!window.AuthStore.PairingCodeLinkUtils) {
-                        await new Promise((resolve) =>
-                            setTimeout(resolve, 250),
-                        );
-                    }
-                    window.AuthStore.PairingCodeLinkUtils.setPairingType(
-                        'ALT_DEVICE_LINKING',
-                    );
-                    await window.AuthStore.PairingCodeLinkUtils.initializeAltDeviceLinking();
-                    return window.AuthStore.PairingCodeLinkUtils.startAltLinkingFlow(
-                        phoneNumber,
-                        showNotification,
-                    );
+                    window
+                        .require('WAWebAltDeviceLinkingApi')
+                        .setPairingType('ALT_DEVICE_LINKING');
+                    await window
+                        .require('WAWebAltDeviceLinkingApi')
+                        .initializeAltDeviceLinking();
+                    return window
+                        .require('WAWebAltDeviceLinkingApi')
+                        .startAltLinkingFlow(phoneNumber, showNotification);
                 };
                 if (window.codeInterval) {
                     clearInterval(window.codeInterval); // remove existing interval
