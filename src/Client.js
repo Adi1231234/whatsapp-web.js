@@ -501,6 +501,27 @@ class Client extends EventEmitter {
             );
             await exposeFunctionIfAbsent(
                 this.pupPage,
+                'onStreamConnectedEvent',
+                async () => {
+                    // WhatsApp's own connection indicator (Stream.displayInfo)
+                    // returned to NORMAL - the exact signal WA Web itself uses
+                    // to decide it is connected. If the client had already
+                    // become ready (e.g. after a reconnect or a finished
+                    // background sync), re-emit READY so consumers restore the
+                    // connected state. Before the first ready the normal
+                    // QR/loading/ready flow drives readiness, so we no-op.
+                    if (this._hasSyncedTriggered) {
+                        lastPercent = null;
+                        console.log(
+                            '[wwjs-diag] onStreamConnectedEvent re-emitting READY',
+                            { ts: Date.now() },
+                        );
+                        this.emit(Events.READY);
+                    }
+                },
+            );
+            await exposeFunctionIfAbsent(
+                this.pupPage,
                 'onLogoutEvent',
                 async () => {
                     console.log('[wwjs-diag] onLogoutEvent CALLED', {
@@ -515,6 +536,7 @@ class Client extends EventEmitter {
             await this.pupPage.evaluate(() => {
                 const Socket = window.require('WAWebSocketModel').Socket;
                 const Cmd = window.require('WAWebCmd').Cmd;
+                const StreamModel = window.require('WAWebStreamModel');
 
                 // [diag] Log state BEFORE registering listeners
                 const _diagState = {
@@ -561,9 +583,52 @@ class Client extends EventEmitter {
                         Cmd,
                         'offline_progress_update_from_bridge',
                         () => {
-                            window.onOfflineProgressUpdateEvent(
-                                window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress(),
+                            // Only surface a loading screen while WhatsApp's own
+                            // connection indicator (Stream.displayInfo) is NOT
+                            // NORMAL. When it is NORMAL the client is connected
+                            // and this is a background (non-blocking) offline
+                            // sync, which WA Web itself shows as a passive
+                            // toastbar - never a blocking loading screen.
+                            // Emitting LOADING_SCREEN here would wrongly revert a
+                            // connected client to a loading state that never
+                            // clears (offline progress caps at 99 and no `ready`
+                            // re-fires).
+                            if (
+                                StreamModel.Stream.displayInfo !==
+                                StreamModel.StreamInfo.NORMAL
+                            ) {
+                                window.onOfflineProgressUpdateEvent(
+                                    window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress(),
+                                );
+                            }
+                        },
+                    ],
+                    [
+                        StreamModel.Stream,
+                        'change:displayInfo',
+                        () => {
+                            console.log(
+                                '[wwjs-diag] change:displayInfo FIRED ' +
+                                    JSON.stringify({
+                                        displayInfo:
+                                            StreamModel.Stream.displayInfo,
+                                        state: Socket.state,
+                                        hasSynced: Socket.hasSynced,
+                                        ts: Date.now(),
+                                    }),
                             );
+                            // Drive the connected state from WA Web's own
+                            // authoritative connection signal. displayInfo ===
+                            // NORMAL is the exact check WA Web uses everywhere to
+                            // decide it is connected. On its return to NORMAL
+                            // (after a reconnect / finished sync) restore the
+                            // connected state via READY.
+                            if (
+                                StreamModel.Stream.displayInfo ===
+                                StreamModel.StreamInfo.NORMAL
+                            ) {
+                                window.onStreamConnectedEvent();
+                            }
                         },
                     ],
                     [
