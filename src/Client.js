@@ -470,10 +470,6 @@ class Client extends EventEmitter {
                                 { ts: Date.now() },
                             );
                         }
-                        this.emit(Events.READY);
-                        console.log(
-                            '[wwjs-diag] onAppStateHasSyncedEvent READY emitted',
-                        );
                         this.authStrategy.afterAuthReady();
                     } catch (err) {
                         console.log(
@@ -488,15 +484,13 @@ class Client extends EventEmitter {
                     }
                 },
             );
-            let lastPercent = null;
             await exposeFunctionIfAbsent(
                 this.pupPage,
-                'onOfflineProgressUpdateEvent',
-                async (percent) => {
-                    if (lastPercent !== percent) {
-                        lastPercent = percent;
-                        this.emit(Events.LOADING_SCREEN, percent, 'WhatsApp'); // Message is hardcoded as "WhatsApp" for now
-                    }
+                'onConnectionStateEvent',
+                async (connected) => {
+                    if (!this.info) return;
+                    if (connected) this.emit(Events.READY);
+                    else this.emit(Events.LOADING_SCREEN, 0, 'WhatsApp');
                 },
             );
             await exposeFunctionIfAbsent(
@@ -515,6 +509,12 @@ class Client extends EventEmitter {
             await this.pupPage.evaluate(() => {
                 const Socket = window.require('WAWebSocketModel').Socket;
                 const Cmd = window.require('WAWebCmd').Cmd;
+                const StreamModel = window.require('WAWebStreamModel');
+                const emitConnectionState = () =>
+                    window.onConnectionStateEvent(
+                        StreamModel.Stream.displayInfo ===
+                            StreamModel.StreamInfo.NORMAL,
+                    );
 
                 // [diag] Log state BEFORE registering listeners
                 const _diagState = {
@@ -558,13 +558,9 @@ class Client extends EventEmitter {
                         },
                     ],
                     [
-                        Cmd,
-                        'offline_progress_update_from_bridge',
-                        () => {
-                            window.onOfflineProgressUpdateEvent(
-                                window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress(),
-                            );
-                        },
+                        StreamModel.Stream,
+                        'change:displayInfo',
+                        emitConnectionState,
                     ],
                     [
                         Cmd,
@@ -612,6 +608,8 @@ class Client extends EventEmitter {
                     obj.on(event, handler);
                 }
                 window._wwjsListeners = listeners;
+
+                emitConnectionState();
 
                 // Atomic hasSynced check in the same synchronous block as listener registration.
                 const storeInjected = typeof window.WWebJS !== 'undefined';
