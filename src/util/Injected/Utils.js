@@ -1095,6 +1095,239 @@ exports.LoadUtils = () => {
         return res;
     };
 
+    // Deep diagnostic for the "[WhatsApp] getContact failed" bug. Fires ONLY
+    // when BusinessProfile.find() throws (rare, in production). It captures the
+    // exact server error and actively probes every open root-cause hypothesis:
+    //   - retryImmediate / retryDelayed  -> is the failure transient?
+    //   - byPhoneNumber                  -> does the PN identity work where LID fails?
+    //   - knownGoodFresh                 -> is a *different* known-good business
+    //                                       ALSO failing right now (server-wide
+    //                                       throttle) or is it sender-specific?
+    //   - lidResolve / afterResolveByPn  -> is the LID<->PN identity unresolved,
+    //                                       and does resolving it fix the query?
+    // Everything is wrapped so diagnostics never mask or alter the real error.
+    window.WWebJS.__diagBizProfileFailure = async (
+        contactId,
+        contact,
+        contactWid,
+        isLid,
+        wasCached,
+        err,
+        bizTook,
+    ) => {
+        if (!window.onDiagLog) return;
+        const now = () => Date.now();
+        const safe = (fn, d) => {
+            try {
+                return fn();
+            } catch (_) {
+                return d;
+            }
+        };
+        const Coll = window.require('WAWebCollections');
+        const Api = safe(() => window.require('WAWebApiContact'), null);
+        const errInfo = (e) => ({
+            name: e && e.name,
+            status: e && (e.status !== undefined ? e.status : e.statusCode),
+            errorText: e && e.errorText,
+            errorType: e && e.errorType,
+            errorBackoff: e && e.errorBackoff,
+            message: String((e && e.message) || e).substring(0, 120),
+        });
+
+        const diag = {
+            contactId: String(contactId).substring(0, 30),
+            isLid,
+            wasCached,
+            bizTook,
+            // The actual server rejection details (ServerStatusCodeError keeps
+            // the numeric code on .status; the query job drops text/type/backoff
+            // but we log whatever survives).
+            err: errInfo(err),
+            contact: {
+                id: safe(() => contact.id && contact.id._serialized, null),
+                phoneNumber: safe(
+                    () => contact.phoneNumber && contact.phoneNumber._serialized,
+                    null,
+                ),
+                isBusiness: safe(() => !!contact.isBusiness, null),
+                isEnterprise: safe(() => !!contact.isEnterprise, null),
+                isContactSyncCompleted: safe(
+                    () => contact.isContactSyncCompleted,
+                    null,
+                ),
+                type: safe(() => contact.type, null),
+            },
+            // Local LID<->PN mapping as WhatsApp currently knows it.
+            mapping: {
+                currentLid: safe(
+                    () => {
+                        const l = Api && Api.getCurrentLid(contactWid);
+                        return l && l._serialized;
+                    },
+                    null,
+                ),
+                phoneNumber: safe(
+                    () => {
+                        const p = Api && Api.getPhoneNumber(contactWid);
+                        return p && p._serialized;
+                    },
+                    null,
+                ),
+            },
+            conn: {
+                isOfflineDeliveryEnd: safe(
+                    () =>
+                        window
+                            .require('WAWebEventsWaitForOfflineDeliveryEnd')
+                            .isOfflineDeliveryEnd(),
+                    null,
+                ),
+                socketConnected: safe(
+                    () => window.require('WAComms').isSocketConnected(),
+                    null,
+                ),
+                socketState: safe(
+                    () => window.require('WAWebSocketModel').Socket.state,
+                    null,
+                ),
+            },
+            tests: {},
+        };
+
+        // TEST 1 - immediate retry of the exact same query (transient?)
+        try {
+            const t = now();
+            const r = await Coll.BusinessProfile.find(contact.id);
+            diag.tests.retryImmediate = {
+                ok: true,
+                took: now() - t,
+                hasProfile: !!(r && r.profileOptions),
+            };
+        } catch (e) {
+            diag.tests.retryImmediate = { ok: false, ...errInfo(e) };
+        }
+
+        // TEST 2 - query by the phone-number identity instead of the LID
+        try {
+            if (contact.phoneNumber) {
+                const ex = Coll.BusinessProfile.get(contact.phoneNumber);
+                ex && ex.markStale && ex.markStale();
+                const t = now();
+                const r = await Coll.BusinessProfile.find(contact.phoneNumber);
+                diag.tests.byPhoneNumber = {
+                    ok: true,
+                    took: now() - t,
+                    hasProfile: !!(r && r.profileOptions),
+                };
+            } else {
+                diag.tests.byPhoneNumber = { skipped: 'noLocalPhone' };
+            }
+        } catch (e) {
+            diag.tests.byPhoneNumber = { ok: false, ...errInfo(e) };
+        }
+
+        // TEST 3 - a DIFFERENT, known-good business, forced fresh from server.
+        // If this also fails now -> server-wide throttle. If it succeeds ->
+        // the failure is specific to this sender.
+        try {
+            let known = null;
+            const arr = Coll.Contact.getModelsArray();
+            const failId = safe(() => contact.id._serialized, null);
+            for (let i = 0; i < arr.length; i++) {
+                const c = arr[i];
+                if (
+                    (c.isBusiness || c.isEnterprise) &&
+                    safe(() => c.id._serialized, null) !== failId &&
+                    Coll.BusinessProfile.get(c.id)
+                ) {
+                    known = c;
+                    break;
+                }
+            }
+            if (known) {
+                const ex = Coll.BusinessProfile.get(known.id);
+                ex && ex.markStale && ex.markStale();
+                const t = now();
+                const r = await Coll.BusinessProfile.find(known.id);
+                diag.tests.knownGoodFresh = {
+                    ok: true,
+                    took: now() - t,
+                    knownIsLid: safe(
+                        () => known.id._serialized.endsWith('@lid'),
+                        null,
+                    ),
+                    hasProfile: !!(r && r.profileOptions),
+                };
+            } else {
+                diag.tests.knownGoodFresh = { skipped: 'noKnownGood' };
+            }
+        } catch (e) {
+            diag.tests.knownGoodFresh = { ok: false, ...errInfo(e) };
+        }
+
+        // TEST 4 - resolve the LID<->PN identity via the server, then retry the
+        // biz query by the resolved phone number.
+        try {
+            if (isLid && window.WWebJS.enforceLidAndPnRetrieval) {
+                const t = now();
+                const res =
+                    await window.WWebJS.enforceLidAndPnRetrieval(contactId);
+                diag.tests.lidResolve = {
+                    took: now() - t,
+                    lid: res && res.lid && res.lid._serialized,
+                    pn: res && res.phone && res.phone._serialized,
+                };
+                if (res && res.phone) {
+                    try {
+                        const ex = Coll.BusinessProfile.get(res.phone);
+                        ex && ex.markStale && ex.markStale();
+                        const t2 = now();
+                        const r = await Coll.BusinessProfile.find(res.phone);
+                        diag.tests.afterResolveByPn = {
+                            ok: true,
+                            took: now() - t2,
+                            hasProfile: !!(r && r.profileOptions),
+                        };
+                    } catch (e2) {
+                        diag.tests.afterResolveByPn = {
+                            ok: false,
+                            ...errInfo(e2),
+                        };
+                    }
+                }
+            } else {
+                diag.tests.lidResolve = {
+                    skipped: isLid ? 'noResolver' : 'notLid',
+                };
+            }
+        } catch (e) {
+            diag.tests.lidResolve = { ok: false, ...errInfo(e) };
+        }
+
+        // TEST 5 - delayed retry: does the transient clear after ~1.5s?
+        try {
+            await new Promise((res) => setTimeout(res, 1500));
+            const ex = Coll.BusinessProfile.get(contact.id);
+            ex && ex.markStale && ex.markStale();
+            const t = now();
+            const r = await Coll.BusinessProfile.find(contact.id);
+            diag.tests.retryDelayed = {
+                ok: true,
+                took: now() - t,
+                hasProfile: !!(r && r.profileOptions),
+            };
+        } catch (e) {
+            diag.tests.retryDelayed = { ok: false, ...errInfo(e) };
+        }
+
+        window.onDiagLog(
+            'error',
+            'getContact:bizFailDeep',
+            JSON.stringify(diag),
+        );
+    };
+
     window.WWebJS.getContact = async (contactId) => {
         const start = Date.now();
         const isLid =
@@ -1111,12 +1344,43 @@ exports.LoadUtils = () => {
             findTook = Date.now() - start;
             if (contact.isBusiness || contact.isEnterprise) {
                 const bizStart = Date.now();
-                const bizProfile = await window
-                    .require('WAWebCollections')
-                    .BusinessProfile.find(contact.id);
-                bizTook = Date.now() - bizStart;
-                bizProfile.profileOptions &&
-                    (contact.businessProfile = bizProfile);
+                let bizWasCached = false;
+                try {
+                    bizWasCached = !!window
+                        .require('WAWebCollections')
+                        .BusinessProfile.get(contact.id);
+                } catch (_) {
+                    /* cache probe is best-effort */
+                }
+                try {
+                    const bizProfile = await window
+                        .require('WAWebCollections')
+                        .BusinessProfile.find(contact.id);
+                    bizTook = Date.now() - bizStart;
+                    bizProfile.profileOptions &&
+                        (contact.businessProfile = bizProfile);
+                } catch (bizErr) {
+                    // DEEP DIAGNOSTIC: runs ONLY when the biz-profile fetch
+                    // actually fails (the bug we are hunting). It records the
+                    // real server error code and actively tests every
+                    // root-cause hypothesis, then rethrows so behavior is
+                    // unchanged. bizTook stays -1 so getContact:error still
+                    // reports stage === 'bizProfile'.
+                    try {
+                        await window.WWebJS.__diagBizProfileFailure(
+                            contactId,
+                            contact,
+                            contactWid,
+                            isLid,
+                            bizWasCached,
+                            bizErr,
+                            Date.now() - bizStart,
+                        );
+                    } catch (_) {
+                        /* diagnostics must never mask the real error */
+                    }
+                    throw bizErr;
+                }
             }
             const totalTook = Date.now() - start;
             if (totalTook > 200) {
