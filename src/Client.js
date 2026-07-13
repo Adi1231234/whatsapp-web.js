@@ -1808,6 +1808,160 @@ class Client extends EventEmitter {
                 }, 5000);
             }
 
+            // [MEDIA_NO_DESCRIPTOR_DEBUG] Deep, self-gating diagnostics for the
+            // "media message arrives without a media descriptor" bug: a message
+            // whose type is a media type (image/video/...) but that has no
+            // directPath (hasMedia=false), so downstream consumers cannot
+            // download it. Fires ONLY when that exact condition is detected, and
+            // then watches the SAME live model over time (event-driven, with a
+            // few timed backstops) to answer the key open question: does the
+            // media descriptor arrive later (recoverable) or never (lost)?
+            // Kill-switch: set window.__mediaDebugDisabled = true to silence.
+            const __mediaDbgWatched = new Set();
+            const __MEDIA_DBG_TYPES = [
+                'image',
+                'video',
+                'document',
+                'ptt',
+                'audio',
+                'sticker',
+            ];
+            function __debugMediaNoDescriptor(msg, origin) {
+                try {
+                    if (window.__mediaDebugDisabled) return;
+                    if (!msg || !__MEDIA_DBG_TYPES.includes(msg.type)) return;
+                    // Only the bug: media type present, media descriptor absent.
+                    if (msg.directPath) return;
+                    const id = msg.id?._serialized || '';
+                    if (!id || __mediaDbgWatched.has(id)) return;
+                    __mediaDbgWatched.add(id);
+                    if (__mediaDbgWatched.size > 2000) __mediaDbgWatched.clear();
+
+                    const t0 = Date.now();
+                    const Msgs = window.require('WAWebCollections').Msg;
+                    const snap = (m) => {
+                        const md = m.mediaData;
+                        const mo = m.mediaObject;
+                        let isPh = null;
+                        try {
+                            isPh =
+                                typeof m.isPlaceholder === 'function'
+                                    ? m.isPlaceholder()
+                                    : null;
+                        } catch (e) {}
+                        return {
+                            dp: !!m.directPath,
+                            mk: !!m.mediaKey,
+                            size: m.size ?? null,
+                            filehash: !!m.filehash,
+                            encFilehash: !!m.encFilehash,
+                            mimetype: m.mimetype || null,
+                            type: m.type,
+                            subtype: m.subtype || null,
+                            mediaStage: md ? md.mediaStage : null,
+                            moStage: mo ? mo.mediaStage : null,
+                            isPlaceholder: isPh,
+                            ack: m.ack ?? null,
+                            existsInStore: !!Msgs.get(id),
+                        };
+                    };
+
+                    window.onDiagLog?.(
+                        'warn',
+                        'MEDIA_NO_DESCRIPTOR_DETECTED',
+                        JSON.stringify({
+                            traceId: id,
+                            origin: origin || null,
+                            fromMe: msg.id?.fromMe ?? null,
+                            from: msg.from?._serialized || '',
+                            to: msg.to?._serialized || '',
+                            remote:
+                                msg.id?.remote?._serialized ||
+                                msg.id?.remote ||
+                                '',
+                            participant:
+                                msg.id?.participant?._serialized ||
+                                msg.id?.participant ||
+                                null,
+                            keyId: msg.id?.id || null,
+                            t: msg.t ?? null,
+                            ageSec:
+                                msg.t != null
+                                    ? Math.round(Date.now() / 1000 - msg.t)
+                                    : null,
+                            isNewMsg: !!msg.isNewMsg,
+                            isViewOnce: !!msg.isViewOnce,
+                            isMdHistoryMsg: (() => {
+                                try {
+                                    return !!msg.unsafe?.().isMdHistoryMsg;
+                                } catch (e) {
+                                    return null;
+                                }
+                            })(),
+                            ...snap(msg),
+                        }),
+                    );
+
+                    let recoveredAt = null;
+                    const logProgress = (reason) => {
+                        const s = snap(msg);
+                        if (s.dp && recoveredAt == null)
+                            recoveredAt = Date.now() - t0;
+                        window.onDiagLog?.(
+                            s.dp ? 'info' : 'warn',
+                            'MEDIA_NO_DESCRIPTOR_PROGRESS',
+                            JSON.stringify({
+                                traceId: id,
+                                reason,
+                                elapsedMs: Date.now() - t0,
+                                recovered: !!s.dp,
+                                recoveredAtMs: recoveredAt,
+                                ...s,
+                            }),
+                        );
+                    };
+
+                    // Event-driven detection of descriptor arrival / type change
+                    // (preferred over polling); timed backstops are only a
+                    // safety net + final summary.
+                    const onDp = () => logProgress('change:directPath');
+                    const onType = () => logProgress('change:type');
+                    try {
+                        msg.on('change:directPath', onDp);
+                    } catch (e) {}
+                    try {
+                        msg.on('change:type', onType);
+                    } catch (e) {}
+                    try {
+                        msg.mediaData?.on?.('change:mediaStage', () =>
+                            logProgress('change:mediaStage'),
+                        );
+                    } catch (e) {}
+
+                    [2000, 10000, 30000].forEach((ms) =>
+                        setTimeout(() => {
+                            try {
+                                logProgress(
+                                    ms === 30000
+                                        ? 'final@30s'
+                                        : 'backstop@' + ms / 1000 + 's',
+                                );
+                                if (ms === 30000) {
+                                    try {
+                                        msg.off('change:directPath', onDp);
+                                    } catch (e) {}
+                                    try {
+                                        msg.off('change:type', onType);
+                                    } catch (e) {}
+                                }
+                            } catch (e) {}
+                        }, ms),
+                    );
+                } catch (e) {
+                    // Debug diagnostics must never break the message flow.
+                }
+            }
+
             Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
                     const _id = msg.id?._serialized;
@@ -1825,6 +1979,7 @@ class Client extends EventEmitter {
                     }
 
                     if (msg.type !== 'ciphertext') {
+                        __debugMediaNoDescriptor(msg, 'add');
                         window.onAddMessageEvent(
                             window.WWebJS.getMessageModel(msg),
                         );
@@ -1956,6 +2111,7 @@ class Client extends EventEmitter {
                             from: msg.from?._serialized || '',
                         }),
                     );
+                    __debugMediaNoDescriptor(msg, 'change:type-fallback');
                     window.onAddMessageEvent(
                         window.WWebJS.getMessageModel(msg),
                     );
