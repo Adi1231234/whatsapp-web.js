@@ -1882,6 +1882,11 @@ class Client extends EventEmitter {
                             pageCount: m.pageCount ?? null,
                             isGif: !!m.isGif,
                             isAnimated: !!m.isAnimated,
+                            // --- media sub-models: structural presence is the
+                            // reliable discriminator (isPlaceholder/isUnavailable
+                            // are not exposed on the Msg model in current builds) ---
+                            hasMediaData: !!md,
+                            hasMediaObject: !!mo,
                             // --- mediaData child model ---
                             mdStage: md ? md.mediaStage : null,
                             mdType: md ? md.type : null,
