@@ -2033,30 +2033,34 @@ class Client extends EventEmitter {
 
                     let recoveredAt = null;
                     let prevSnap = snap(msg);
+                    // Wrapped so it can NEVER throw into WhatsApp's model event
+                    // dispatch (this runs from change:* listeners on the msg).
                     const logProgress = (reason) => {
-                        const s = snap(msg);
-                        // report exactly which fields transitioned since last tick
-                        const changed = Object.keys(s).filter(
-                            (k) =>
-                                JSON.stringify(s[k]) !==
-                                JSON.stringify(prevSnap[k]),
-                        );
-                        prevSnap = s;
-                        if (s.dp && recoveredAt == null)
-                            recoveredAt = Date.now() - t0;
-                        window.onDiagLog?.(
-                            s.dp ? 'info' : 'warn',
-                            'MEDIA_NO_DESCRIPTOR_PROGRESS',
-                            JSON.stringify({
-                                traceId: id,
-                                reason,
-                                elapsedMs: Date.now() - t0,
-                                recovered: !!s.dp,
-                                recoveredAtMs: recoveredAt,
-                                changed,
-                                ...s,
-                            }),
-                        );
+                        try {
+                            const s = snap(msg);
+                            // which fields transitioned since the last tick
+                            const changed = Object.keys(s).filter(
+                                (k) =>
+                                    JSON.stringify(s[k]) !==
+                                    JSON.stringify(prevSnap[k]),
+                            );
+                            prevSnap = s;
+                            if (s.dp && recoveredAt == null)
+                                recoveredAt = Date.now() - t0;
+                            window.onDiagLog?.(
+                                s.dp ? 'info' : 'warn',
+                                'MEDIA_NO_DESCRIPTOR_PROGRESS',
+                                JSON.stringify({
+                                    traceId: id,
+                                    reason,
+                                    elapsedMs: Date.now() - t0,
+                                    recovered: !!s.dp,
+                                    recoveredAtMs: recoveredAt,
+                                    changed,
+                                    ...s,
+                                }),
+                            );
+                        } catch (e) {}
                     };
 
                     // Event-driven detection of descriptor arrival / type change
@@ -2064,6 +2068,8 @@ class Client extends EventEmitter {
                     // safety net + final summary.
                     const onDp = () => logProgress('change:directPath');
                     const onType = () => logProgress('change:type');
+                    const onStage = () => logProgress('change:mediaStage');
+                    const mdModel = msg.mediaData;
                     try {
                         msg.on('change:directPath', onDp);
                     } catch (e) {}
@@ -2071,10 +2077,22 @@ class Client extends EventEmitter {
                         msg.on('change:type', onType);
                     } catch (e) {}
                     try {
-                        msg.mediaData?.on?.('change:mediaStage', () =>
-                            logProgress('change:mediaStage'),
-                        );
+                        mdModel?.on?.('change:mediaStage', onStage);
                     } catch (e) {}
+
+                    // Single cleanup of every listener after the observation
+                    // window, so nothing leaks or fires past 30s.
+                    const cleanup = () => {
+                        try {
+                            msg.off('change:directPath', onDp);
+                        } catch (e) {}
+                        try {
+                            msg.off('change:type', onType);
+                        } catch (e) {}
+                        try {
+                            mdModel?.off?.('change:mediaStage', onStage);
+                        } catch (e) {}
+                    };
 
                     [2000, 10000, 30000].forEach((ms) =>
                         setTimeout(() => {
@@ -2084,14 +2102,7 @@ class Client extends EventEmitter {
                                         ? 'final@30s'
                                         : 'backstop@' + ms / 1000 + 's',
                                 );
-                                if (ms === 30000) {
-                                    try {
-                                        msg.off('change:directPath', onDp);
-                                    } catch (e) {}
-                                    try {
-                                        msg.off('change:type', onType);
-                                    } catch (e) {}
-                                }
+                                if (ms === 30000) cleanup();
                             } catch (e) {}
                         }, ms),
                     );
