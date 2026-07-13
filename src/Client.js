@@ -1836,7 +1836,8 @@ class Client extends EventEmitter {
                     const id = msg.id?._serialized || '';
                     if (!id || __mediaDbgWatched.has(id)) return;
                     __mediaDbgWatched.add(id);
-                    if (__mediaDbgWatched.size > 2000) __mediaDbgWatched.clear();
+                    if (__mediaDbgWatched.size > 2000)
+                        __mediaDbgWatched.clear();
 
                     const t0 = Date.now();
                     const Msgs = window.require('WAWebCollections').Msg;
@@ -1893,9 +1894,11 @@ class Client extends EventEmitter {
                             mdDp: md ? !!md.directPath : null,
                             mdMk: md ? !!md.mediaKey : null,
                             mdFilehash: md ? !!md.filehash : null,
-                            mdProgStage: md ? md.progressiveStage ?? null : null,
-                            mdLoadedSize: md ? md.loadedSize ?? null : null,
-                            mdSize: md ? md.size ?? null : null,
+                            mdProgStage: md
+                                ? (md.progressiveStage ?? null)
+                                : null,
+                            mdLoadedSize: md ? (md.loadedSize ?? null) : null,
+                            mdSize: md ? (md.size ?? null) : null,
                             mdDownloadable: md
                                 ? _g(() =>
                                       typeof md.isDownloadable === 'function'
@@ -1905,8 +1908,10 @@ class Client extends EventEmitter {
                                 : null,
                             // --- mediaObject model (download/upload state) ---
                             moFilehash: mo ? !!mo.filehash : null,
-                            moStage: mo ? mo.mediaStage ?? null : null,
-                            moDownloadStage: mo ? _g(() => mo.downloadStage) : null,
+                            moStage: mo ? (mo.mediaStage ?? null) : null,
+                            moDownloadStage: mo
+                                ? _g(() => mo.downloadStage)
+                                : null,
                             moUploadStage: mo ? _g(() => mo.uploadStage) : null,
                             // --- message state / lifecycle ---
                             type: m.type,
@@ -1915,12 +1920,12 @@ class Client extends EventEmitter {
                             isPlaceholder: _g(() =>
                                 typeof m.isPlaceholder === 'function'
                                     ? m.isPlaceholder()
-                                    : m.isPlaceholder ?? null,
+                                    : (m.isPlaceholder ?? null),
                             ),
                             isUnavailable: _g(() =>
                                 typeof m.isUnavailable === 'function'
                                     ? m.isUnavailable()
-                                    : m.isUnavailable ?? null,
+                                    : (m.isUnavailable ?? null),
                             ),
                             ack: m.ack ?? null,
                             invis: m.invis ?? null,
@@ -1967,7 +1972,8 @@ class Client extends EventEmitter {
                         window.require('WAWebUserPrefsMeUser'),
                     );
                     const meWid =
-                        _g(() => _meU?.getMaybeMePnUser?.()?._serialized) ?? null;
+                        _g(() => _meU?.getMaybeMePnUser?.()?._serialized) ??
+                        null;
                     const meLid =
                         _g(() => _meU?.getMaybeMeLidUser?.()?._serialized) ??
                         null;
@@ -2065,7 +2071,9 @@ class Client extends EventEmitter {
                                     ...s,
                                 }),
                             );
-                        } catch (e) {}
+                        } catch (e) {
+                            // noop: diagnostics must never throw
+                        }
                     };
 
                     // Event-driven detection of descriptor arrival / type change
@@ -2077,26 +2085,38 @@ class Client extends EventEmitter {
                     const mdModel = msg.mediaData;
                     try {
                         msg.on('change:directPath', onDp);
-                    } catch (e) {}
+                    } catch (e) {
+                        // noop: diagnostics must never throw
+                    }
                     try {
                         msg.on('change:type', onType);
-                    } catch (e) {}
+                    } catch (e) {
+                        // noop: diagnostics must never throw
+                    }
                     try {
                         mdModel?.on?.('change:mediaStage', onStage);
-                    } catch (e) {}
+                    } catch (e) {
+                        // noop: diagnostics must never throw
+                    }
 
                     // Single cleanup of every listener after the observation
                     // window, so nothing leaks or fires past 30s.
                     const cleanup = () => {
                         try {
                             msg.off('change:directPath', onDp);
-                        } catch (e) {}
+                        } catch (e) {
+                            // noop: diagnostics must never throw
+                        }
                         try {
                             msg.off('change:type', onType);
-                        } catch (e) {}
+                        } catch (e) {
+                            // noop: diagnostics must never throw
+                        }
                         try {
                             mdModel?.off?.('change:mediaStage', onStage);
-                        } catch (e) {}
+                        } catch (e) {
+                            // noop: diagnostics must never throw
+                        }
                     };
 
                     [2000, 10000, 30000].forEach((ms) =>
@@ -2108,7 +2128,9 @@ class Client extends EventEmitter {
                                         : 'backstop@' + ms / 1000 + 's',
                                 );
                                 if (ms === 30000) cleanup();
-                            } catch (e) {}
+                            } catch (e) {
+                                // noop: diagnostics must never throw
+                            }
                         }, ms),
                     );
                 } catch (e) {
