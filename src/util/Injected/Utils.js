@@ -1124,74 +1124,168 @@ exports.LoadUtils = () => {
                 return d;
             }
         };
-        const Coll = window.require('WAWebCollections');
-        const Api = safe(() => window.require('WAWebApiContact'), null);
+        const R = (m) => window.require(m);
+        const Coll = R('WAWebCollections');
+        const Api = safe(() => R('WAWebApiContact'), null);
+        const sid = (w) => safe(() => w && w._serialized, null);
         const errInfo = (e) => ({
             name: e && e.name,
             status: e && (e.status !== undefined ? e.status : e.statusCode),
+            statusCode: e && e.statusCode,
             errorText: e && e.errorText,
             errorType: e && e.errorType,
             errorBackoff: e && e.errorBackoff,
-            message: String((e && e.message) || e).substring(0, 120),
+            message: String((e && e.message) || e).substring(0, 140),
+            ownProps: safe(() => Object.keys(e).slice(0, 15), null),
+            stack0: safe(
+                () => String(e.stack || '').split('\n')[0].substring(0, 100),
+                null,
+            ),
         });
 
         const diag = {
-            contactId: String(contactId).substring(0, 30),
+            contactId: String(contactId).substring(0, 40),
             isLid,
             wasCached,
             bizTook,
-            // The actual server rejection details (ServerStatusCodeError keeps
-            // the numeric code on .status; the query job drops text/type/backoff
-            // but we log whatever survives).
+            ts: now(),
+            // The actual server rejection (ServerStatusCodeError keeps the
+            // numeric code on .status; the query job drops text/type/backoff -
+            // the rawIq probe below re-fetches those directly from the server).
             err: errInfo(err),
+
+            // Full WID breakdown of the identity we queried.
+            wid: {
+                user: safe(() => contactWid.user, null),
+                server: safe(() => contactWid.server, null),
+                device: safe(() => contactWid.device, null),
+                agent: safe(() => contactWid.agent, null),
+                isLid: safe(() => contactWid.isLid(), null),
+                isUser: safe(() => contactWid.isUser(), null),
+                isGroup: safe(() => contactWid.isGroup(), null),
+                isPSA: safe(() => contactWid.isPSA(), null),
+                isUserNotPSA: safe(() => contactWid.isUserNotPSA(), null),
+                isFbidBot: safe(() => contactWid.isFbidBot(), null),
+            },
+
+            // Contact model state - is this a synced, real business or a
+            // freshly-seen placeholder?
             contact: {
-                id: safe(() => contact.id && contact.id._serialized, null),
-                phoneNumber: safe(
-                    () => contact.phoneNumber && contact.phoneNumber._serialized,
-                    null,
-                ),
+                id: sid(safe(() => contact.id, null)),
+                phoneNumber: sid(safe(() => contact.phoneNumber, null)),
+                lid: sid(safe(() => contact.lid, null)),
+                userid: safe(() => contact.userid, null),
                 isBusiness: safe(() => !!contact.isBusiness, null),
                 isEnterprise: safe(() => !!contact.isEnterprise, null),
+                isSmb: safe(() => !!contact.isSmb, null),
                 isContactSyncCompleted: safe(
                     () => contact.isContactSyncCompleted,
                     null,
                 ),
+                forcedBusinessUpdateFromServer: safe(
+                    () => contact.forcedBusinessUpdateFromServer,
+                    null,
+                ),
+                verifiedName: safe(() => contact.verifiedName, null),
+                verifiedLevel: safe(() => contact.verifiedLevel, null),
+                pushname: safe(() => contact.pushname, null),
+                notifyName: safe(() => contact.notifyName, null),
+                name: safe(() => contact.name, null),
+                isMyContact: safe(() => contact.isMyContact, null),
+                isWAContact: safe(() => contact.isWAContact, null),
+                isContactBlocked: safe(() => contact.isContactBlocked, null),
                 type: safe(() => contact.type, null),
+                hasTextStatus: safe(() => !!contact.textStatus, null),
+                stale: safe(() => contact.stale, null),
+                hasBusinessProfile: safe(() => !!contact.businessProfile, null),
             },
-            // Local LID<->PN mapping as WhatsApp currently knows it.
+
+            // The BusinessProfile model that gadd() created even though find()
+            // threw - reveals whether it was a placeholder, its version tag,
+            // and its data source.
+            bizModel: safe(() => {
+                const m = Coll.BusinessProfile.get(contact.id);
+                if (!m) return null;
+                return {
+                    id: sid(m.id),
+                    tag: m.tag,
+                    dataSource: m.dataSource,
+                    stale: m.stale,
+                    isValid: safe(() => m.isValid(), null),
+                    hasProfileOptions: !!m.profileOptions,
+                    automatedType: m.automatedType,
+                    welcomeMsgProtocolMode: m.welcomeMsgProtocolMode,
+                };
+            }, null),
+
+            // Local LID<->PN mapping + migration view of this identity.
             mapping: {
-                currentLid: safe(
-                    () => {
-                        const l = Api && Api.getCurrentLid(contactWid);
-                        return l && l._serialized;
-                    },
-                    null,
+                currentLid: sid(
+                    safe(() => Api && Api.getCurrentLid(contactWid), null),
                 ),
-                phoneNumber: safe(
-                    () => {
-                        const p = Api && Api.getPhoneNumber(contactWid);
-                        return p && p._serialized;
-                    },
+                phoneNumber: sid(
+                    safe(() => Api && Api.getPhoneNumber(contactWid), null),
+                ),
+                migToPn: sid(
+                    safe(() => R('WAWebLidMigrationUtils').toPn(contact.id), null),
+                ),
+                migToLid: sid(
+                    safe(
+                        () => R('WAWebLidMigrationUtils').toLid(contact.id),
+                        null,
+                    ),
+                ),
+                isLidMigrated: safe(
+                    () =>
+                        R('WAWebLid1X1MigrationGating').Lid1X1MigrationUtils.isLidMigrated(),
                     null,
                 ),
             },
+
+            // Connection / sync state at the instant of failure.
             conn: {
                 isOfflineDeliveryEnd: safe(
                     () =>
-                        window
-                            .require('WAWebEventsWaitForOfflineDeliveryEnd')
-                            .isOfflineDeliveryEnd(),
+                        R(
+                            'WAWebEventsWaitForOfflineDeliveryEnd',
+                        ).isOfflineDeliveryEnd(),
                     null,
                 ),
                 socketConnected: safe(
-                    () => window.require('WAComms').isSocketConnected(),
+                    () => R('WAComms').isSocketConnected(),
                     null,
                 ),
                 socketState: safe(
-                    () => window.require('WAWebSocketModel').Socket.state,
+                    () => R('WAWebSocketModel').Socket.state,
                     null,
                 ),
+                socketHasSynced: safe(
+                    () => R('WAWebSocketModel').Socket.hasSynced,
+                    null,
+                ),
+                launchGeneration: safe(
+                    () => R('WAWebSocketModel').Socket.launchGeneration,
+                    null,
+                ),
+                backoffGeneration: safe(
+                    () => R('WAWebSocketModel').Socket.backoffGeneration,
+                    null,
+                ),
+                retryTimestamp: safe(
+                    () => R('WAWebSocketModel').Socket.retryTimestamp,
+                    null,
+                ),
+                connModel: safe(() => {
+                    const C = R('WAWebConnModel').Conn;
+                    return {
+                        connected: C.connected,
+                        platform: C.platform,
+                        is24h: C.is24h,
+                        hasWid: !!C.wid,
+                    };
+                }, null),
             },
+
             tests: {},
         };
 
@@ -1319,6 +1413,61 @@ exports.LoadUtils = () => {
             };
         } catch (e) {
             diag.tests.retryDelayed = { ok: false, ...errInfo(e) };
+        }
+
+        // TEST 6 - raw w:biz IQ, replicating exactly what the query job sends,
+        // but reading the *raw* server response so we recover the errorText /
+        // errorType / errorBackoff that ServerStatusCodeError discards. This is
+        // the definitive record of what the server actually answered.
+        try {
+            const WAWap = R('WAWap');
+            const USER_JID = R('WAWebCommsWapMd').USER_JID;
+            const ver = R(
+                'WAWebBusinessProfileVersioningBridge',
+            ).getBusinessProfileQueryVersion();
+            const iq = WAWap.wap(
+                'iq',
+                {
+                    to: WAWap.S_WHATSAPP_NET,
+                    xmlns: 'w:biz',
+                    id: WAWap.generateId(),
+                    type: 'get',
+                },
+                WAWap.wap('business_profile', { v: WAWap.INT(ver) }, [
+                    WAWap.wap('profile', { jid: USER_JID(contact.id) }),
+                ]),
+            );
+            const t = now();
+            const raw = await R('WADeprecatedSendIq').deprecatedSendIq(
+                iq,
+                () => true,
+            );
+            diag.tests.rawIq = {
+                took: now() - t,
+                success: raw && raw.success,
+                errorCode: raw && raw.errorCode,
+                errorText: raw && raw.errorText,
+                errorType: raw && raw.errorType,
+                errorBackoff: raw && raw.errorBackoff,
+            };
+        } catch (e) {
+            diag.tests.rawIq = { threw: true, ...errInfo(e) };
+        }
+
+        // TEST 7 - does the server itself know this identity, and does it flag
+        // it as a business? Distinguishes "unknown/unresolved identity" from
+        // "known business whose profile query was rejected".
+        try {
+            const t = now();
+            const r = await R('WAWebQueryExistsJob').queryWidExists(contactWid);
+            diag.tests.widExists = {
+                took: now() - t,
+                exists: !!(r && r.wid),
+                wid: sid(r && r.wid),
+                biz: r && r.biz,
+            };
+        } catch (e) {
+            diag.tests.widExists = { threw: true, ...errInfo(e) };
         }
 
         window.onDiagLog(
