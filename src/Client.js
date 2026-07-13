@@ -1808,6 +1808,336 @@ class Client extends EventEmitter {
                 }, 5000);
             }
 
+            // [MEDIA_NO_DESCRIPTOR_DEBUG] Deep, self-gating diagnostics for the
+            // "media message arrives without a media descriptor" bug: a message
+            // whose type is a media type (image/video/...) but that has no
+            // directPath (hasMedia=false), so downstream consumers cannot
+            // download it. Fires ONLY when that exact condition is detected, and
+            // then watches the SAME live model over time (event-driven, with a
+            // few timed backstops) to answer the key open question: does the
+            // media descriptor arrive later (recoverable) or never (lost)?
+            // Kill-switch: set window.__mediaDebugDisabled = true to silence.
+            const __mediaDbgWatched = new Set();
+            const __mediaDbgTimes = [];
+            const __MEDIA_DBG_TYPES = [
+                'image',
+                'video',
+                'document',
+                'ptt',
+                'audio',
+                'sticker',
+            ];
+            function __debugMediaNoDescriptor(msg, origin) {
+                try {
+                    if (window.__mediaDebugDisabled) return;
+                    if (!msg || !__MEDIA_DBG_TYPES.includes(msg.type)) return;
+                    // Only the bug: media type present, media descriptor absent.
+                    if (msg.directPath) return;
+                    const id = msg.id?._serialized || '';
+                    if (!id || __mediaDbgWatched.has(id)) return;
+                    __mediaDbgWatched.add(id);
+                    if (__mediaDbgWatched.size > 2000)
+                        __mediaDbgWatched.clear();
+
+                    const t0 = Date.now();
+                    const Msgs = window.require('WAWebCollections').Msg;
+                    // Safe getter: never throws, returns null on any error.
+                    const _g = (fn) => {
+                        try {
+                            return fn();
+                        } catch (e) {
+                            return null;
+                        }
+                    };
+                    const snap = (m) => {
+                        const md = m.mediaData;
+                        const mo = m.mediaObject;
+                        return {
+                            // --- raw media descriptor fields on the message ---
+                            dp: !!m.directPath,
+                            dpLen: m.directPath ? m.directPath.length : 0,
+                            mk: !!m.mediaKey,
+                            mkTs: m.mediaKeyTimestamp ?? null,
+                            size: m.size ?? null,
+                            filehash: !!m.filehash,
+                            encFilehash: !!m.encFilehash,
+                            uploadhash: !!m.uploadhash,
+                            mimetype: m.mimetype || null,
+                            filename: m.filename || null,
+                            deprecatedMms3Url: !!m.deprecatedMms3Url,
+                            url: !!m.url,
+                            staticUrl: !!m.staticUrl,
+                            clientUrl: !!m.clientUrl,
+                            thumbDp: !!m.thumbnailDirectPath,
+                            thumbSha: !!m.thumbnailSha256,
+                            thumbEncSha: !!m.thumbnailEncSha256,
+                            scanLengths: _g(() =>
+                                m.scanLengths ? m.scanLengths.length : 0,
+                            ),
+                            scansSidecar: !!m.scansSidecar,
+                            streamingSidecar: !!m.streamingSidecar,
+                            firstFrameSidecar: !!m.firstFrameSidecar,
+                            width: m.width ?? null,
+                            height: m.height ?? null,
+                            duration: m.duration ?? null,
+                            pageCount: m.pageCount ?? null,
+                            isGif: !!m.isGif,
+                            isAnimated: !!m.isAnimated,
+                            // --- media sub-models: structural presence is the
+                            // reliable discriminator (isPlaceholder/isUnavailable
+                            // are not exposed on the Msg model in current builds) ---
+                            hasMediaData: !!md,
+                            hasMediaObject: !!mo,
+                            // --- mediaData child model ---
+                            mdStage: md ? md.mediaStage : null,
+                            mdType: md ? md.type : null,
+                            mdDp: md ? !!md.directPath : null,
+                            mdMk: md ? !!md.mediaKey : null,
+                            mdFilehash: md ? !!md.filehash : null,
+                            mdProgStage: md
+                                ? (md.progressiveStage ?? null)
+                                : null,
+                            mdLoadedSize: md ? (md.loadedSize ?? null) : null,
+                            mdSize: md ? (md.size ?? null) : null,
+                            mdDownloadable: md
+                                ? _g(() =>
+                                      typeof md.isDownloadable === 'function'
+                                          ? md.isDownloadable()
+                                          : null,
+                                  )
+                                : null,
+                            // --- mediaObject model (download/upload state) ---
+                            moFilehash: mo ? !!mo.filehash : null,
+                            moStage: mo ? (mo.mediaStage ?? null) : null,
+                            moDownloadStage: mo
+                                ? _g(() => mo.downloadStage)
+                                : null,
+                            moUploadStage: mo ? _g(() => mo.uploadStage) : null,
+                            // --- message state / lifecycle ---
+                            type: m.type,
+                            subtype: m.subtype || null,
+                            kind: _g(() => m.kind),
+                            isPlaceholder: _g(() =>
+                                typeof m.isPlaceholder === 'function'
+                                    ? m.isPlaceholder()
+                                    : (m.isPlaceholder ?? null),
+                            ),
+                            isUnavailable: _g(() =>
+                                typeof m.isUnavailable === 'function'
+                                    ? m.isUnavailable()
+                                    : (m.isUnavailable ?? null),
+                            ),
+                            ack: m.ack ?? null,
+                            invis: m.invis ?? null,
+                            star: !!m.star,
+                            errorCode: m.errorCode ?? null,
+                            isSendFailure: m.isSendFailure ?? null,
+                            isForwarded: !!m.isForwarded,
+                            isStatusV3: !!m.isStatusV3,
+                            isViewOnce: !!m.isViewOnce,
+                            viewMode: _g(() => m.viewMode),
+                            isEphemeral: _g(() =>
+                                typeof m.isEphemeral === 'function'
+                                    ? m.isEphemeral()
+                                    : null,
+                            ),
+                            ephemeralDuration: m.ephemeralDuration ?? null,
+                            ephemeralOutOfSync: m.ephemeralOutOfSync ?? null,
+                            revokeTimestamp: m.revokeTimestamp ?? null,
+                            isOverwrittenByRevoke: !!m.isOverwrittenByRevoke,
+                            latestEditMsgKey: !!m.latestEditMsgKey,
+                            editMsgType: m.editMsgType ?? null,
+                            hasMessageSecret: !!(
+                                m.messageSecret || m.messageSecretV2
+                            ),
+                            futureproofType: m.futureproofType ?? null,
+                            futureproofSubtype: m.futureproofSubtype ?? null,
+                            bizContentPlaceholderType:
+                                m.bizContentPlaceholderType ?? null,
+                            placeholderCreatedWhenAccountIsHosted:
+                                m.placeholderCreatedWhenAccountIsHosted ?? null,
+                            selfDir: _g(() => m.id?.selfDir) ?? null,
+                            existsInStore: !!Msgs.get(id),
+                        };
+                    };
+
+                    // --- burst + environment + identity context ---
+                    __mediaDbgTimes.push(t0);
+                    while (
+                        __mediaDbgTimes.length &&
+                        t0 - __mediaDbgTimes[0] > 10000
+                    )
+                        __mediaDbgTimes.shift();
+                    const _meU = _g(() =>
+                        window.require('WAWebUserPrefsMeUser'),
+                    );
+                    const meWid =
+                        _g(() => _meU?.getMaybeMePnUser?.()?._serialized) ??
+                        null;
+                    const meLid =
+                        _g(() => _meU?.getMaybeMeLidUser?.()?._serialized) ??
+                        null;
+                    const remoteSer =
+                        msg.id?.remote?._serialized || msg.id?.remote || '';
+                    const env = {
+                        // burst intensity: how many detections in the last 10s
+                        burstCount10s: __mediaDbgTimes.length,
+                        // resend/decrypt backlog + handler state at this moment
+                        pendingResendSize: _g(() => pendingResend.size),
+                        handledSetSize: _g(() => __handledByAdd.size),
+                        watchedSize: __mediaDbgWatched.size,
+                        storeMsgCount: _g(() => Msgs.getModelsArray().length),
+                        // connection / stream health during the failure window
+                        streamDisplayInfo: _g(
+                            () =>
+                                window.require('WAWebStreamModel')?.Stream
+                                    ?.displayInfo,
+                        ),
+                        socketState: _g(
+                            () =>
+                                window.require('WAWebSocketModel')?.Socket
+                                    ?.state,
+                        ),
+                        // self-chat / own-device signals
+                        meLid,
+                        meWid,
+                        isSelfChat: !!(
+                            remoteSer &&
+                            (remoteSer === meLid || remoteSer === meWid)
+                        ),
+                        endsOut: id.endsWith('_out'),
+                        endsIn: id.endsWith('_in'),
+                        remoteIsGroup: /@g\.us$/.test(remoteSer),
+                        remoteIsLid: /@lid$/.test(remoteSer),
+                    };
+
+                    window.onDiagLog?.(
+                        'warn',
+                        'MEDIA_NO_DESCRIPTOR_DETECTED',
+                        JSON.stringify({
+                            traceId: id,
+                            origin: origin || null,
+                            fromMe: msg.id?.fromMe ?? null,
+                            from: msg.from?._serialized || '',
+                            to: msg.to?._serialized || '',
+                            author: msg.author?._serialized || null,
+                            remote: remoteSer,
+                            participant:
+                                msg.id?.participant?._serialized ||
+                                msg.id?.participant ||
+                                null,
+                            keyId: msg.id?.id || null,
+                            notifyName: msg.notifyName || null,
+                            t: msg.t ?? null,
+                            ageSec:
+                                msg.t != null
+                                    ? Math.round(Date.now() / 1000 - msg.t)
+                                    : null,
+                            isNewMsg: !!msg.isNewMsg,
+                            isMdHistoryMsg: _g(
+                                () => !!msg.unsafe?.().isMdHistoryMsg,
+                            ),
+                            ...env,
+                            ...snap(msg),
+                        }),
+                    );
+
+                    let recoveredAt = null;
+                    let prevSnap = snap(msg);
+                    // Wrapped so it can NEVER throw into WhatsApp's model event
+                    // dispatch (this runs from change:* listeners on the msg).
+                    const logProgress = (reason) => {
+                        try {
+                            const s = snap(msg);
+                            // which fields transitioned since the last tick
+                            const changed = Object.keys(s).filter(
+                                (k) =>
+                                    JSON.stringify(s[k]) !==
+                                    JSON.stringify(prevSnap[k]),
+                            );
+                            prevSnap = s;
+                            if (s.dp && recoveredAt == null)
+                                recoveredAt = Date.now() - t0;
+                            window.onDiagLog?.(
+                                s.dp ? 'info' : 'warn',
+                                'MEDIA_NO_DESCRIPTOR_PROGRESS',
+                                JSON.stringify({
+                                    traceId: id,
+                                    reason,
+                                    elapsedMs: Date.now() - t0,
+                                    recovered: !!s.dp,
+                                    recoveredAtMs: recoveredAt,
+                                    changed,
+                                    ...s,
+                                }),
+                            );
+                        } catch (e) {
+                            // noop: diagnostics must never throw
+                        }
+                    };
+
+                    // Event-driven detection of descriptor arrival / type change
+                    // (preferred over polling); timed backstops are only a
+                    // safety net + final summary.
+                    const onDp = () => logProgress('change:directPath');
+                    const onType = () => logProgress('change:type');
+                    const onStage = () => logProgress('change:mediaStage');
+                    const mdModel = msg.mediaData;
+                    try {
+                        msg.on('change:directPath', onDp);
+                    } catch (e) {
+                        // noop: diagnostics must never throw
+                    }
+                    try {
+                        msg.on('change:type', onType);
+                    } catch (e) {
+                        // noop: diagnostics must never throw
+                    }
+                    try {
+                        mdModel?.on?.('change:mediaStage', onStage);
+                    } catch (e) {
+                        // noop: diagnostics must never throw
+                    }
+
+                    // Single cleanup of every listener after the observation
+                    // window, so nothing leaks or fires past 30s.
+                    const cleanup = () => {
+                        try {
+                            msg.off('change:directPath', onDp);
+                        } catch (e) {
+                            // noop: diagnostics must never throw
+                        }
+                        try {
+                            msg.off('change:type', onType);
+                        } catch (e) {
+                            // noop: diagnostics must never throw
+                        }
+                        try {
+                            mdModel?.off?.('change:mediaStage', onStage);
+                        } catch (e) {
+                            // noop: diagnostics must never throw
+                        }
+                    };
+
+                    [2000, 10000, 30000].forEach((ms) =>
+                        setTimeout(() => {
+                            try {
+                                logProgress(
+                                    ms === 30000
+                                        ? 'final@30s'
+                                        : 'backstop@' + ms / 1000 + 's',
+                                );
+                                if (ms === 30000) cleanup();
+                            } catch (e) {
+                                // noop: diagnostics must never throw
+                            }
+                        }, ms),
+                    );
+                } catch (e) {
+                    // Debug diagnostics must never break the message flow.
+                }
+            }
+
             Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
                     const _id = msg.id?._serialized;
@@ -1825,6 +2155,7 @@ class Client extends EventEmitter {
                     }
 
                     if (msg.type !== 'ciphertext') {
+                        __debugMediaNoDescriptor(msg, 'add');
                         window.onAddMessageEvent(
                             window.WWebJS.getMessageModel(msg),
                         );
@@ -1956,6 +2287,7 @@ class Client extends EventEmitter {
                             from: msg.from?._serialized || '',
                         }),
                     );
+                    __debugMediaNoDescriptor(msg, 'change:type-fallback');
                     window.onAddMessageEvent(
                         window.WWebJS.getMessageModel(msg),
                     );
