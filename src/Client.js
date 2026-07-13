@@ -1818,6 +1818,7 @@ class Client extends EventEmitter {
             // media descriptor arrive later (recoverable) or never (lost)?
             // Kill-switch: set window.__mediaDebugDisabled = true to silence.
             const __mediaDbgWatched = new Set();
+            const __mediaDbgTimes = [];
             const __MEDIA_DBG_TYPES = [
                 'image',
                 'video',
@@ -1839,31 +1840,164 @@ class Client extends EventEmitter {
 
                     const t0 = Date.now();
                     const Msgs = window.require('WAWebCollections').Msg;
+                    // Safe getter: never throws, returns null on any error.
+                    const _g = (fn) => {
+                        try {
+                            return fn();
+                        } catch (e) {
+                            return null;
+                        }
+                    };
                     const snap = (m) => {
                         const md = m.mediaData;
                         const mo = m.mediaObject;
-                        let isPh = null;
-                        try {
-                            isPh =
-                                typeof m.isPlaceholder === 'function'
-                                    ? m.isPlaceholder()
-                                    : null;
-                        } catch (e) {}
                         return {
+                            // --- raw media descriptor fields on the message ---
                             dp: !!m.directPath,
+                            dpLen: m.directPath ? m.directPath.length : 0,
                             mk: !!m.mediaKey,
+                            mkTs: m.mediaKeyTimestamp ?? null,
                             size: m.size ?? null,
                             filehash: !!m.filehash,
                             encFilehash: !!m.encFilehash,
+                            uploadhash: !!m.uploadhash,
                             mimetype: m.mimetype || null,
+                            filename: m.filename || null,
+                            deprecatedMms3Url: !!m.deprecatedMms3Url,
+                            url: !!m.url,
+                            staticUrl: !!m.staticUrl,
+                            clientUrl: !!m.clientUrl,
+                            thumbDp: !!m.thumbnailDirectPath,
+                            thumbSha: !!m.thumbnailSha256,
+                            thumbEncSha: !!m.thumbnailEncSha256,
+                            scanLengths: _g(() =>
+                                m.scanLengths ? m.scanLengths.length : 0,
+                            ),
+                            scansSidecar: !!m.scansSidecar,
+                            streamingSidecar: !!m.streamingSidecar,
+                            firstFrameSidecar: !!m.firstFrameSidecar,
+                            width: m.width ?? null,
+                            height: m.height ?? null,
+                            duration: m.duration ?? null,
+                            pageCount: m.pageCount ?? null,
+                            isGif: !!m.isGif,
+                            isAnimated: !!m.isAnimated,
+                            // --- mediaData child model ---
+                            mdStage: md ? md.mediaStage : null,
+                            mdType: md ? md.type : null,
+                            mdDp: md ? !!md.directPath : null,
+                            mdMk: md ? !!md.mediaKey : null,
+                            mdFilehash: md ? !!md.filehash : null,
+                            mdProgStage: md ? md.progressiveStage ?? null : null,
+                            mdLoadedSize: md ? md.loadedSize ?? null : null,
+                            mdSize: md ? md.size ?? null : null,
+                            mdDownloadable: md
+                                ? _g(() =>
+                                      typeof md.isDownloadable === 'function'
+                                          ? md.isDownloadable()
+                                          : null,
+                                  )
+                                : null,
+                            // --- mediaObject model (download/upload state) ---
+                            moFilehash: mo ? !!mo.filehash : null,
+                            moStage: mo ? mo.mediaStage ?? null : null,
+                            moDownloadStage: mo ? _g(() => mo.downloadStage) : null,
+                            moUploadStage: mo ? _g(() => mo.uploadStage) : null,
+                            // --- message state / lifecycle ---
                             type: m.type,
                             subtype: m.subtype || null,
-                            mediaStage: md ? md.mediaStage : null,
-                            moStage: mo ? mo.mediaStage : null,
-                            isPlaceholder: isPh,
+                            kind: _g(() => m.kind),
+                            isPlaceholder: _g(() =>
+                                typeof m.isPlaceholder === 'function'
+                                    ? m.isPlaceholder()
+                                    : m.isPlaceholder ?? null,
+                            ),
+                            isUnavailable: _g(() =>
+                                typeof m.isUnavailable === 'function'
+                                    ? m.isUnavailable()
+                                    : m.isUnavailable ?? null,
+                            ),
                             ack: m.ack ?? null,
+                            invis: m.invis ?? null,
+                            star: !!m.star,
+                            errorCode: m.errorCode ?? null,
+                            isSendFailure: m.isSendFailure ?? null,
+                            isForwarded: !!m.isForwarded,
+                            isStatusV3: !!m.isStatusV3,
+                            isViewOnce: !!m.isViewOnce,
+                            viewMode: _g(() => m.viewMode),
+                            isEphemeral: _g(() =>
+                                typeof m.isEphemeral === 'function'
+                                    ? m.isEphemeral()
+                                    : null,
+                            ),
+                            ephemeralDuration: m.ephemeralDuration ?? null,
+                            ephemeralOutOfSync: m.ephemeralOutOfSync ?? null,
+                            revokeTimestamp: m.revokeTimestamp ?? null,
+                            isOverwrittenByRevoke: !!m.isOverwrittenByRevoke,
+                            latestEditMsgKey: !!m.latestEditMsgKey,
+                            editMsgType: m.editMsgType ?? null,
+                            hasMessageSecret: !!(
+                                m.messageSecret || m.messageSecretV2
+                            ),
+                            futureproofType: m.futureproofType ?? null,
+                            futureproofSubtype: m.futureproofSubtype ?? null,
+                            bizContentPlaceholderType:
+                                m.bizContentPlaceholderType ?? null,
+                            placeholderCreatedWhenAccountIsHosted:
+                                m.placeholderCreatedWhenAccountIsHosted ?? null,
+                            selfDir: _g(() => m.id?.selfDir) ?? null,
                             existsInStore: !!Msgs.get(id),
                         };
+                    };
+
+                    // --- burst + environment + identity context ---
+                    __mediaDbgTimes.push(t0);
+                    while (
+                        __mediaDbgTimes.length &&
+                        t0 - __mediaDbgTimes[0] > 10000
+                    )
+                        __mediaDbgTimes.shift();
+                    const _meU = _g(() =>
+                        window.require('WAWebUserPrefsMeUser'),
+                    );
+                    const meWid =
+                        _g(() => _meU?.getMaybeMePnUser?.()?._serialized) ?? null;
+                    const meLid =
+                        _g(() => _meU?.getMaybeMeLidUser?.()?._serialized) ??
+                        null;
+                    const remoteSer =
+                        msg.id?.remote?._serialized || msg.id?.remote || '';
+                    const env = {
+                        // burst intensity: how many detections in the last 10s
+                        burstCount10s: __mediaDbgTimes.length,
+                        // resend/decrypt backlog + handler state at this moment
+                        pendingResendSize: _g(() => pendingResend.size),
+                        handledSetSize: _g(() => __handledByAdd.size),
+                        watchedSize: __mediaDbgWatched.size,
+                        storeMsgCount: _g(() => Msgs.getModelsArray().length),
+                        // connection / stream health during the failure window
+                        streamDisplayInfo: _g(
+                            () =>
+                                window.require('WAWebStreamModel')?.Stream
+                                    ?.displayInfo,
+                        ),
+                        socketState: _g(
+                            () =>
+                                window.require('WAWebSocketModel')?.Socket
+                                    ?.state,
+                        ),
+                        // self-chat / own-device signals
+                        meLid,
+                        meWid,
+                        isSelfChat: !!(
+                            remoteSer &&
+                            (remoteSer === meLid || remoteSer === meWid)
+                        ),
+                        endsOut: id.endsWith('_out'),
+                        endsIn: id.endsWith('_in'),
+                        remoteIsGroup: /@g\.us$/.test(remoteSer),
+                        remoteIsLid: /@lid$/.test(remoteSer),
                     };
 
                     window.onDiagLog?.(
@@ -1875,36 +2009,39 @@ class Client extends EventEmitter {
                             fromMe: msg.id?.fromMe ?? null,
                             from: msg.from?._serialized || '',
                             to: msg.to?._serialized || '',
-                            remote:
-                                msg.id?.remote?._serialized ||
-                                msg.id?.remote ||
-                                '',
+                            author: msg.author?._serialized || null,
+                            remote: remoteSer,
                             participant:
                                 msg.id?.participant?._serialized ||
                                 msg.id?.participant ||
                                 null,
                             keyId: msg.id?.id || null,
+                            notifyName: msg.notifyName || null,
                             t: msg.t ?? null,
                             ageSec:
                                 msg.t != null
                                     ? Math.round(Date.now() / 1000 - msg.t)
                                     : null,
                             isNewMsg: !!msg.isNewMsg,
-                            isViewOnce: !!msg.isViewOnce,
-                            isMdHistoryMsg: (() => {
-                                try {
-                                    return !!msg.unsafe?.().isMdHistoryMsg;
-                                } catch (e) {
-                                    return null;
-                                }
-                            })(),
+                            isMdHistoryMsg: _g(
+                                () => !!msg.unsafe?.().isMdHistoryMsg,
+                            ),
+                            ...env,
                             ...snap(msg),
                         }),
                     );
 
                     let recoveredAt = null;
+                    let prevSnap = snap(msg);
                     const logProgress = (reason) => {
                         const s = snap(msg);
+                        // report exactly which fields transitioned since last tick
+                        const changed = Object.keys(s).filter(
+                            (k) =>
+                                JSON.stringify(s[k]) !==
+                                JSON.stringify(prevSnap[k]),
+                        );
+                        prevSnap = s;
                         if (s.dp && recoveredAt == null)
                             recoveredAt = Date.now() - t0;
                         window.onDiagLog?.(
@@ -1916,6 +2053,7 @@ class Client extends EventEmitter {
                                 elapsedMs: Date.now() - t0,
                                 recovered: !!s.dp,
                                 recoveredAtMs: recoveredAt,
+                                changed,
                                 ...s,
                             }),
                         );
