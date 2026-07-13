@@ -1214,7 +1214,10 @@ exports.LoadUtils = () => {
             message: String((e && e.message) || e).substring(0, 140),
             ownProps: safe(() => Object.keys(e).slice(0, 15), null),
             stack0: safe(
-                () => String(e.stack || '').split('\n')[0].substring(0, 100),
+                () =>
+                    String(e.stack || '')
+                        .split('\n')[0]
+                        .substring(0, 100),
                 null,
             ),
         });
@@ -1314,7 +1317,10 @@ exports.LoadUtils = () => {
                     safe(() => Api && Api.getPhoneNumber(contactWid), null),
                 ),
                 migToPn: sid(
-                    safe(() => R('WAWebLidMigrationUtils').toPn(contact.id), null),
+                    safe(
+                        () => R('WAWebLidMigrationUtils').toPn(contact.id),
+                        null,
+                    ),
                 ),
                 migToLid: sid(
                     safe(
@@ -1324,7 +1330,9 @@ exports.LoadUtils = () => {
                 ),
                 isLidMigrated: safe(
                     () =>
-                        R('WAWebLid1X1MigrationGating').Lid1X1MigrationUtils.isLidMigrated(),
+                        R(
+                            'WAWebLid1X1MigrationGating',
+                        ).Lid1X1MigrationUtils.isLidMigrated(),
                     null,
                 ),
             },
