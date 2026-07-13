@@ -1109,8 +1109,14 @@ exports.LoadUtils = () => {
         try {
             const mod = window.require('WADeprecatedSendIq');
             const orig = mod.deprecatedSendIq;
-            if (typeof orig !== 'function') return;
-            mod.deprecatedSendIq = function (iq) {
+            // Guard against re-wrapping if LoadUtils re-runs in the same context
+            // (e.g. re-inject on reconnect) - otherwise wrapper layers would
+            // stack on every biz IQ.
+            if (typeof orig !== 'function' || orig.__bizCaptureWrapper) {
+                window.WWebJS.__bizIqCaptureInstalled = true;
+                return;
+            }
+            const wrapped = function (iq) {
                 let isBizProfile = false;
                 try {
                     isBizProfile =
@@ -1142,6 +1148,8 @@ exports.LoadUtils = () => {
                     return res;
                 });
             };
+            wrapped.__bizCaptureWrapper = true;
+            mod.deprecatedSendIq = wrapped;
             window.WWebJS.__bizIqCaptureInstalled = true;
         } catch (_) {
             /* interceptor install is best-effort */
@@ -1170,6 +1178,20 @@ exports.LoadUtils = () => {
         bizTook,
     ) => {
         if (!window.onDiagLog) return;
+        // Rate-guard: the probes below fire several extra read-only server
+        // queries and one ~1.5s delayed retry. A burst of failures (e.g. a
+        // server-wide throttle hitting many messages at once) must NOT amplify
+        // into a query storm or block many callers, so run the heavy probes at
+        // most once per 60s and a bounded number of times per session. Skipped
+        // failures are still surfaced by the getContact:error log, so the
+        // occurrence count is never lost.
+        const guard =
+            window.WWebJS.__bizDiagGuard ||
+            (window.WWebJS.__bizDiagGuard = { last: 0, count: 0 });
+        const nowTs = Date.now();
+        if (guard.count >= 20 || nowTs - guard.last < 60000) return;
+        guard.last = nowTs;
+        guard.count += 1;
         const now = () => Date.now();
         const safe = (fn, d) => {
             try {
