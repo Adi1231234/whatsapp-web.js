@@ -1095,6 +1095,60 @@ exports.LoadUtils = () => {
         return res;
     };
 
+    // One-time interceptor that records the RAW server response of biz-profile
+    // IQ queries. BusinessProfile.find() -> queryBusinessProfileJob wraps the
+    // server rejection in ServerStatusCodeError, which keeps only the numeric
+    // code and discards errorText/errorType/errorBackoff. By tapping
+    // deprecatedSendIq (filtered to w:biz business_profile) we stash the full
+    // response of the EXACT query that failed, at the real failure moment, so
+    // the diagnostic can report it instead of a later re-query that may no
+    // longer reproduce the transient. Pass-through and best-effort - never
+    // disturbs the query.
+    window.WWebJS.__installBizIqErrorCapture = () => {
+        if (window.WWebJS.__bizIqCaptureInstalled) return;
+        try {
+            const mod = window.require('WADeprecatedSendIq');
+            const orig = mod.deprecatedSendIq;
+            if (typeof orig !== 'function') return;
+            mod.deprecatedSendIq = function (iq) {
+                let isBizProfile = false;
+                try {
+                    isBizProfile =
+                        iq &&
+                        iq.attrs &&
+                        iq.attrs.xmlns === 'w:biz' &&
+                        iq.content &&
+                        iq.content[0] &&
+                        iq.content[0].tag === 'business_profile';
+                } catch (_) {
+                    /* filter probe is best-effort */
+                }
+                const p = orig.apply(this, arguments);
+                if (!isBizProfile) return p;
+                return Promise.resolve(p).then((res) => {
+                    try {
+                        if (res && res.success === false) {
+                            window.WWebJS.__lastBizIqError = {
+                                ts: Date.now(),
+                                errorCode: res.errorCode,
+                                errorText: res.errorText,
+                                errorType: res.errorType,
+                                errorBackoff: res.errorBackoff,
+                            };
+                        }
+                    } catch (_) {
+                        /* capture must never disturb the query */
+                    }
+                    return res;
+                });
+            };
+            window.WWebJS.__bizIqCaptureInstalled = true;
+        } catch (_) {
+            /* interceptor install is best-effort */
+        }
+    };
+    window.WWebJS.__installBizIqErrorCapture();
+
     // Deep diagnostic for the "[WhatsApp] getContact failed" bug. Fires ONLY
     // when BusinessProfile.find() throws (rare, in production). It captures the
     // exact server error and actively probes every open root-cause hypothesis:
@@ -1153,6 +1207,17 @@ exports.LoadUtils = () => {
             // numeric code on .status; the query job drops text/type/backoff -
             // the rawIq probe below re-fetches those directly from the server).
             err: errInfo(err),
+
+            // The RAW server response of the exact query that just failed,
+            // captured by the biz-IQ interceptor at the real failure moment.
+            // This recovers the errorText/errorType/errorBackoff that
+            // ServerStatusCodeError discarded - unlike the rawIq probe, this is
+            // the ORIGINAL failure, not a re-query. Trusted only if very recent.
+            originalRawError: (() => {
+                const e = window.WWebJS.__lastBizIqError;
+                if (e && Date.now() - e.ts < 5000) return e;
+                return null;
+            })(),
 
             // Full WID breakdown of the identity we queried.
             wid: {
