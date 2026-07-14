@@ -1249,4 +1249,102 @@ exports.InjectDiagHooks = () => {
             return func.apply(this, args);
         });
     } catch(e) {}
+
+    // --- getChat "Promise was collected" root-cause probe ---
+    // The EVALUATE_CDP_ERROR "Promise was collected" on getChatById is emitted when
+    // puppeteer's awaitPromise-tracked getChat promise is garbage-collected while it
+    // is still PENDING (its internal WA query never settled). This probe fires a DEBUG
+    // log ONLY at that exact moment, capturing the comms state that left the query
+    // unsettled - turning the inferred root cause into a directly observed one.
+    //
+    // Cost on the normal path is effectively zero: per getChat call it adds one small
+    // info object, one `.then` (a single microtask when the promise settles) and one
+    // O(1) FinalizationRegistry.register. There is NO polling, NO timer, NO extra
+    // network/store work, and NO logging unless the pathological GC-while-pending
+    // actually happens. The promise is only weakly referenced (FinalizationRegistry +
+    // a `.then` that does not root it - verified), so the probe never prevents GC nor
+    // leaks: info objects are released as soon as their promise is collected.
+    //
+    // It is also a FALSIFICATION test: if EVALUATE_CDP_ERROR ever fires WITHOUT a
+    // matching GETCHAT_GC_WHILE_PENDING, getChat itself had settled and the collection
+    // came from elsewhere - which would refute the "unsettled internal query" theory.
+    try {
+        if (typeof FinalizationRegistry === 'function'
+            && window.WWebJS && typeof window.WWebJS.getChat === 'function'
+            && !window.WWebJS.getChat.__gcProbeWrapped) {
+
+            // WAComms module ref is stable for the page lifetime, so resolve it once
+            // (window.require is the costliest part per call). The comms *instance*
+            // can be replaced on reconnect, so always re-read it via getComms().
+            var _wac = null;
+            var _getInst = function () {
+                try { if (!_wac) _wac = window.require('WAComms'); return (_wac && _wac.getComms) ? _wac.getComms() : null; } catch (e) { return null; }
+            };
+            // Cheap per-call snapshot for the hot path: socketId + connected only.
+            var _entrySnapshot = function () {
+                var s = {};
+                var inst = _getInst();
+                try { if (inst) s.socketId = inst.socketId; } catch (e) {}
+                try { if (_wac) s.connected = !!_wac.isSocketConnected(); } catch (e) {}
+                return s;
+            };
+            // Full snapshot, used ONLY inside the (rare) GC-while-pending callback.
+            var _commsSnapshot = function () {
+                var s = _entrySnapshot();
+                var inst = _getInst();
+                if (inst) {
+                    try { s.pendingIqs = inst.pendingIqs ? inst.pendingIqs.size : null; } catch (e) {}
+                    try { s.ackHandlers = inst.ackHandlers ? inst.ackHandlers.length : null; } catch (e) {}
+                    try { s.pendingSmax = inst.pendingSmaxStanzas ? inst.pendingSmaxStanzas.size : null; } catch (e) {}
+                }
+                return s;
+            };
+
+            var _getChatGcRegistry = window.__getChatGcRegistry || (window.__getChatGcRegistry =
+                new FinalizationRegistry(function (info) {
+                    if (info.settled) return; // settled normally then GC'd -> not a bug, ignore
+                    try {
+                        var end = _commsSnapshot();
+                        safeDiagLog('debug', 'GETCHAT_GC_WHILE_PENDING', {
+                            chatId: info.chatId,
+                            ageMs: Date.now() - info.startTs,
+                            startSocketId: info.startSocketId,
+                            endSocketId: end.socketId,
+                            socketChangedDuringCall: info.startSocketId !== end.socketId,
+                            startConnected: info.startConnected,
+                            endConnected: end.connected,
+                            pendingIqs: end.pendingIqs,
+                            ackHandlers: end.ackHandlers,
+                            pendingSmax: end.pendingSmax,
+                        });
+                    } catch (e) {}
+                }));
+
+            var _origGetChat = window.WWebJS.getChat;
+            var _wrappedGetChat = function (chatId) {
+                var p = _origGetChat.apply(this, arguments);
+                try {
+                    if (p && typeof p.then === 'function') {
+                        var start = _entrySnapshot();
+                        var info = {
+                            settled: false,
+                            chatId: chatId != null ? String(chatId) : null,
+                            startTs: Date.now(),
+                            startSocketId: start.socketId,
+                            startConnected: start.connected,
+                        };
+                        var mark = function () { info.settled = true; };
+                        p.then(mark, mark);
+                        _getChatGcRegistry.register(p, info);
+                    }
+                } catch (e) {}
+                return p;
+            };
+            _wrappedGetChat.__gcProbeWrapped = true;
+            window.WWebJS.getChat = _wrappedGetChat;
+            safeDiagLog('debug', 'HOOK_OK', 'WWebJS.getChat (gc-while-pending probe)');
+        }
+    } catch(e) {
+        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'getChat-gc-probe', reason: e ? (e.message || String(e)) : 'unknown' });
+    }
 };
