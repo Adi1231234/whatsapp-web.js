@@ -1347,4 +1347,94 @@ exports.InjectDiagHooks = () => {
     } catch(e) {
         safeDiagLog('warn', 'HOOK_FAIL', { hook: 'getChat-gc-probe', reason: e ? (e.message || String(e)) : 'unknown' });
     }
+
+    // ============================================================
+    // LOGOUT ROOT-CAUSE DIAGNOSTICS
+    // Every WhatsApp logout funnels through Socket.logout(reason).
+    // Historically the wrapper emitted a bare DISCONNECTED 'LOGOUT'
+    // and discarded that reason, so a flapping account was NOT
+    // diagnosable from the logs. These hooks capture the exact reason
+    // (one of ~35 WAWebLogoutReasonConstants codes, e.g. syncd_failure,
+    // critical_sync_timeout, cache_storage_open_failed, client_version_
+    // outdated, account_locked) plus rich socket / conn / storage /
+    // salt / integrity / canonical context. All route via safeDiagLog
+    // -> window.onDiagLog -> pic2desk GCP.
+    // ============================================================
+    try {
+        var _logoutReasonName = {};
+        try {
+            var _LR = window.require('WAWebLogoutReasonConstants').LogoutReason;
+            for (var _rk of Object.getOwnPropertyNames(_LR)) _logoutReasonName[_LR[_rk]] = _rk;
+        } catch (e) {}
+
+        // Rich context snapshot, captured at the moment of logout.
+        var _logoutCtx = function () {
+            var c = {};
+            try { var S = window.require('WAWebSocketModel').Socket; c.socketState = S.state; c.socketStreamState = S.streamState; c.socketHasLoggedOut = S.hasLoggedOut; } catch (e) { c.socketErr = String((e && e.message) || e); }
+            try { var Cn = window.require('WAWebConnModel').Conn; c.platform = Cn.platform; c.connConnected = Cn.connected; c.connCanSend = Cn.canSend; c.connIs24h = Cn.is24h; c.connRefType = Cn.refType; } catch (e) {}
+            try { c.hasNoiseInfo = 'WANoiseInfo' in localStorage; c.hasEncKeySalt = 'WebEncKeySalt' in localStorage; c.hasWebEncKeySalt = 'WAWebEncKeySalt' in localStorage; c.lastWid = (localStorage.getItem('last-wid-md') || '').replace(/"/g, '').slice(0, 40); } catch (e) {}
+            try { var ICU = window.require('WAWebIntegrityChallengeUtils'); c.integrityChallengePending = window.require('WAWebUserPrefsIndexedDBStorage').userPrefsIdb.get(ICU.INTEGRITY_CHALLENGE_IDB_KEY) != null; } catch (e) {}
+            try { var CU = window.require('WAWebCanonicalUtils'); c.canonicalReloadPending = !!(CU.isCanonicalReloadPending && CU.isCanonicalReloadPending()); c.canonicalTokenPresent = !!(CU.isCanonicalTokenPresent && CU.isCanonicalTokenPresent()); } catch (e) {}
+            try { c.msSincePageLoad = Math.round(performance.now()); } catch (e) {}
+            try { c.waVersion = window.Debug && window.Debug.VERSION; } catch (e) {}
+            try { c.url = (location.href || '').slice(0, 120); } catch (e) {}
+            return c;
+        };
+        var _logoutStack = function () { try { throw new Error('logout-trace'); } catch (e) { return String(e.stack || '').split('\n').slice(2, 9).join(' | '); } };
+        // Storage/quota is async; emit it as a companion log (StorageQuotaExceeded /
+        // CacheStorageOpenFailed / WebFailStorageInitialization diagnosis).
+        var _logoutStorage = function (tag) {
+            try {
+                if (navigator.storage && navigator.storage.estimate) {
+                    navigator.storage.estimate().then(function (est) {
+                        var d = est.usageDetails || {};
+                        safeDiagLog('error', tag + '_STORAGE', { usage: est.usage, quota: est.quota, caches: d.caches, indexedDB: d.indexedDB, serviceWorkerRegistrations: d.serviceWorkerRegistrations });
+                    }).catch(function () {});
+                }
+            } catch (e) {}
+        };
+
+        // 1) MASTER: every logout path funnels through Socket.logout(reason).
+        window.injectToFunction({ module: 'WAWebSocketModel', function: 'Socket.logout' }, function (func, reason) {
+            try {
+                var ctx = _logoutCtx();
+                ctx.reasonRaw = (reason === undefined) ? null : reason;
+                ctx.reasonName = (reason === undefined) ? 'UNDEFINED_DEFAULTS_UserInitiated' : (_logoutReasonName[reason] || String(reason));
+                ctx.stack = _logoutStack();
+                safeDiagLog('error', 'LOGOUT_REASON', ctx);
+                _logoutStorage('LOGOUT_REASON');
+            } catch (e) {
+                try { safeDiagLog('error', 'LOGOUT_REASON', { captureErr: String(e), reasonRaw: String(reason) }); } catch (e2) {}
+            }
+            return func(reason);
+        });
+
+        // 2) Bridge socketLogout({reason}) — reason delivered by the service-worker socket.
+        window.injectToFunction({ module: 'WAWebSocketBridgeApi', function: 'SocketBridgeApi.socketLogout' }, function (func, arg) {
+            try {
+                var reason = arg && arg.reason;
+                safeDiagLog('error', 'LOGOUT_FROM_BRIDGE', { reasonRaw: reason == null ? null : reason, reasonName: _logoutReasonName[reason] || String(reason), ctx: _logoutCtx(), stack: _logoutStack() });
+            } catch (e) {}
+            return func(arg);
+        });
+
+        // 3) Cmd logout-family events (bridge-driven): logout, starting-logout, unexpected-logout, temporary-ban.
+        ['onLogoutFromBridge', 'onStartingLogoutFromBridge', 'onUnexpectedLogoutModalFromBridge', 'onTemporaryBanFromBridge'].forEach(function (fn) {
+            window.injectToFunction({ module: 'WAWebCmd', function: 'Cmd.' + fn }, function (func) {
+                var a = Array.prototype.slice.call(arguments, 1);
+                try { safeDiagLog('error', 'CMD_' + fn, { arg: safeStr(a[0]), ctx: _logoutCtx(), stack: _logoutStack() }); } catch (e) {}
+                return func.apply(null, a);
+            });
+        });
+
+        // 4) Integrity checkpoint (anti-abuse challenge) — challenge type + context.
+        window.injectToFunction({ module: 'WAWebIntegrityCheckpointOpener', function: 'openChallengeModal' }, function (func, ch) {
+            try { safeDiagLog('error', 'INTEGRITY_CHALLENGE_OPENED', { challengeType: ch && ch.challenge_type, ctx: _logoutCtx() }); } catch (e) {}
+            return func(ch);
+        });
+
+        safeDiagLog('info', 'LOGOUT_DIAG_INSTALLED', { reasonMapSize: Object.keys(_logoutReasonName).length });
+    } catch (e) {
+        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'logout-diagnostics', reason: e ? (e.message || String(e)) : 'unknown' });
+    }
 };
