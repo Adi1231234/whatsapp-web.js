@@ -1388,7 +1388,7 @@ exports.InjectDiagHooks = () => {
                 if (navigator.storage && navigator.storage.estimate) {
                     navigator.storage.estimate().then(function (est) {
                         var d = est.usageDetails || {};
-                        safeDiagLog('error', tag + '_STORAGE', { usage: est.usage, quota: est.quota, caches: d.caches, indexedDB: d.indexedDB, serviceWorkerRegistrations: d.serviceWorkerRegistrations });
+                        safeDiagLog('debug', tag + '_STORAGE', { usage: est.usage, quota: est.quota, caches: d.caches, indexedDB: d.indexedDB, serviceWorkerRegistrations: d.serviceWorkerRegistrations });
                     }).catch(function () {});
                 }
             } catch (e) {}
@@ -1401,10 +1401,10 @@ exports.InjectDiagHooks = () => {
                 ctx.reasonRaw = (reason === undefined) ? null : reason;
                 ctx.reasonName = (reason === undefined) ? 'UNDEFINED_DEFAULTS_UserInitiated' : (_logoutReasonName[reason] || String(reason));
                 ctx.stack = _logoutStack();
-                safeDiagLog('error', 'LOGOUT_REASON', ctx);
+                safeDiagLog('debug', 'LOGOUT_REASON', ctx);
                 _logoutStorage('LOGOUT_REASON');
             } catch (e) {
-                try { safeDiagLog('error', 'LOGOUT_REASON', { captureErr: String(e), reasonRaw: String(reason) }); } catch (e2) {}
+                try { safeDiagLog('debug', 'LOGOUT_REASON', { captureErr: String(e), reasonRaw: String(reason) }); } catch (e2) {}
             }
             return func(reason);
         });
@@ -1413,7 +1413,7 @@ exports.InjectDiagHooks = () => {
         window.injectToFunction({ module: 'WAWebSocketBridgeApi', function: 'SocketBridgeApi.socketLogout' }, function (func, arg) {
             try {
                 var reason = arg && arg.reason;
-                safeDiagLog('error', 'LOGOUT_FROM_BRIDGE', { reasonRaw: reason == null ? null : reason, reasonName: _logoutReasonName[reason] || String(reason), ctx: _logoutCtx(), stack: _logoutStack() });
+                safeDiagLog('debug', 'LOGOUT_FROM_BRIDGE', { reasonRaw: reason == null ? null : reason, reasonName: _logoutReasonName[reason] || String(reason), ctx: _logoutCtx(), stack: _logoutStack() });
             } catch (e) {}
             return func(arg);
         });
@@ -1422,14 +1422,14 @@ exports.InjectDiagHooks = () => {
         ['onLogoutFromBridge', 'onStartingLogoutFromBridge', 'onUnexpectedLogoutModalFromBridge', 'onTemporaryBanFromBridge'].forEach(function (fn) {
             window.injectToFunction({ module: 'WAWebCmd', function: 'Cmd.' + fn }, function (func) {
                 var a = Array.prototype.slice.call(arguments, 1);
-                try { safeDiagLog('error', 'CMD_' + fn, { arg: safeStr(a[0]), ctx: _logoutCtx(), stack: _logoutStack() }); } catch (e) {}
+                try { safeDiagLog('debug', 'CMD_' + fn, { arg: safeStr(a[0]), ctx: _logoutCtx(), stack: _logoutStack() }); } catch (e) {}
                 return func.apply(null, a);
             });
         });
 
         // 4) Integrity checkpoint (anti-abuse challenge) — challenge type + context.
         window.injectToFunction({ module: 'WAWebIntegrityCheckpointOpener', function: 'openChallengeModal' }, function (func, ch) {
-            try { safeDiagLog('error', 'INTEGRITY_CHALLENGE_OPENED', { challengeType: ch && ch.challenge_type, ctx: _logoutCtx() }); } catch (e) {}
+            try { safeDiagLog('debug', 'INTEGRITY_CHALLENGE_OPENED', { challengeType: ch && ch.challenge_type, ctx: _logoutCtx() }); } catch (e) {}
             return func(ch);
         });
 
@@ -1451,7 +1451,7 @@ exports.InjectDiagHooks = () => {
                             var extra = [];
                             for (var i = 1; i < arguments.length && i < 5; i++) { try { extra.push(safeStr(arguments[i])); } catch (e) { extra.push('<?>'); } }
                             var st = null; try { st = window.require('WAWebSocketModel').Socket.state; } catch (e) {}
-                            safeDiagLog('error', 'WA_INTERNAL_' + lvl, { msg: msg.slice(0, 300), args: extra, socketState: st });
+                            safeDiagLog('debug', 'WA_INTERNAL_' + lvl, { msg: msg.slice(0, 300), args: extra, socketState: st });
                         }
                     } catch (e) {}
                     return orig.apply(this, arguments);
@@ -1459,7 +1459,7 @@ exports.InjectDiagHooks = () => {
                 wrapped.__p2dWrapped = true;
                 _WAL[lvl] = wrapped;
             });
-        } catch (e) { safeDiagLog('warn', 'HOOK_FAIL', { hook: 'wa-internal-logger', reason: String((e && e.message) || e) }); }
+        } catch (e) { safeDiagLog('debug', 'HOOK_FAIL', { hook: 'wa-internal-logger', reason: String((e && e.message) || e) }); }
 
         // 6) WhatsApp Stream state transitions — the connection lifecycle that
         //    precedes a logout (info/mode/displayInfo leaving NORMAL/MAIN).
@@ -1476,14 +1476,14 @@ exports.InjectDiagHooks = () => {
                 };
                 ['change:info', 'change:mode', 'change:displayInfo'].forEach(function (ev) {
                     _Stream.on(ev, function () {
-                        try { safeDiagLog('error', 'STREAM_' + ev.replace('change:', '').toUpperCase(), { event: ev, snap: _streamSnap() }); } catch (e) {}
+                        try { safeDiagLog('debug', 'STREAM_' + ev.replace('change:', '').toUpperCase(), { event: ev, snap: _streamSnap() }); } catch (e) {}
                     });
                 });
             }
-        } catch (e) { safeDiagLog('warn', 'HOOK_FAIL', { hook: 'stream-transitions', reason: String((e && e.message) || e) }); }
+        } catch (e) { safeDiagLog('debug', 'HOOK_FAIL', { hook: 'stream-transitions', reason: String((e && e.message) || e) }); }
 
-        safeDiagLog('info', 'LOGOUT_DIAG_INSTALLED', { hooks: ['Socket.logout', 'bridge.socketLogout', 'Cmd.logout-family', 'integrity.openChallengeModal', 'WALogger.LOG/WARN/ERROR', 'Stream.change:info/mode/displayInfo'], reasonMapSize: Object.keys(_logoutReasonName).length });
+        safeDiagLog('debug', 'LOGOUT_DIAG_INSTALLED', { hooks: ['Socket.logout', 'bridge.socketLogout', 'Cmd.logout-family', 'integrity.openChallengeModal', 'WALogger.LOG/WARN/ERROR', 'Stream.change:info/mode/displayInfo'], reasonMapSize: Object.keys(_logoutReasonName).length });
     } catch (e) {
-        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'logout-diagnostics', reason: e ? (e.message || String(e)) : 'unknown' });
+        safeDiagLog('debug', 'HOOK_FAIL', { hook: 'logout-diagnostics', reason: e ? (e.message || String(e)) : 'unknown' });
     }
 };
