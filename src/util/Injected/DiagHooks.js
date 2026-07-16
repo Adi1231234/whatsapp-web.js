@@ -1433,7 +1433,56 @@ exports.InjectDiagHooks = () => {
             return func(ch);
         });
 
-        safeDiagLog('info', 'LOGOUT_DIAG_INSTALLED', { reasonMapSize: Object.keys(_logoutReasonName).length });
+        // 5) Forward WhatsApp's OWN internal logs (WALogger LOG/WARN/ERROR) for
+        //    logout/socket/stream/sync/integrity/session topics. pic2desk only
+        //    captures console.error, so these WA-internal messages (e.g.
+        //    "[socket model] ...", "[integrity-challenge] ...") were invisible.
+        try {
+            var _WAL = window.require('WALogger');
+            var _WAL_KW = /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked/i;
+            ['ERROR', 'WARN', 'LOG'].forEach(function (lvl) {
+                var orig = _WAL[lvl];
+                if (typeof orig !== 'function' || orig.__p2dWrapped) return;
+                var wrapped = function () {
+                    try {
+                        var t = arguments[0];
+                        var msg = Array.isArray(t) ? t.join('{}') : String(t);
+                        if (_WAL_KW.test(msg)) {
+                            var extra = [];
+                            for (var i = 1; i < arguments.length && i < 5; i++) { try { extra.push(safeStr(arguments[i])); } catch (e) { extra.push('<?>'); } }
+                            var st = null; try { st = window.require('WAWebSocketModel').Socket.state; } catch (e) {}
+                            safeDiagLog('error', 'WA_INTERNAL_' + lvl, { msg: msg.slice(0, 300), args: extra, socketState: st });
+                        }
+                    } catch (e) {}
+                    return orig.apply(this, arguments);
+                };
+                wrapped.__p2dWrapped = true;
+                _WAL[lvl] = wrapped;
+            });
+        } catch (e) { safeDiagLog('warn', 'HOOK_FAIL', { hook: 'wa-internal-logger', reason: String((e && e.message) || e) }); }
+
+        // 6) WhatsApp Stream state transitions — the connection lifecycle that
+        //    precedes a logout (info/mode/displayInfo leaving NORMAL/MAIN).
+        try {
+            var _Stream = window.require('WAWebStreamModel').Stream;
+            if (_Stream && _Stream.on && !_Stream.__p2dStreamHooked) {
+                _Stream.__p2dStreamHooked = true;
+                var _streamSnap = function () {
+                    var s = {};
+                    try { s.info = _Stream.info; s.mode = _Stream.mode; s.displayInfo = _Stream.displayInfo; s.available = _Stream.available; s.phoneAuthed = _Stream.phoneAuthed; s.resumeCount = _Stream.resumeCount; s.isHardRefresh = _Stream.isHardRefresh; } catch (e) { s.err = String(e); }
+                    try { s.socketState = window.require('WAWebSocketModel').Socket.state; } catch (e) {}
+                    try { s.msSincePageLoad = Math.round(performance.now()); } catch (e) {}
+                    return s;
+                };
+                ['change:info', 'change:mode', 'change:displayInfo'].forEach(function (ev) {
+                    _Stream.on(ev, function () {
+                        try { safeDiagLog('error', 'STREAM_' + ev.replace('change:', '').toUpperCase(), { event: ev, snap: _streamSnap() }); } catch (e) {}
+                    });
+                });
+            }
+        } catch (e) { safeDiagLog('warn', 'HOOK_FAIL', { hook: 'stream-transitions', reason: String((e && e.message) || e) }); }
+
+        safeDiagLog('info', 'LOGOUT_DIAG_INSTALLED', { hooks: ['Socket.logout', 'bridge.socketLogout', 'Cmd.logout-family', 'integrity.openChallengeModal', 'WALogger.LOG/WARN/ERROR', 'Stream.change:info/mode/displayInfo'], reasonMapSize: Object.keys(_logoutReasonName).length });
     } catch (e) {
         safeDiagLog('warn', 'HOOK_FAIL', { hook: 'logout-diagnostics', reason: e ? (e.message || String(e)) : 'unknown' });
     }
