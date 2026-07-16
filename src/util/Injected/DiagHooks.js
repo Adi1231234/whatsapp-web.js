@@ -1370,8 +1370,11 @@ exports.InjectDiagHooks = () => {
         // Rich context snapshot, captured at the moment of logout.
         var _logoutCtx = function () {
             var c = {};
-            try { var S = window.require('WAWebSocketModel').Socket; c.socketState = S.state; c.socketStreamState = S.streamState; c.socketHasLoggedOut = S.hasLoggedOut; } catch (e) { c.socketErr = String((e && e.message) || e); }
-            try { var Cn = window.require('WAWebConnModel').Conn; c.platform = Cn.platform; c.connConnected = Cn.connected; c.connCanSend = Cn.canSend; c.connIs24h = Cn.is24h; c.connRefType = Cn.refType; } catch (e) {}
+            try { c.socketState = window.require('WAWebSocketModel').Socket.state; } catch (e) { c.socketErr = String((e && e.message) || e); }
+            // Real connection lifecycle lives on the Stream model (reliably populated).
+            try { var St = window.require('WAWebStreamModel').Stream; c.streamInfo = St.info; c.streamMode = St.mode; c.streamDisplayInfo = St.displayInfo; c.streamPhoneAuthed = St.phoneAuthed; c.streamAvailable = St.available; c.streamResumeCount = St.resumeCount; } catch (e) {}
+            // Conn is a Backbone model — its fields are attributes, not direct props.
+            try { var _A = (window.require('WAWebConnModel').Conn.attributes) || {}; c.platform = _A.platform; c.connConnected = _A.connected; c.connIs24h = _A.is24h; c.connStale = _A.stale; c.connMeReady = _A.meReadyTriggered; c.connWid = _A.wid ? String(_A.wid) : undefined; c.connWaVersion = _A.phone && _A.phone.wa_version; c.connOsVersion = _A.phone && _A.phone.os_version; } catch (e) {}
             try { c.hasNoiseInfo = 'WANoiseInfo' in localStorage; c.hasEncKeySalt = 'WebEncKeySalt' in localStorage; c.hasWebEncKeySalt = 'WAWebEncKeySalt' in localStorage; c.lastWid = (localStorage.getItem('last-wid-md') || '').replace(/"/g, '').slice(0, 40); } catch (e) {}
             try { var ICU = window.require('WAWebIntegrityChallengeUtils'); c.integrityChallengePending = window.require('WAWebUserPrefsIndexedDBStorage').userPrefsIdb.get(ICU.INTEGRITY_CHALLENGE_IDB_KEY) != null; } catch (e) {}
             try { var CU = window.require('WAWebCanonicalUtils'); c.canonicalReloadPending = !!(CU.isCanonicalReloadPending && CU.isCanonicalReloadPending()); c.canonicalTokenPresent = !!(CU.isCanonicalTokenPresent && CU.isCanonicalTokenPresent()); } catch (e) {}
