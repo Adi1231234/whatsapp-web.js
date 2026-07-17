@@ -1250,102 +1250,107 @@ exports.InjectDiagHooks = () => {
         });
     } catch(e) {}
 
-    // --- getChat "Promise was collected" root-cause probe ---
-    // The EVALUATE_CDP_ERROR "Promise was collected" on getChatById is emitted when
-    // puppeteer's awaitPromise-tracked getChat promise is garbage-collected while it
-    // is still PENDING (its internal WA query never settled). This probe fires a DEBUG
-    // log ONLY at that exact moment, capturing the comms state that left the query
-    // unsettled - turning the inferred root cause into a directly observed one.
+    // --- getChat abandoned-query detector (deterministic root-cause probe) ---
+    // The EVALUATE_CDP_ERROR "Promise was collected" on getChatById happens when a
+    // getChat call's internal WhatsApp server query is ABANDONED and never settles, so
+    // puppeteer's awaitPromise-tracked promise is eventually garbage-collected. The
+    // abandonment is caused by WA's stopComms (fired on stream-error 515 "restart
+    // required", "replaced", logout, ...) nulling the comms singleton and discarding its
+    // pendingIqs map WITHOUT rejecting the in-flight requests - they are resolve-only with
+    // no default timeout (confirmed from the running WAComms source).
     //
-    // Cost on the normal path is effectively zero: per getChat call it adds one small
-    // info object, one `.then` (a single microtask when the promise settles) and one
-    // O(1) FinalizationRegistry.register. There is NO polling, NO timer, NO extra
-    // network/store work, and NO logging unless the pathological GC-while-pending
-    // actually happens. The promise is only weakly referenced (FinalizationRegistry +
-    // a `.then` that does not root it - verified), so the probe never prevents GC nor
-    // leaks: info objects are released as soon as their promise is collected.
+    // This detector is DETERMINISTIC: it does NOT rely on GC timing (an earlier
+    // FinalizationRegistry probe proved unreliable under offline-flush load). Every
+    // getChat call is recorded in a Map and removed the instant it settles, so an
+    // abandoned call simply stays in the Map. A self-arming janitor (idle when nothing is
+    // pending - no permanent polling interval) reports any call still unsettled far beyond
+    // the normal completion time (~tens of ms), together with whether the socket was
+    // replaced during the call - the direct signature of a stopComms teardown.
     //
-    // It is also a FALSIFICATION test: if EVALUATE_CDP_ERROR ever fires WITHOUT a
-    // matching GETCHAT_GC_WHILE_PENDING, getChat itself had settled and the collection
-    // came from elsewhere - which would refute the "unsettled internal query" theory.
+    // Cost per getChat call: one Map entry + one `.then` + a cheap comms-id read
+    // (~microseconds). Logs ONLY at DEBUG level, and ONLY when a call is confirmed stuck.
+    // Self-cleaning (settled calls delete themselves; stuck calls are removed after being
+    // reported), and the report count is capped so a teardown storm cannot flood the logs.
     try {
-        if (typeof FinalizationRegistry === 'function'
-            && window.WWebJS && typeof window.WWebJS.getChat === 'function'
-            && !window.WWebJS.getChat.__gcProbeWrapped) {
+        if (window.WWebJS && typeof window.WWebJS.getChat === 'function'
+            && !window.WWebJS.getChat.__gcStuckWrapped) {
 
-            // WAComms module ref is stable for the page lifetime, so resolve it once
-            // (window.require is the costliest part per call). The comms *instance*
-            // can be replaced on reconnect, so always re-read it via getComms().
             var _wac = null;
-            var _getInst = function () {
-                try { if (!_wac) _wac = window.require('WAComms'); return (_wac && _wac.getComms) ? _wac.getComms() : null; } catch (e) { return null; }
-            };
-            // Cheap per-call snapshot for the hot path: socketId + connected only.
-            var _entrySnapshot = function () {
+            var _sockSnap = function () {
                 var s = {};
-                var inst = _getInst();
-                try { if (inst) s.socketId = inst.socketId; } catch (e) {}
-                try { if (_wac) s.connected = !!_wac.isSocketConnected(); } catch (e) {}
-                return s;
-            };
-            // Full snapshot, used ONLY inside the (rare) GC-while-pending callback.
-            var _commsSnapshot = function () {
-                var s = _entrySnapshot();
-                var inst = _getInst();
-                if (inst) {
-                    try { s.pendingIqs = inst.pendingIqs ? inst.pendingIqs.size : null; } catch (e) {}
-                    try { s.ackHandlers = inst.ackHandlers ? inst.ackHandlers.length : null; } catch (e) {}
-                    try { s.pendingSmax = inst.pendingSmaxStanzas ? inst.pendingSmaxStanzas.size : null; } catch (e) {}
-                }
+                try {
+                    if (!_wac) _wac = window.require('WAComms');
+                    var inst = (_wac && _wac.getComms) ? _wac.getComms() : null;
+                    if (inst) { s.socketId = inst.socketId; try { s.pendingIqs = inst.pendingIqs ? inst.pendingIqs.size : null; } catch (e) {} }
+                    try { s.connected = !!_wac.isSocketConnected(); } catch (e) {}
+                } catch (e) {}
                 return s;
             };
 
-            var _getChatGcRegistry = window.__getChatGcRegistry || (window.__getChatGcRegistry =
-                new FinalizationRegistry(function (info) {
-                    if (info.settled) return; // settled normally then GC'd -> not a bug, ignore
-                    try {
-                        var end = _commsSnapshot();
-                        safeDiagLog('debug', 'GETCHAT_GC_WHILE_PENDING', {
-                            chatId: info.chatId,
-                            ageMs: Date.now() - info.startTs,
-                            startSocketId: info.startSocketId,
-                            endSocketId: end.socketId,
-                            socketChangedDuringCall: info.startSocketId !== end.socketId,
-                            startConnected: info.startConnected,
-                            endConnected: end.connected,
-                            pendingIqs: end.pendingIqs,
-                            ackHandlers: end.ackHandlers,
-                            pendingSmax: end.pendingSmax,
-                        });
-                    } catch (e) {}
-                }));
+            var _inflight = window.__getChatInflight || (window.__getChatInflight = new Map());
+            var _seq = window.__getChatSeq || (window.__getChatSeq = { n: 0 });
+            var _reports = window.__getChatStuckReports || (window.__getChatStuckReports = { n: 0 });
+            var STUCK_MS = 15000;   // normal getChat completes in <100ms; 15s => certainly abandoned
+            var SWEEP_MS = 5000;
+            var MAX_REPORTS = 50;   // cap so a teardown storm cannot flood the logs
+
+            var _sweep = function () {
+                try {
+                    var now = Date.now();
+                    var s = _sockSnap();
+                    _inflight.forEach(function (rec, key) {
+                        if (now - rec.startTs >= STUCK_MS) {
+                            _inflight.delete(key);
+                            if (_reports.n < MAX_REPORTS) {
+                                _reports.n++;
+                                safeDiagLog('debug', 'GETCHAT_STUCK', {
+                                    chatId: rec.chatId,
+                                    ageMs: now - rec.startTs,
+                                    startSocketId: rec.startSocketId,
+                                    endSocketId: s.socketId,
+                                    socketChangedDuringCall: rec.startSocketId !== s.socketId,
+                                    startConnected: rec.startConnected,
+                                    endConnected: s.connected,
+                                    pendingIqs: s.pendingIqs,
+                                });
+                            }
+                        }
+                    });
+                } catch (e) {}
+                if (_inflight.size > 0) { setTimeout(_sweep, SWEEP_MS); }
+                else { window.__getChatSweepArmed = false; }
+            };
+            var _arm = function () {
+                if (!window.__getChatSweepArmed) { window.__getChatSweepArmed = true; setTimeout(_sweep, SWEEP_MS); }
+            };
 
             var _origGetChat = window.WWebJS.getChat;
             var _wrappedGetChat = function (chatId) {
                 var p = _origGetChat.apply(this, arguments);
                 try {
                     if (p && typeof p.then === 'function') {
-                        var start = _entrySnapshot();
-                        var info = {
-                            settled: false,
+                        var start = _sockSnap();
+                        var key = ++_seq.n;
+                        _inflight.set(key, {
                             chatId: chatId != null ? String(chatId) : null,
                             startTs: Date.now(),
                             startSocketId: start.socketId,
                             startConnected: start.connected,
-                        };
-                        var mark = function () { info.settled = true; };
-                        p.then(mark, mark);
-                        _getChatGcRegistry.register(p, info);
+                        });
+                        var done = function () { _inflight.delete(key); };
+                        p.then(done, done);
+                        _arm();
                     }
                 } catch (e) {}
                 return p;
             };
-            _wrappedGetChat.__gcProbeWrapped = true;
+            _wrappedGetChat.__gcStuckWrapped = true;
+            _wrappedGetChat.__gcProbeWrapped = true;   // keep prior guard name so nothing double-wraps
             window.WWebJS.getChat = _wrappedGetChat;
-            safeDiagLog('debug', 'HOOK_OK', 'WWebJS.getChat (gc-while-pending probe)');
+            safeDiagLog('debug', 'HOOK_OK', 'WWebJS.getChat (stuck-detector)');
         }
     } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'getChat-gc-probe', reason: e ? (e.message || String(e)) : 'unknown' });
+        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'getChat-stuck-detector', reason: e ? (e.message || String(e)) : 'unknown' });
     }
 
     // ============================================================
