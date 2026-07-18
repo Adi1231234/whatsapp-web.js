@@ -369,24 +369,63 @@ class Client extends EventEmitter {
                         this.interface = new InterfaceController(this);
 
                         await this.attachEventListeners();
+
+                        // Drive READY/LOADING from WhatsApp's own Stream state
+                        // now that ClientInfo exists (re-run on re-injection).
+                        await this.pupPage.evaluate(() => {
+                            const { Stream, StreamMode: M, StreamInfo: I } =
+                                window.require('WAWebStreamModel');
+                            const resolveScreen = () => {
+                                switch (Stream.mode) {
+                                    case M.MAIN:
+                                        return Stream.displayInfo === I.NORMAL
+                                            ? 'CONNECTED'
+                                            : 'LOADING';
+                                    case M.QR:
+                                        return 'QR';
+                                    case M.OFFLINE:
+                                        return 'DISCONNECTED';
+                                    case M.SYNCING:
+                                        return 'LOADING';
+                                    default:
+                                        return 'ERROR';
+                                }
+                            };
+                            let lastScreen = null;
+                            const notify = () => {
+                                const screen = resolveScreen();
+                                if (screen === lastScreen) return;
+                                lastScreen = screen;
+                                window.onConnectionStateEvent(
+                                    screen,
+                                    window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
+                                        0,
+                                );
+                            };
+                            Stream.on('change:mode change:displayInfo', notify);
+                            notify();
+                        });
                     }
-                    /**
-                     * Emitted when the client has initialized and is ready to receive messages.
-                     * @event Client#ready
-                     */
-                    this.emit(Events.READY);
                     this.authStrategy.afterAuthReady();
                 },
             );
-            let lastPercent = null;
+            // Map the resolved connection screen onto the public events.
+            // QR / ERROR aren't listed: they have their own paths, emit nothing.
+            const EMIT_BY_SCREEN = {
+                CONNECTED: () => [Events.READY],
+                LOADING: (percent) => [Events.LOADING_SCREEN, percent, 'WhatsApp'],
+                DISCONNECTED: (percent) => [
+                    Events.LOADING_SCREEN,
+                    percent,
+                    'WhatsApp',
+                ],
+            };
             await exposeFunctionIfAbsent(
                 this.pupPage,
-                'onOfflineProgressUpdateEvent',
-                async (percent) => {
-                    if (lastPercent !== percent) {
-                        lastPercent = percent;
-                        this.emit(Events.LOADING_SCREEN, percent, 'WhatsApp'); // Message is hardcoded as "WhatsApp" for now
-                    }
+                'onConnectionStateEvent',
+                (screen, percent) => {
+                    const args = EMIT_BY_SCREEN[screen]?.(percent);
+                    if (args) this.emit(...args);
                 },
             );
             await exposeFunctionIfAbsent(
@@ -416,15 +455,6 @@ class Client extends EventEmitter {
                         'change:hasSynced',
                         () => {
                             window.onAppStateHasSyncedEvent();
-                        },
-                    ],
-                    [
-                        Cmd,
-                        'offline_progress_update_from_bridge',
-                        () => {
-                            window.onOfflineProgressUpdateEvent(
-                                window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress(),
-                            );
                         },
                     ],
                     [
