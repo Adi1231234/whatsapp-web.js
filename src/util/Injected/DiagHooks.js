@@ -85,7 +85,18 @@ exports.InjectDiagHooks = () => {
         var msgInfo = args[1];
         var decryptResult = args[2];
         var from = wid(receipt.senderPn) || wid(receipt.participant) || wid(receipt.senderLid) || wid(receipt.peerRecipientPn) || wid(receipt.peerRecipientLid) || wid(receipt.from);
-        var isFromMe = !!(msgInfo && msgInfo.id && msgInfo.id.fromMe);
+        // fromMe is NOT available on msgInfo (args[1] is { rawTs, type, isGroupStatus } - it has no `id`),
+        // so the old `msgInfo.id.fromMe` was always false and let own-message receipts through.
+        // Determine ownership the way WA core sendReceipt itself does: isMeAccount(receipt.author).
+        // Without this, a burst of the user's own media (synced from the phone during an offline
+        // flush) inflates receiptCount while the message/store-add counters correctly skip fromMe,
+        // producing a false SILENT_MESSAGE_LOSS alert even though every message was saved.
+        var isFromMe = false;
+        try {
+            var _meUser = window.require('WAWebUserPrefsMeUser');
+            isFromMe = !!(_meUser && receipt.author && _meUser.isMeAccount(receipt.author));
+        } catch (e) {}
+        if (!isFromMe && msgInfo && msgInfo.id && msgInfo.id.fromMe) isFromMe = true;
         // Unified receipt filter (groups, status, newsletters, stickers, non-media, fromMe)
         if (_shouldSkipReceipt({ from: from, to: wid(receipt.to), chatId: wid(receipt.chatId), type: receipt.type, msgType: msgInfo ? msgInfo.type : null, fromMe: isFromMe })) {
             return func.apply(this, args);
