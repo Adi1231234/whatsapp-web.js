@@ -359,6 +359,21 @@ class Client extends EventEmitter {
                 },
             );
 
+            // WhatsApp's own connection-bridge reasons for tearing the socket
+            // down / logging the client out / banning / forcing an update.
+            // Captured PRE-SYNC via the bridge hooks in the evaluate() below.
+            // The existing SOCKET_CLOSE diag (DiagHooks) only installs AFTER the
+            // app syncs, so it never fires for the failure we care about: the
+            // socket connects, loops OPENING->PAIRING, and closes without ever
+            // reaching CONNECTED. This surfaces WHY each cycle is torn down.
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                'onSocketDiagEvent',
+                async (info) => {
+                    console.log('[wwjs-diag] SOCKET_DIAG', info);
+                },
+            );
+
             // Map the resolved connection screen onto the public events.
             // QR / ERROR aren't listed: they have their own paths, emit nothing.
             const EMIT_BY_SCREEN = {
@@ -571,6 +586,70 @@ class Client extends EventEmitter {
                 );
                 window._wwjsDiagAppState = Socket;
 
+                // [diag] Capture WhatsApp's own connection-teardown reasons
+                // PRE-SYNC. These SocketBridgeApi entry points are how the comms
+                // layer tells the app to disconnect / log out / show a ban /
+                // report service-unavailable / force an update - i.e. WHY the
+                // socket is being closed each cycle. The post-sync SOCKET_CLOSE
+                // hook in DiagHooks never installs when the app never syncs, so
+                // this is the only place that reason is observable during a
+                // connect->PAIRING->close loop. Defensive: idempotent, and every
+                // wrapper always calls through to the original (a throw in the
+                // diag path must never break WA's own teardown handling).
+                try {
+                    const _bridgeMod = window.require('WAWebSocketBridgeApi');
+                    const _bridge =
+                        _bridgeMod &&
+                        (_bridgeMod.SocketBridgeApi || _bridgeMod);
+                    if (_bridge && !_bridge.__wwjsDiagHooked) {
+                        const _wrap = (name) => {
+                            const orig = _bridge[name];
+                            if (typeof orig !== 'function') return;
+                            _bridge[name] = function (...args) {
+                                try {
+                                    const a = args[0];
+                                    let arg;
+                                    try {
+                                        arg = JSON.stringify(a).slice(0, 200);
+                                    } catch (e) {}
+                                    window.onSocketDiagEvent({
+                                        event: name,
+                                        reason:
+                                            a && a.reason != null
+                                                ? String(a.reason)
+                                                : undefined,
+                                        arg,
+                                        state: String(Socket.state),
+                                    });
+                                } catch (e) {}
+                                return orig.apply(this, args);
+                            };
+                        };
+                        [
+                            'triggerUnexpectedLogoutModalFromBridge',
+                            'triggerTemporaryBanFromBridge',
+                            'triggerServiceUnavailableFromBridge',
+                            'forceAppUpdate',
+                            'socketLogout',
+                            'triggerLogoutFromBridge',
+                            'triggerSocketStreamDisconnectedFromBridge',
+                        ].forEach(_wrap);
+                        _bridge.__wwjsDiagHooked = true;
+                        console.log(
+                            '[wwjs-diag] socket bridge diag hooks installed',
+                        );
+                    } else if (!_bridge) {
+                        console.log(
+                            '[wwjs-diag] socket bridge diag hooks: module not found',
+                        );
+                    }
+                } catch (e) {
+                    console.log(
+                        '[wwjs-diag] socket bridge diag hooks failed ' +
+                            (e && e.message ? e.message : String(e)),
+                    );
+                }
+
                 const listeners = [
                     [
                         Socket,
@@ -581,6 +660,29 @@ class Client extends EventEmitter {
                                     JSON.stringify({ state, ts: Date.now() }),
                             );
                             window.onAuthAppStateChangedEvent(state);
+                        },
+                    ],
+                    [
+                        Socket,
+                        'change:stream',
+                        (_AppState, stream) => {
+                            // Stream-level connect/disconnect (SOCKET_STREAM:
+                            // DISCONNECTED/SYNCING/RESUMING/CONNECTED). Pairs with
+                            // change:state so a "stuck in OPENING/PAIRING" loop is
+                            // visible at the stream layer too, before sync.
+                            console.log(
+                                '[wwjs-diag] change:stream FIRED ' +
+                                    JSON.stringify({
+                                        stream,
+                                        state: Socket.state,
+                                        ts: Date.now(),
+                                    }),
+                            );
+                            window.onSocketDiagEvent({
+                                event: 'change:stream',
+                                stream: String(stream),
+                                state: String(Socket.state),
+                            });
                         },
                     ],
                     [
