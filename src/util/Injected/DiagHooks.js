@@ -397,25 +397,41 @@ exports.InjectDiagHooks = () => {
     // install is observable. Correlating SKDM_PROCESSED.sender with
     // SIGNAL_DECRYPT_ERROR.sender tells us whether the failing device's key was
     // ever received, and if so whether it arrived after the decrypt failure.
-    // injectToFunction already emits HOOK_OK / HOOK_FAIL for install status.
-    window.injectToFunction({ module: 'WAWebCryptoLibrary', function: 'processSenderKeyDistributionMsg' }, function(func, ...args) {
-        var chat = signalWidInfo(args[0]);
-        var sender = signalWidInfo(args[1]);
-        var result = func.apply(this, args);
-        if (result && typeof result.then === 'function') {
-            return result.then(function(res) {
-                safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
-                return res;
-            }).catch(function(err) {
-                safeDiagLog('warn', 'SKDM_PROCESS_ERROR', {
-                    chat: chat, sender: sender, error: err ? (err.message || String(err)) : 'unknown',
-                });
-                throw err;
-            });
+    //
+    // WAWebCryptoLibrary is lazily loaded and is NOT yet registered when this
+    // runs, so window.require returns undefined and injectToFunction's
+    // module-not-found path skips silently (no HOOK_FAIL). Retry until the
+    // module is available, then hook; log HOOK_FAIL only if it never loads.
+    (function installSkdmHook(attempt) {
+        var mod = null;
+        try { mod = window.require('WAWebCryptoLibrary'); } catch (e) {}
+        if (!mod || typeof mod.processSenderKeyDistributionMsg !== 'function') {
+            if (attempt < 30) {
+                setTimeout(function () { installSkdmHook(attempt + 1); }, 1000);
+            } else {
+                safeDiagLog('warn', 'HOOK_FAIL', { hook: 'processSenderKeyDistributionMsg', reason: 'WAWebCryptoLibrary not loaded after retries' });
+            }
+            return;
         }
-        safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
-        return result;
-    });
+        window.injectToFunction({ module: 'WAWebCryptoLibrary', function: 'processSenderKeyDistributionMsg' }, function(func, ...args) {
+            var chat = signalWidInfo(args[0]);
+            var sender = signalWidInfo(args[1]);
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(res) {
+                    safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
+                    return res;
+                }).catch(function(err) {
+                    safeDiagLog('warn', 'SKDM_PROCESS_ERROR', {
+                        chat: chat, sender: sender, error: err ? (err.message || String(err)) : 'unknown',
+                    });
+                    throw err;
+                });
+            }
+            safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
+            return result;
+        });
+    })(0);
 
     // --- E2E session management ---
     var sessionFns = ['ensureE2ESessions'];
