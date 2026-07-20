@@ -650,6 +650,114 @@ class Client extends EventEmitter {
                     );
                 }
 
+                // [diag] WhatsApp's OWN internal logger (WALogger), captured
+                // PRE-SYNC and forwarded to GCP via onSocketDiagEvent. This is
+                // the plain-text reason WA itself records when it cannot open
+                // the stream / finish pairing (e.g. "[open socket stream]
+                // failed to open stream"). The post-sync WA_INTERNAL hook in
+                // DiagHooks never runs when the app never syncs, AND it logs at
+                // 'debug' (dropped from GCP unless debugLogsEnabled). This one
+                // always reaches GCP. Shared __p2dWrapped guard so the post-sync
+                // DiagHooks wrapper won't double-wrap.
+                try {
+                    const _WAL = window.require('WALogger');
+                    const _WAL_KW =
+                        /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked/i;
+                    ['ERROR', 'WARN'].forEach((lvl) => {
+                        const orig = _WAL[lvl];
+                        if (typeof orig !== 'function' || orig.__p2dWrapped)
+                            return;
+                        const wrapped = function () {
+                            try {
+                                const t0 = arguments[0];
+                                const msg = Array.isArray(t0)
+                                    ? t0.join('{}')
+                                    : String(t0);
+                                if (_WAL_KW.test(msg)) {
+                                    window.onSocketDiagEvent({
+                                        event: 'WA_INTERNAL_' + lvl,
+                                        msg: msg.slice(0, 300),
+                                        state: String(Socket.state),
+                                    });
+                                }
+                            } catch (e) {}
+                            return orig.apply(this, arguments);
+                        };
+                        wrapped.__p2dWrapped = true;
+                        _WAL[lvl] = wrapped;
+                    });
+                } catch (e) {}
+
+                // [diag] WhatsApp Stream lifecycle (info/mode/displayInfo) - the
+                // connection-screen transitions behind a stuck-connecting loop.
+                // Pre-sync, GCP-visible. Shared __p2dStreamHooked guard with
+                // the post-sync DiagHooks hook.
+                try {
+                    const _Stream = window.require('WAWebStreamModel').Stream;
+                    if (_Stream && _Stream.on && !_Stream.__p2dStreamHooked) {
+                        _Stream.__p2dStreamHooked = true;
+                        ['change:info', 'change:mode', 'change:displayInfo'].forEach(
+                            (ev) => {
+                                _Stream.on(ev, () => {
+                                    try {
+                                        window.onSocketDiagEvent({
+                                            event:
+                                                'STREAM_' +
+                                                ev
+                                                    .replace('change:', '')
+                                                    .toUpperCase(),
+                                            mode: String(_Stream.mode),
+                                            displayInfo: String(
+                                                _Stream.displayInfo,
+                                            ),
+                                            info: String(_Stream.info),
+                                            state: String(Socket.state),
+                                        });
+                                    } catch (e) {}
+                                });
+                            },
+                        );
+                    }
+                } catch (e) {}
+
+                // [diag] One-shot session snapshot at inject time (pre-sync).
+                // The discriminator for "wedged after an auto-update": did the
+                // account come up REGISTERED (ADV secret key present) yet unable
+                // to leave OPENING/PAIRING - i.e. valid credentials but a broken
+                // session - vs genuinely unregistered/fresh. resumeCount /
+                // isHardRefresh distinguish a resume from a cold connect.
+                try {
+                    let _adv = null;
+                    try {
+                        _adv = !!window
+                            .require('WAWebUserPrefsMultiDevice')
+                            .getADVSecretKey();
+                    } catch (e) {}
+                    let _stream = {};
+                    try {
+                        const S = window.require('WAWebStreamModel').Stream;
+                        _stream = {
+                            mode: String(S.mode),
+                            displayInfo: String(S.displayInfo),
+                            info: String(S.info),
+                            resumeCount: S.resumeCount,
+                            isHardRefresh: S.isHardRefresh,
+                        };
+                    } catch (e) {}
+                    window.onSocketDiagEvent({
+                        event: 'SESSION_SNAPSHOT_AT_INJECT',
+                        advKeyPresent: _adv,
+                        state: String(Socket.state),
+                        stream: String(Socket.stream),
+                        hasSynced: !!Socket.hasSynced,
+                        streamMode: _stream.mode,
+                        streamDisplayInfo: _stream.displayInfo,
+                        streamInfo: _stream.info,
+                        resumeCount: _stream.resumeCount,
+                        isHardRefresh: _stream.isHardRefresh,
+                    });
+                } catch (e) {}
+
                 const listeners = [
                     [
                         Socket,
