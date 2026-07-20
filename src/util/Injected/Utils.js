@@ -1701,6 +1701,40 @@ exports.LoadUtils = () => {
     };
 
     /**
+     * Bounded registry of recently revoked message ids. Populated by the
+     * revoke-for-everyone handler (Client.js) and read by resolveMediaBlob to
+     * attribute a "media download returned null" to a preceding revoke that
+     * removed the message from the Store before the (lazy) download ran.
+     *
+     * Fixed-capacity Map (insertion-ordered) so it can never grow without
+     * bound: on overflow the oldest entry is evicted, and re-adding an id
+     * refreshes its recency. A revoke that matters is always followed within
+     * seconds by the download attempt, so a few hundred entries is ample.
+     */
+    window.__revokedMsgIds =
+        window.__revokedMsgIds ||
+        (() => {
+            const MAX = 512;
+            const map = new Map(); // serializedId -> revokeTimestamp|null
+            return {
+                add(id, ts) {
+                    // Only accept real serialized msg ids (they always contain
+                    // '_', e.g. "false_1234@lid_ABC..."). This rejects null,
+                    // non-strings, and Object.prototype.toString junk.
+                    if (typeof id !== 'string' || id.indexOf('_') === -1)
+                        return;
+                    if (map.has(id)) map.delete(id);
+                    map.set(id, ts ?? null);
+                    while (map.size > MAX) map.delete(map.keys().next().value);
+                },
+                get(id) {
+                    if (!id || !map.has(id)) return null;
+                    return { revokeTs: map.get(id) };
+                },
+            };
+        })();
+
+    /**
      * Resolves the media blob and metadata for a message.
      * Shared by downloadMedia and downloadMediaStream.
      * @param {string} msgId
@@ -1717,7 +1751,8 @@ exports.LoadUtils = () => {
             !msg.mediaData ||
             msg.mediaData.mediaStage === 'REUPLOADING'
         ) {
-            if (window.onDiagLog)
+            if (window.onDiagLog) {
+                const revoked = window.__revokedMsgIds?.get(msgId);
                 window.onDiagLog(
                     'warn',
                     'resolveMediaBlob: returning null',
@@ -1726,8 +1761,13 @@ exports.LoadUtils = () => {
                         hasMsg: !!msg,
                         hasMediaData: !!msg?.mediaData,
                         mediaStage: msg?.mediaData?.mediaStage,
+                        // Deterministic cause: the message is gone because a
+                        // revoke-for-everyone removed it before this download.
+                        wasRevoked: !!revoked,
+                        revokeTs: revoked?.revokeTs ?? null,
                     }),
                 );
+            }
             return null;
         }
 

@@ -1740,6 +1740,35 @@ class Client extends EventEmitter {
                         typeof serialized?.protocolMessageKey?.remote,
                 });
 
+                // Record the revoked ORIGINAL message id (protocolMessageKey =
+                // K1, the id a lazy media download later looks up) so a later
+                // "resolveMediaBlob: returning null" can be attributed
+                // deterministically to this revoke. Registry is bounded (see
+                // window.__revokedMsgIds in Utils.js) - no leak. We register
+                // several serialization candidates because the raw MsgKey
+                // `_serialized` getter can be undefined on some WA builds (the
+                // `_serialized`->`$1` rename); MsgKey.toString() is the
+                // canonical, rename-proof form (it keys the msg DB), and the
+                // manual rebuild is a last-resort fallback.
+                try {
+                    const ts = msg.revokeTimestamp || msg.t;
+                    const remote = pk?.remote?.toString();
+                    let rebuilt = null;
+                    if (remote && pk?.id) {
+                        const fromMe = pk.fromMe ? 'true' : 'false';
+                        rebuilt = `${fromMe}_${remote}_${pk.id}`;
+                    }
+                    for (const cand of [
+                        pk?._serialized?.toString(),
+                        pk?.toString?.(),
+                        rebuilt,
+                    ]) {
+                        window.__revokedMsgIds?.add(cand, ts);
+                    }
+                } catch {
+                    /* never let bookkeeping break revoke handling */
+                }
+
                 window.onChangeMessageTypeEvent(
                     window.WWebJS.getMessageModel(msg),
                 );
