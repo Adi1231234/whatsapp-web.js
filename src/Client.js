@@ -727,11 +727,17 @@ class Client extends EventEmitter {
                 // session - vs genuinely unregistered/fresh. resumeCount /
                 // isHardRefresh distinguish a resume from a cold connect.
                 try {
-                    let _adv = null;
+                    // Registered? Read the persisted me-user WID (pn or lid).
+                    // getADVSecretKey() returns null for an already-registered
+                    // device (it is only populated during QR pairing), so it is
+                    // NOT a registration signal; getMaybeMePnUser/getMaybeMeLidUser
+                    // are the persisted identifiers present pre-sync when linked.
+                    let _registered = null;
                     try {
-                        _adv = !!window
-                            .require('WAWebUserPrefsMultiDevice')
-                            .getADVSecretKey();
+                        const _me = window.require('WAWebUserPrefsMeUser');
+                        _registered = !!(
+                            _me.getMaybeMePnUser() || _me.getMaybeMeLidUser()
+                        );
                     } catch (e) {}
                     let _stream = {};
                     try {
@@ -746,7 +752,7 @@ class Client extends EventEmitter {
                     } catch (e) {}
                     window.onSocketDiagEvent({
                         event: 'SESSION_SNAPSHOT_AT_INJECT',
-                        advKeyPresent: _adv,
+                        registered: _registered,
                         state: String(Socket.state),
                         stream: String(Socket.stream),
                         hasSynced: !!Socket.hasSynced,
