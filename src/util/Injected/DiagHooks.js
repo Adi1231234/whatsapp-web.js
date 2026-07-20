@@ -362,10 +362,52 @@ exports.InjectDiagHooks = () => {
         return null;
     }
     var signalFns = ['Cipher.decryptSignalProto', 'Cipher.decryptGroupSignalProto', 'Cipher.encryptSignalProto'];
+
+    // --- Sender-key distribution (root-cause signal for errLoadSenderKeySession) ---
+    // WAWebCryptoLibrary.processSenderKeyDistributionMsg is the single choke point
+    // that installs a RECEIVED group sender key: (groupJid, senderDeviceWid, skdm).
+    // Correlating SKDM_PROCESSED.sender with SIGNAL_DECRYPT_ERROR.sender tells us
+    // whether the failing device's key was ever received and, if so, whether it
+    // arrived before or after the decrypt failure.
+    //
+    // WAWebCryptoLibrary is lazily loaded and is NOT registered when InjectDiagHooks
+    // first runs (window.require returns undefined and the hook silently no-ops).
+    // It IS guaranteed loaded once any Signal crypto op runs - decryptGroupSignalProto
+    // calls into it - so install it lazily from the crypto-hook wrappers below.
+    // Event-driven, no timers (setTimeout scheduled inside the initial evaluate does
+    // not reliably fire in this injected context).
+    var __skdmInstalled = false;
+    function tryInstallSkdmHook() {
+        if (__skdmInstalled) return;
+        var mod = null;
+        try { mod = window.require('WAWebCryptoLibrary'); } catch (e) {}
+        if (!mod || typeof mod.processSenderKeyDistributionMsg !== 'function') return;
+        __skdmInstalled = true;
+        window.injectToFunction({ module: 'WAWebCryptoLibrary', function: 'processSenderKeyDistributionMsg' }, function(func, ...args) {
+            var chat = signalWidInfo(args[0]);
+            var sender = signalWidInfo(args[1]);
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.then(function(res) {
+                    safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
+                    return res;
+                }).catch(function(err) {
+                    safeDiagLog('warn', 'SKDM_PROCESS_ERROR', {
+                        chat: chat, sender: sender, error: err ? (err.message || String(err)) : 'unknown',
+                    });
+                    throw err;
+                });
+            }
+            safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
+            return result;
+        });
+    }
+
     for (var si = 0; si < signalFns.length; si++) {
         try {
             (function(fnName) {
                 window.injectToFunction({ module: 'WAWebSignal', function: fnName }, function(func, ...args) {
+                    tryInstallSkdmHook();
                     var result;
                     try { result = func.apply(this, args); } catch(err) {
                         safeDiagLog('warn', 'SIGNAL_DECRYPT_ERROR', {
@@ -388,50 +430,8 @@ exports.InjectDiagHooks = () => {
             })(signalFns[si]);
         } catch(e) {}
     }
-
-    // --- Sender-key distribution (root-cause signal for errLoadSenderKeySession) ---
-    // The single choke point that installs a RECEIVED group sender key.
-    // Args: (groupJid, senderDeviceWid, skdmBytes). The higher-level
-    // WAWebSenderKeyMsgHandler.handleSenderKeyMsg hook targets a module that no
-    // longer exists in current WA, so this is the only place a received key
-    // install is observable. Correlating SKDM_PROCESSED.sender with
-    // SIGNAL_DECRYPT_ERROR.sender tells us whether the failing device's key was
-    // ever received, and if so whether it arrived after the decrypt failure.
-    //
-    // WAWebCryptoLibrary is lazily loaded and is NOT yet registered when this
-    // runs, so window.require returns undefined and injectToFunction's
-    // module-not-found path skips silently (no HOOK_FAIL). Retry until the
-    // module is available, then hook; log HOOK_FAIL only if it never loads.
-    (function installSkdmHook(attempt) {
-        var mod = null;
-        try { mod = window.require('WAWebCryptoLibrary'); } catch (e) {}
-        if (!mod || typeof mod.processSenderKeyDistributionMsg !== 'function') {
-            if (attempt < 30) {
-                setTimeout(function () { installSkdmHook(attempt + 1); }, 1000);
-            } else {
-                safeDiagLog('warn', 'HOOK_FAIL', { hook: 'processSenderKeyDistributionMsg', reason: 'WAWebCryptoLibrary not loaded after retries' });
-            }
-            return;
-        }
-        window.injectToFunction({ module: 'WAWebCryptoLibrary', function: 'processSenderKeyDistributionMsg' }, function(func, ...args) {
-            var chat = signalWidInfo(args[0]);
-            var sender = signalWidInfo(args[1]);
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(res) {
-                    safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
-                    return res;
-                }).catch(function(err) {
-                    safeDiagLog('warn', 'SKDM_PROCESS_ERROR', {
-                        chat: chat, sender: sender, error: err ? (err.message || String(err)) : 'unknown',
-                    });
-                    throw err;
-                });
-            }
-            safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
-            return result;
-        });
-    })(0);
+    // In case WAWebCryptoLibrary is already loaded (e.g. later re-injection), try now.
+    tryInstallSkdmHook();
 
     // --- E2E session management ---
     var sessionFns = ['ensureE2ESessions'];
