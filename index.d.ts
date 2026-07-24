@@ -169,6 +169,16 @@ declare namespace WAWebJS {
         /** Sets up events and requirements, kicks off authentication request */
         initialize(): Promise<void>;
 
+        /**
+         * Subscribe to changes of specific message fields (e.g. 'directPath').
+         * The callback fires with the updated message model whenever any of the
+         * given fields changes on any message. Re-injected on reconnect.
+         */
+        watchMessageChanges(
+            fields: string[],
+            callback: (message: Message) => void
+        ): void;
+
         /** Check if a given ID is registered in whatsapp */
         isRegisteredUser(contactId: string): Promise<boolean>;
 

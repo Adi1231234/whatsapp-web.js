@@ -102,6 +102,14 @@ class Client extends EventEmitter {
          */
         this.pupPage = null;
 
+        /**
+         * Generic message-change subscriptions registered via
+         * {@link Client#watchMessageChanges}. Re-injected on every
+         * attachEventListeners run so they survive reconnects.
+         * @type {Array<{fields: string[], callback: (message: object) => void}>}
+         */
+        this._messageChangeWatchers = [];
+
         this.currentIndexHtml = null;
         this.lastLoggedOut = false;
 
@@ -687,6 +695,55 @@ class Client extends EventEmitter {
      * Private function
      * @property {boolean} reinject is this a reinject?
      */
+    /**
+     * Subscribe to changes of specific message fields (e.g. `directPath`).
+     * The callback receives the updated message model whenever any of the
+     * given fields changes on any message. This is a generic primitive: the
+     * caller decides which fields matter and what to do. Subscriptions are
+     * re-injected automatically on reconnect.
+     * @param {string[]} fields WA message model fields to watch, e.g. ['directPath']
+     * @param {(message: object) => void} callback
+     */
+    watchMessageChanges(fields, callback) {
+        this._messageChangeWatchers.push({ fields, callback });
+        if (this.pupPage) {
+            this._injectMessageChangeWatchers().catch((error) => {
+                this.emit(
+                    'diag',
+                    'warn',
+                    'watchMessageChanges: inject failed',
+                    JSON.stringify({ error: String(error) }),
+                );
+            });
+        }
+    }
+
+    /**
+     * Injects a browser-side `change:<field>` listener for every field any
+     * watcher cares about. Idempotent per browser context (a `Set` guards
+     * against duplicate listeners), so it is safe to call on every reconnect.
+     */
+    async _injectMessageChangeWatchers() {
+        const fields = [
+            ...new Set(this._messageChangeWatchers.flatMap((w) => w.fields)),
+        ];
+        if (fields.length === 0) return;
+        await this.pupPage.evaluate((fields) => {
+            window.__watchedMsgFields = window.__watchedMsgFields || new Set();
+            const { Msg } = window.require('WAWebCollections');
+            for (const field of fields) {
+                if (window.__watchedMsgFields.has(field)) continue;
+                window.__watchedMsgFields.add(field);
+                Msg.on('change:' + field, (msg) => {
+                    window.onWatchedMessageChange(
+                        field,
+                        window.WWebJS.getMessageModel(msg),
+                    );
+                });
+            }
+        }, fields);
+    }
+
     async attachEventListeners() {
         await exposeFunctionIfAbsent(
             this.pupPage,
@@ -792,6 +849,20 @@ class Client extends EventEmitter {
                     message,
                     revoked_msg,
                 );
+            },
+        );
+
+        // Dispatcher for watchMessageChanges: routes a browser-side
+        // change:<field> to every subscriber that asked for that field.
+        await exposeFunctionIfAbsent(
+            this.pupPage,
+            'onWatchedMessageChange',
+            (field, message) => {
+                for (const watcher of this._messageChangeWatchers) {
+                    if (watcher.fields.includes(field)) {
+                        watcher.callback(message);
+                    }
+                }
             },
         );
 
@@ -1315,6 +1386,10 @@ class Client extends EventEmitter {
                 },
             );
         });
+
+        // (Re-)inject any watchMessageChanges subscriptions so they survive
+        // reconnects (this method runs again on every re-sync).
+        await this._injectMessageChangeWatchers();
     }
 
     async initWebVersionCache() {
