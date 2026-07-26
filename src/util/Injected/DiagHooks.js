@@ -1189,9 +1189,15 @@ exports.InjectDiagHooks = () => {
                         var pr = r ? r.placeholderMessageResendResponse : null;
                         var info = { index: idx, hasPlaceholderResponse: !!pr };
                         if (!pr) { nullResponse++; return info; }
+                        // WA's protobuf decoder yields an ArrayBuffer for a
+                        // TYPES.BYTES field, which has byteLength and NO length.
+                        // Reading .length here would score every real answer as
+                        // "no bytes" and skip the decode entirely.
                         var bytes = pr.webMessageInfoBytes;
-                        info.webMessageInfoBytesLength = bytes ? bytes.length : 0;
-                        if (!bytes || !bytes.length) { nullBytes++; return info; }
+                        var byteLen = 0;
+                        if (bytes) byteLen = bytes.byteLength != null ? bytes.byteLength : (bytes.length || 0);
+                        info.webMessageInfoBytesLength = byteLen;
+                        if (!byteLen) { nullBytes++; return info; }
                         withMsg++;
                         // Decode just enough to correlate with the request and to
                         // see whether the phone returned real content or another
