@@ -1231,12 +1231,10 @@ exports.InjectDiagHooks = () => {
                 }
             } catch(e) { logData.parseError = String(e); }
             safeDiagLog('info', 'PDO_RESEND_RESPONSE', logData);
-            var answeredIds = [];
-            try {
-                if (logData.results) {
-                    answeredIds = logData.results.map(function(r) { return r.traceId || null; });
-                }
-            } catch(e) {}
+            // logData.results is either unset or an array we built above, so no guard needed.
+            var answeredIds = logData.results
+                ? logData.results.map(function(r) { return r.traceId || null; })
+                : [];
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
