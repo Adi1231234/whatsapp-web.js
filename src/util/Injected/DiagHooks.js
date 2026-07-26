@@ -1485,10 +1485,14 @@ exports.InjectDiagHooks = () => {
                 ctx.reasonRaw = (reason === undefined) ? null : reason;
                 ctx.reasonName = (reason === undefined) ? 'UNDEFINED_DEFAULTS_UserInitiated' : (_logoutReasonName[reason] || String(reason));
                 ctx.stack = _logoutStack();
-                safeDiagLog('debug', 'LOGOUT_REASON', ctx);
+                // info (not debug): the logout REASON must reach GCP even when
+                // debugLogsEnabled is off (it is off fleet-wide), otherwise we
+                // never learn WHY WhatsApp logged a device out. Low volume: one
+                // per logout.
+                safeDiagLog('info', 'LOGOUT_REASON', ctx);
                 _logoutStorage('LOGOUT_REASON');
             } catch (e) {
-                try { safeDiagLog('debug', 'LOGOUT_REASON', { captureErr: String(e), reasonRaw: String(reason) }); } catch (e2) {}
+                try { safeDiagLog('info', 'LOGOUT_REASON', { captureErr: String(e), reasonRaw: String(reason) }); } catch (e2) {}
             }
             return func(reason);
         });
@@ -1497,7 +1501,7 @@ exports.InjectDiagHooks = () => {
         window.injectToFunction({ module: 'WAWebSocketBridgeApi', function: 'SocketBridgeApi.socketLogout' }, function (func, arg) {
             try {
                 var reason = arg && arg.reason;
-                safeDiagLog('debug', 'LOGOUT_FROM_BRIDGE', { reasonRaw: reason == null ? null : reason, reasonName: _logoutReasonName[reason] || String(reason), ctx: _logoutCtx(), stack: _logoutStack() });
+                safeDiagLog('info', 'LOGOUT_FROM_BRIDGE', { reasonRaw: reason == null ? null : reason, reasonName: _logoutReasonName[reason] || String(reason), ctx: _logoutCtx(), stack: _logoutStack() });
             } catch (e) {}
             return func(arg);
         });
@@ -1506,7 +1510,7 @@ exports.InjectDiagHooks = () => {
         ['onLogoutFromBridge', 'onStartingLogoutFromBridge', 'onUnexpectedLogoutModalFromBridge', 'onTemporaryBanFromBridge'].forEach(function (fn) {
             window.injectToFunction({ module: 'WAWebCmd', function: 'Cmd.' + fn }, function (func) {
                 var a = Array.prototype.slice.call(arguments, 1);
-                try { safeDiagLog('debug', 'CMD_' + fn, { arg: safeStr(a[0]), ctx: _logoutCtx(), stack: _logoutStack() }); } catch (e) {}
+                try { safeDiagLog('info', 'CMD_' + fn, { arg: safeStr(a[0]), ctx: _logoutCtx(), stack: _logoutStack() }); } catch (e) {}
                 return func.apply(null, a);
             });
         });

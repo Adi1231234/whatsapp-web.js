@@ -169,6 +169,175 @@ class Client extends EventEmitter {
 
             await this.pupPage.evaluate(ExposeAuthStore);
 
+            // [diag] Install the socket reason-capture hooks BEFORE the
+            // needAuthHandle wait below. That wait blocks for up to authTimeout
+            // (30s) while Socket.state is stuck in OPENING/PAIRING, and on a real
+            // stuck-connecting failure it TIMES OUT - so the post-authCheck hook
+            // block further down never runs, and the "why the socket keeps
+            // closing" reason is lost for exactly the failure we care about.
+            // Installing them here captures it. Fully defensive (modules may not
+            // be loaded yet; every read is guarded) and idempotent: the shared
+            // __wwjsDiagHooked / __p2dWrapped / __p2dStreamHooked / __p2dSnapDone
+            // guards make the later block a no-op so nothing installs twice.
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                'onSocketDiagEvent',
+                async (info) => {
+                    console.log('[wwjs-diag] SOCKET_DIAG', info);
+                },
+            );
+            await this.pupPage.evaluate(() => {
+                const _st = () => {
+                    try {
+                        return String(
+                            window.require('WAWebSocketModel').Socket.state,
+                        );
+                    } catch (e) {
+                        return undefined;
+                    }
+                };
+                // Bridge teardown/logout/ban/service-unavailable/force-update.
+                try {
+                    const _m = window.require('WAWebSocketBridgeApi');
+                    const _b = _m && (_m.SocketBridgeApi || _m);
+                    if (_b && !_b.__wwjsDiagHooked) {
+                        const _wrap = (name) => {
+                            const orig = _b[name];
+                            if (typeof orig !== 'function') return;
+                            _b[name] = function (...args) {
+                                try {
+                                    const a = args[0];
+                                    let arg;
+                                    try {
+                                        arg = JSON.stringify(a).slice(0, 200);
+                                    } catch (e) {}
+                                    window.onSocketDiagEvent({
+                                        event: name,
+                                        reason:
+                                            a && a.reason != null
+                                                ? String(a.reason)
+                                                : undefined,
+                                        arg,
+                                        state: _st(),
+                                    });
+                                } catch (e) {}
+                                return orig.apply(this, args);
+                            };
+                        };
+                        [
+                            'triggerUnexpectedLogoutModalFromBridge',
+                            'triggerTemporaryBanFromBridge',
+                            'triggerServiceUnavailableFromBridge',
+                            'forceAppUpdate',
+                            'socketLogout',
+                            'triggerLogoutFromBridge',
+                            'triggerSocketStreamDisconnectedFromBridge',
+                        ].forEach(_wrap);
+                        _b.__wwjsDiagHooked = true;
+                        console.log(
+                            '[wwjs-diag] socket bridge diag hooks installed (early)',
+                        );
+                    }
+                } catch (e) {}
+                // WhatsApp's own logger (the plain-text socket-close reason).
+                try {
+                    const _WAL = window.require('WALogger');
+                    const _KW =
+                        /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked/i;
+                    ['ERROR', 'WARN'].forEach((lvl) => {
+                        const orig = _WAL[lvl];
+                        if (typeof orig !== 'function' || orig.__p2dWrapped)
+                            return;
+                        const wrapped = function () {
+                            try {
+                                const t0 = arguments[0];
+                                const msg = Array.isArray(t0)
+                                    ? t0.join('{}')
+                                    : String(t0);
+                                if (_KW.test(msg)) {
+                                    window.onSocketDiagEvent({
+                                        event: 'WA_INTERNAL_' + lvl,
+                                        msg: msg.slice(0, 300),
+                                        state: _st(),
+                                    });
+                                }
+                            } catch (e) {}
+                            return orig.apply(this, arguments);
+                        };
+                        wrapped.__p2dWrapped = true;
+                        _WAL[lvl] = wrapped;
+                    });
+                } catch (e) {}
+                // Stream lifecycle transitions.
+                try {
+                    const _S = window.require('WAWebStreamModel').Stream;
+                    if (_S && _S.on && !_S.__p2dStreamHooked) {
+                        _S.__p2dStreamHooked = true;
+                        [
+                            'change:info',
+                            'change:mode',
+                            'change:displayInfo',
+                        ].forEach((ev) => {
+                            _S.on(ev, () => {
+                                try {
+                                    window.onSocketDiagEvent({
+                                        event:
+                                            'STREAM_' +
+                                            ev
+                                                .replace('change:', '')
+                                                .toUpperCase(),
+                                        mode: String(_S.mode),
+                                        displayInfo: String(_S.displayInfo),
+                                        info: String(_S.info),
+                                        state: _st(),
+                                    });
+                                } catch (e) {}
+                            });
+                        });
+                    }
+                } catch (e) {}
+                // One-shot registered/state snapshot (guarded so the later block
+                // does not re-emit it).
+                try {
+                    if (!window.__p2dSnapDone) {
+                        window.__p2dSnapDone = true;
+                        let _reg = null;
+                        try {
+                            const _me = window.require('WAWebUserPrefsMeUser');
+                            _reg = !!(
+                                _me.getMaybeMePnUser() ||
+                                _me.getMaybeMeLidUser()
+                            );
+                        } catch (e) {}
+                        let _sm, _sd, _si, _rc, _hr, _stream;
+                        try {
+                            const S = window.require('WAWebStreamModel').Stream;
+                            _sm = String(S.mode);
+                            _sd = String(S.displayInfo);
+                            _si = String(S.info);
+                            _rc = S.resumeCount;
+                            _hr = S.isHardRefresh;
+                        } catch (e) {}
+                        try {
+                            _stream = String(
+                                window.require('WAWebSocketModel').Socket.stream,
+                            );
+                        } catch (e) {}
+                        window.onSocketDiagEvent({
+                            event: 'SESSION_SNAPSHOT_AT_INJECT',
+                            registered: _reg,
+                            state: _st(),
+                            stream: _stream,
+                            streamMode: _sm,
+                            streamDisplayInfo: _sd,
+                            streamInfo: _si,
+                            resumeCount: _rc,
+                            isHardRefresh: _hr,
+                        });
+                    }
+                } catch (e) {}
+            });
+
             const needAuthHandle = await this.pupPage.waitForFunction(
                 () => {
                     const state =
@@ -735,6 +904,11 @@ class Client extends EventEmitter {
                 // session - vs genuinely unregistered/fresh. resumeCount /
                 // isHardRefresh distinguish a resume from a cold connect.
                 try {
+                    // Skip if the early pre-needAuthHandle block already emitted
+                    // this snapshot (the normal path). This later copy remains
+                    // only as a fallback if the early block did not run.
+                    if (window.__p2dSnapDone) throw 'snap-already-done';
+                    window.__p2dSnapDone = true;
                     // Registered? Read the persisted me-user WID (pn or lid).
                     // getADVSecretKey() returns null for an already-registered
                     // device (it is only populated during QR pairing), so it is
