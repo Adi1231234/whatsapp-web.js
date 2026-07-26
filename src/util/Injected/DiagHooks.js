@@ -1169,46 +1169,75 @@ exports.InjectDiagHooks = () => {
             module: 'WAWebNonMessageDataRequestHandlerPlaceholderResend',
             function: 'handlePlaceholderResendOperationRequestResponse'
         }, function(func, ...args) {
-            var results = args[0];
-            var requestMsgKeys = args[1];
+            // WA signature is (peerMsgId, peerDataOperationResult) - see
+            // WAWebNonMessageDataRequestHandler: the results array is args[1],
+            // NOT args[0]. args[0] is the originating peer message id (a string).
+            var peerMsgId = args[0];
+            var results = args[1];
             var logData = {
-                resultCount: results ? results.length : 0,
-                requestMsgKeyCount: requestMsgKeys ? requestMsgKeys.length : 0,
+                peerMsgId: typeof peerMsgId === 'string' ? peerMsgId : safeStr(peerMsgId),
+                resultCount: Array.isArray(results) ? results.length : 0,
             };
+            // The phone answers with one result per requested message. A resend
+            // that is never answered produces NO event at all (WA has no timeout
+            // for PLACEHOLDER_MESSAGE_RESEND), so the absence of this log after a
+            // resend request is itself the signal that the phone never replied.
             try {
-                if (requestMsgKeys && requestMsgKeys.length) {
-                    logData.requestMsgIds = requestMsgKeys.slice(0, 10).map(function(k) {
-                        return k ? (k.id || k._serialized || String(k)) : null;
-                    });
-                }
-                if (results && results.length) {
-                    logData.results = results.slice(0, 10).map(function(r, idx) {
-                        var info = {
-                            index: idx,
-                            hasPlaceholderResponse: !!(r && r.placeholderMessageResendResponse),
-                            hasMediaUploadResult: !!(r && r.mediaUploadResult),
-                        };
-                        if (r && r.placeholderMessageResendResponse) {
-                            var pr = r.placeholderMessageResendResponse;
-                            info.hasWebMessageInfoBytes = !!(pr.webMessageInfoBytes && pr.webMessageInfoBytes.length > 0);
-                            info.webMessageInfoBytesLength = pr.webMessageInfoBytes ? pr.webMessageInfoBytes.length : 0;
-                        }
+                if (Array.isArray(results) && results.length) {
+                    var withMsg = 0, nullResponse = 0, nullBytes = 0;
+                    logData.results = results.slice(0, 20).map(function(r, idx) {
+                        var pr = r ? r.placeholderMessageResendResponse : null;
+                        var info = { index: idx, hasPlaceholderResponse: !!pr };
+                        if (!pr) { nullResponse++; return info; }
+                        var bytes = pr.webMessageInfoBytes;
+                        info.webMessageInfoBytesLength = bytes ? bytes.length : 0;
+                        if (!bytes || !bytes.length) { nullBytes++; return info; }
+                        withMsg++;
+                        // Decode just enough to correlate with the request and to
+                        // see whether the phone returned real content or another
+                        // undecryptable placeholder.
+                        try {
+                            var decoded = window.require('decodeProtobuf').decodeProtobuf(
+                                window.require('WAWebProtobufsWeb.pb').WebMessageInfoSpec, bytes);
+                            var key = decoded ? decoded.key : null;
+                            if (key) {
+                                info.traceId = key.id || '';
+                                info.remoteJid = key.remoteJid || '';
+                                info.keyFromMe = !!key.fromMe;
+                            }
+                            info.hasMessageContent = !!(decoded && decoded.message);
+                            if (decoded && decoded.messageStubType != null) {
+                                info.messageStubType = decoded.messageStubType;
+                            }
+                        } catch(de) { info.decodeError = String(de); }
                         return info;
                     });
+                    logData.withMessage = withMsg;
+                    logData.nullResponse = nullResponse;
+                    logData.nullMessageBytes = nullBytes;
                 }
             } catch(e) { logData.parseError = String(e); }
             safeDiagLog('info', 'PDO_RESEND_RESPONSE', logData);
+            var answeredIds = [];
+            try {
+                if (logData.results) {
+                    answeredIds = logData.results.map(function(r) { return r.traceId || null; });
+                }
+            } catch(e) {}
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
                 return result.then(function(res) {
-                    safeDiagLog('debug', 'PDO_RESEND_RESPONSE_DONE', {
-                        requestMsgIds: logData.requestMsgIds,
+                    safeDiagLog('info', 'PDO_RESEND_RESPONSE_DONE', {
+                        peerMsgId: logData.peerMsgId,
+                        answeredIds: answeredIds,
+                        resultCount: logData.resultCount,
                         success: true,
                     });
                     return res;
                 }).catch(function(err) {
                     safeDiagLog('error', 'PDO_RESEND_RESPONSE_ERROR', {
-                        requestMsgIds: logData.requestMsgIds,
+                        peerMsgId: logData.peerMsgId,
+                        answeredIds: answeredIds,
                         error: err ? (err.message || String(err)) : 'unknown',
                     });
                     throw err;
