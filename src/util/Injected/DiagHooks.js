@@ -1184,7 +1184,11 @@ exports.InjectDiagHooks = () => {
             // resend request is itself the signal that the phone never replied.
             try {
                 if (Array.isArray(results) && results.length) {
-                    var withMsg = 0, nullResponse = 0, nullBytes = 0;
+                    // Counters are deliberately split: bytes being present is NOT
+                    // the same as the phone returning usable content. Only
+                    // withContent answers the question "can this be recovered".
+                    var withBytes = 0, withContent = 0, decodeErrors = 0;
+                    var nullResponse = 0, nullBytes = 0;
                     logData.results = results.slice(0, 20).map(function(r, idx) {
                         var pr = r ? r.placeholderMessageResendResponse : null;
                         var info = { index: idx, hasPlaceholderResponse: !!pr };
@@ -1198,7 +1202,7 @@ exports.InjectDiagHooks = () => {
                         if (bytes) byteLen = bytes.byteLength != null ? bytes.byteLength : (bytes.length || 0);
                         info.webMessageInfoBytesLength = byteLen;
                         if (!byteLen) { nullBytes++; return info; }
-                        withMsg++;
+                        withBytes++;
                         // Decode just enough to correlate with the request and to
                         // see whether the phone returned real content or another
                         // undecryptable placeholder.
@@ -1212,13 +1216,16 @@ exports.InjectDiagHooks = () => {
                                 info.keyFromMe = !!key.fromMe;
                             }
                             info.hasMessageContent = !!(decoded && decoded.message);
+                            if (info.hasMessageContent) withContent++;
                             if (decoded && decoded.messageStubType != null) {
                                 info.messageStubType = decoded.messageStubType;
                             }
-                        } catch(de) { info.decodeError = String(de); }
+                        } catch(de) { decodeErrors++; info.decodeError = String(de); }
                         return info;
                     });
-                    logData.withMessage = withMsg;
+                    logData.withBytes = withBytes;
+                    logData.withContent = withContent;
+                    logData.decodeErrors = decodeErrors;
                     logData.nullResponse = nullResponse;
                     logData.nullMessageBytes = nullBytes;
                 }
