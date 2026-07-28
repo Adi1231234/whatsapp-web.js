@@ -769,6 +769,7 @@ exports.InjectDiagHooks = () => {
                         expectedFilehash: opts.filehash,
                         directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
                         mediaKeyTimestamp: opts.mediaKeyTimestamp,
+                        userDownloadAttemptCount: opts.userDownloadAttemptCount,
                     };
                     try {
                         var allProps = {};
@@ -794,7 +795,12 @@ exports.InjectDiagHooks = () => {
                             if (Object.keys(protoProps).length > 0) errorInfo.errorProtoProps = protoProps;
                         }
                     } catch(e2) {}
-                    safeDiagLog('warn', 'DL_DECRYPT_FAIL', errorInfo);
+                    // Only surface as a warning when WE initiated the download
+                    // (userDownloadAttemptCount>=1). WhatsApp's own background
+                    // auto-downloads (e.g. history-sync of expired media that 404s)
+                    // report userDownloadAttemptCount=0 and are logged at debug only.
+                    var _dlUserInitiated = (opts.userDownloadAttemptCount || 0) >= 1;
+                    safeDiagLog(_dlUserInitiated ? 'warn' : 'debug', 'DL_DECRYPT_FAIL', errorInfo);
                     throw err;
                 });
             }
@@ -859,10 +865,15 @@ exports.InjectDiagHooks = () => {
                     });
                     return data;
                 }).catch(function(err) {
-                    safeDiagLog('warn', 'MMS_DOWNLOAD_FAIL', {
+                    // mode==='manual' means WE initiated the download (isUserInitiated).
+                    // WhatsApp's own auto-downloads use mode==='auto' and are logged at
+                    // debug only, so background 404s on expired media don't look like errors.
+                    var _mmsUserInitiated = opts.mode === 'manual';
+                    safeDiagLog(_mmsUserInitiated ? 'warn' : 'debug', 'MMS_DOWNLOAD_FAIL', {
                         directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
                         errorName: err ? err.name : null,
                         errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 300) : null,
+                        mode: opts.mode,
                     });
                     throw err;
                 });
