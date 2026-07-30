@@ -150,11 +150,57 @@ class Client extends EventEmitter {
             this._hasSyncedTriggered = false;
 
             const authTimeout = this.options.authTimeoutMs || 30000;
+            // WhatsApp assigns window.Debug once, synchronously, inside
+            // WAWebAppBootstrap (see WAWebDebugSetup.setupDebugGlobal) and
+            // publishes no event for it. Its position relative to the page's
+            // `load` event is not stable either - measured both before and after
+            // it on the same machine - so `load` cannot gate this. Instead of
+            // sampling, intercept the assignment: install an accessor, hand the
+            // value straight back as a plain data property on the write.
+            //
+            // The interception is stored on the page as a single shared promise.
+            // inject() cancels and replaces a previous inject (see _injectAbort)
+            // but cannot stop an evaluate() already running in the page, so a
+            // superseded call is still live in here. With one accessor per
+            // caller, the superseded one would later restore ITS captured value
+            // - undefined - and wipe window.Debug. One shared waiter means one
+            // accessor, restored exactly once, by the write that satisfied it.
+            // Per-caller timeouts race against it and touch nothing.
             await this.pupPage
-                .waitForFunction('window.Debug?.VERSION != undefined', {
-                    timeout: authTimeout,
-                    signal: abort.signal,
-                })
+                .evaluate((timeoutMs) => {
+                    if (window.Debug?.VERSION != null) return;
+                    if (!window.__wwebjsDebugReady) {
+                        window.__wwebjsDebugReady = new Promise((resolve) => {
+                            let value = window.Debug;
+                            Object.defineProperty(window, 'Debug', {
+                                configurable: true,
+                                enumerable: true,
+                                get: () => value,
+                                set: (v) => {
+                                    value = v;
+                                    if (v?.VERSION == null) return;
+                                    Object.defineProperty(window, 'Debug', {
+                                        value: v,
+                                        writable: true,
+                                        configurable: true,
+                                        enumerable: true,
+                                    });
+                                    resolve();
+                                },
+                            });
+                        });
+                    }
+                    return Promise.race([
+                        window.__wwebjsDebugReady,
+                        new Promise((_, reject) => {
+                            AbortSignal.timeout(timeoutMs).addEventListener(
+                                'abort',
+                                () => reject(new Error('auth timeout')),
+                                { once: true },
+                            );
+                        }),
+                    ]);
+                }, authTimeout)
                 .catch((err) => {
                     if (abort.signal.aborted) throw err;
                     throw 'auth timeout';
@@ -338,29 +384,75 @@ class Client extends EventEmitter {
                 } catch (e) {}
             });
 
-            const needAuthHandle = await this.pupPage.waitForFunction(
-                () => {
-                    const state =
-                        window.require?.('WAWebSocketModel')?.Socket?.state;
-                    if (
-                        !state ||
-                        state === 'OPENING' ||
-                        state === 'UNLAUNCHED' ||
-                        state === 'PAIRING'
-                    ) {
-                        return false;
+            // Socket.state fires `change:state`, so wait on the event rather than
+            // sampling. WAWebEventsWaitForBbEvent is WhatsApp's own helper: it
+            // subscribes with .on(), resolves on the predicate, detaches on every
+            // exit path, and rejects on the AbortSignal. Returning early when the
+            // state has already settled mirrors WAWebEventsWaitForMainStreamReadyMd
+            // and closes the subscribe-too-late race.
+            const needAuthentication = await this.pupPage.evaluate(
+                async (timeoutMs) => {
+                    // WAWebAppBootstrap declares WAWebDebugSetup as a dep but
+                    // not these, so `window.Debug` being populated does not
+                    // guarantee they are resolvable yet (measured only ~45ms
+                    // apart). Resolve defensively and wait for them the same way
+                    // we wait for the state itself, rather than throwing out of
+                    // the evaluate.
+                    const req = (n) => {
+                        try {
+                            return window.require?.(n) ?? null;
+                        } catch (e) {
+                            return null;
+                        }
+                    };
+                    const deadline = Date.now() + timeoutMs;
+                    let Socket, SOCKET_STATE, waitForBbEvent;
+                    for (;;) {
+                        const sm = req('WAWebSocketModel');
+                        const sc = req('WAWebSocketConstants');
+                        const wf = req('WAWebEventsWaitForBbEvent');
+                        if (sm?.Socket && sc?.SOCKET_STATE && wf) {
+                            Socket = sm.Socket;
+                            SOCKET_STATE = sc.SOCKET_STATE;
+                            waitForBbEvent = wf.default ?? wf;
+                            break;
+                        }
+                        if (Date.now() > deadline) {
+                            throw new Error(
+                                'WhatsApp socket modules unavailable',
+                            );
+                        }
+                        // Modules land during bundle evaluation, which is
+                        // macrotask-driven; yielding is enough to see them.
+                        await new Promise((r) => setTimeout(r, 0));
                     }
+
+                    const TRANSIENT = [
+                        SOCKET_STATE.OPENING,
+                        SOCKET_STATE.UNLAUNCHED,
+                        SOCKET_STATE.PAIRING,
+                    ];
+                    const settling = () => TRANSIENT.includes(Socket.state);
+
+                    if (settling()) {
+                        await waitForBbEvent(
+                            Socket,
+                            'change:state',
+                            () => !settling(),
+                            AbortSignal.timeout(timeoutMs),
+                        );
+                    }
+                    const state = Socket.state;
                     return {
-                        need: state === 'UNPAIRED' || state === 'UNPAIRED_IDLE',
+                        need:
+                            state === SOCKET_STATE.UNPAIRED ||
+                            state === SOCKET_STATE.UNPAIRED_IDLE,
                         state,
-                        hasSynced:
-                            window.require?.('WAWebSocketModel')?.Socket
-                                ?.hasSynced,
+                        hasSynced: Socket.hasSynced,
                     };
                 },
-                { timeout: authTimeout },
+                authTimeout,
             );
-            const needAuthentication = await needAuthHandle.jsonValue();
             console.log('[wwjs-diag] inject:authCheck', {
                 ts: Date.now(),
                 needAuthentication: needAuthentication.need,
@@ -623,24 +715,7 @@ class Client extends EventEmitter {
                             // Inject diagnostic hooks (media download, signal/crypto, receipts, etc.)
                             await this.pupPage.evaluate(InjectDiagHooks);
                             console.log(
-                                '[wwjs-diag] onAppStateHasSyncedEvent Store exposed, waiting for readiness...',
-                            );
-                            const _readyStart = Date.now();
-
-                            await this.pupPage
-                                .waitForFunction(
-                                    'typeof window.WWebJS !== "undefined"',
-                                    { timeout: 30000 },
-                                )
-                                .catch(() => {
-                                    console.log(
-                                        '[wwjs-diag] onAppStateHasSyncedEvent READY TIMEOUT after 30s',
-                                    );
-                                    throw 'ready timeout';
-                                });
-                            console.log(
                                 '[wwjs-diag] onAppStateHasSyncedEvent Store ready',
-                                { durationMs: Date.now() - _readyStart },
                             );
 
                             this.info = new ClientInfo(
