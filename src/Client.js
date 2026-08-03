@@ -41,6 +41,7 @@ const {
 } = require('./structures');
 const NoAuth = require('./authStrategies/NoAuth');
 const { exposeFunctionIfAbsent } = require('./util/Puppeteer');
+const { rafStarvationRescue } = require('./util/RafStarvation');
 
 /**
  * Starting point for interacting with the WhatsApp Web API
@@ -434,13 +435,40 @@ class Client extends EventEmitter {
                     ];
                     const settling = () => TRANSIENT.includes(Socket.state);
 
-                    if (settling()) {
-                        await waitForBbEvent(
-                            Socket,
-                            'change:state',
-                            () => !settling(),
-                            AbortSignal.timeout(timeoutMs),
-                        );
+                    // Evidence that the event-based wait is doing real work.
+                    // The pre-#151 code was waitForFunction with puppeteer's
+                    // default polling:'raf', which evaluates the predicate once
+                    // and then only from requestAnimationFrame. Counting frames
+                    // across this wait is what makes the difference observable:
+                    // zero frames over a wait that had to await means the old
+                    // code could only have hit its timeout here. Node decides
+                    // what that combination means; the page only reports facts.
+                    let rafTicks = 0;
+                    let rafHandle = null;
+                    const tick = () => {
+                        rafTicks++;
+                        rafHandle = requestAnimationFrame(tick);
+                    };
+                    rafHandle = requestAnimationFrame(tick);
+
+                    const visibilityAtStart = document.visibilityState;
+                    const stateAtStart = Socket.state;
+                    const waitStart = Date.now();
+                    let awaited = false;
+                    try {
+                        if (settling()) {
+                            awaited = true;
+                            await waitForBbEvent(
+                                Socket,
+                                'change:state',
+                                () => !settling(),
+                                AbortSignal.timeout(timeoutMs),
+                            );
+                        }
+                    } finally {
+                        // Every exit path, including the timeout rejection -
+                        // an uncancelled callback would re-arm itself forever.
+                        cancelAnimationFrame(rafHandle);
                     }
                     const state = Socket.state;
                     return {
@@ -449,6 +477,12 @@ class Client extends EventEmitter {
                             state === SOCKET_STATE.UNPAIRED_IDLE,
                         state,
                         hasSynced: Socket.hasSynced,
+                        awaited,
+                        rafTicks,
+                        waitMs: Date.now() - waitStart,
+                        stateAtStart,
+                        visibilityAtStart,
+                        visibilityAtEnd: document.visibilityState,
                     };
                 },
                 authTimeout,
@@ -458,7 +492,13 @@ class Client extends EventEmitter {
                 needAuthentication: needAuthentication.need,
                 appState: needAuthentication.state,
                 hasSynced: needAuthentication.hasSynced,
+                awaited: needAuthentication.awaited,
+                rafTicks: needAuthentication.rafTicks,
+                waitMs: needAuthentication.waitMs,
+                visibilityAtStart: needAuthentication.visibilityAtStart,
             });
+
+            this._reportRafStarvationRescue(needAuthentication);
 
             if (needAuthentication.need) {
                 const { failed, failureEventPayload, restart } =
@@ -1162,6 +1202,29 @@ class Client extends EventEmitter {
                 this._injectAbort = null;
             }
         }
+    }
+
+    /**
+     * Reports a Socket.state wait that the pre-#151 rAF-polled code could not
+     * have survived. See util/RafStarvation.js for what qualifies and why.
+     *
+     * Emitted on the `diag` channel directly rather than through the
+     * `onDiagLog` page bridge: that bridge is exposed in attachEventListeners,
+     * which runs after inject(), and in the failure mode this reports on
+     * initialize() rejects so it never runs at all. The level is `warn` because
+     * the fork reports the fact; the consumer decides how loudly to surface it.
+     *
+     * Private function
+     */
+    _reportRafStarvationRescue(result) {
+        const payload = rafStarvationRescue(result);
+        if (!payload) return;
+        this.emit(
+            'diag',
+            'warn',
+            'RAF_STARVATION_RESCUED',
+            JSON.stringify(payload),
+        );
     }
 
     /**
