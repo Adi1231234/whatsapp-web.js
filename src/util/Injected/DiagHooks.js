@@ -1529,7 +1529,11 @@ exports.InjectDiagHooks = () => {
             } catch (e) {}
         };
 
-        // 1) MASTER: every logout path funnels through Socket.logout(reason).
+        // 1) Socket.logout(reason) - the NAMED logout path. It is NOT the only
+        //    one: `handleStreamError`'s `device_removed` branch reaches
+        //    `clearCredentialsAndStoredData()` directly, so a device unlinked on
+        //    the account side produces no LOGOUT_REASON at all. Hook 1b below is
+        //    the real funnel; keep this one for the reason argument.
         window.injectToFunction({ module: 'WAWebSocketModel', function: 'Socket.logout' }, function (func, reason) {
             try {
                 var ctx = _logoutCtx();
@@ -1544,6 +1548,29 @@ exports.InjectDiagHooks = () => {
                 _logoutStorage('LOGOUT_REASON');
             } catch (e) {
                 try { safeDiagLog('info', 'LOGOUT_REASON', { captureErr: String(e), reasonRaw: String(reason) }); } catch (e2) {}
+            }
+            return func(reason);
+        });
+
+        // 1b) MASTER: Socket.clearCredentialsAndStoredData(reason) is the one
+        //     funnel EVERY credential wipe passes through - all three async
+        //     branches of Socket.logout, the stream-error 515/516 paths, the
+        //     storage-initialization-error path, and the `device_removed`
+        //     branch. Unlike hook 1 it cannot be bypassed, and unlike the
+        //     WALogger strings below it does not break when WhatsApp reworks a
+        //     message. `reason === undefined` here with no preceding
+        //     LOGOUT_REASON is the signature of a server-side device removal.
+        //     info, not debug: one line per logout, and it is the line that says
+        //     why an account died.
+        window.injectToFunction({ module: 'WAWebSocketModel', function: 'Socket.clearCredentialsAndStoredData' }, function (func, reason) {
+            try {
+                var ctx = _logoutCtx();
+                ctx.reasonRaw = (reason === undefined) ? null : reason;
+                ctx.reasonName = (reason === undefined) ? 'ABSENT_NOT_VIA_SocketLogout' : (_logoutReasonName[reason] || String(reason));
+                ctx.stack = _logoutStack();
+                safeDiagLog('info', 'CREDENTIALS_CLEARED', ctx);
+            } catch (e) {
+                try { safeDiagLog('info', 'CREDENTIALS_CLEARED', { captureErr: String(e), reasonRaw: String(reason) }); } catch (e2) {}
             }
             return func(reason);
         });
@@ -1576,9 +1603,31 @@ exports.InjectDiagHooks = () => {
         //    logout/socket/stream/sync/integrity/session topics. pic2desk only
         //    captures console.error, so these WA-internal messages (e.g.
         //    "[socket model] ...", "[integrity-challenge] ...") were invisible.
+        //
+        //    Level is per MESSAGE, not per WALogger level. _WAL_TERMINAL matches
+        //    only the lines where WhatsApp states that a session has just ended,
+        //    and those go out at info so they reach GCP with debugLogsEnabled
+        //    off (it is off fleet-wide). Everything else stays debug.
+        //    Why it matters: "stream error due to device removed, logging out"
+        //    is a WALogger.LOG, so it only ever reached GCP on the handful of
+        //    machines that happened to have debug on - on every other machine
+        //    the reason an account died had to be inferred.
+        //    Why not raise all of _WAL_KW to info: measured over 24h on the 6
+        //    debug-enabled machines, that keyword set produced 5440 rows (2817
+        //    on one machine), almost all routine syncd/usync chatter - roughly
+        //    20k rows/day fleet-wide.
+        //    _WAL_TERMINAL was measured the same way before being trusted:
+        //    replayed over 30 days of GCP across the 10 debug-enabled machines
+        //    it matches 2 rows total, one of them the device_removed line.
+        //    It deliberately does NOT match "account_temporarily_banned" -
+        //    that fires 781 times / 30 days on machines that stay connected, so
+        //    it is not terminal, and hook 3 already reports it at info via
+        //    Cmd.onTemporaryBanFromBridge. Measure any token added here the
+        //    same way before adding it.
         try {
             var _WAL = window.require('WALogger');
             var _WAL_KW = /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked/i;
+            var _WAL_TERMINAL = /logging out|logged out|device removed|fatal error|failure stanza|dirty bit|identity changed|native logout failed|forced logout/i;
             ['ERROR', 'WARN', 'LOG'].forEach(function (lvl) {
                 var orig = _WAL[lvl];
                 if (typeof orig !== 'function' || orig.__p2dWrapped) return;
@@ -1586,11 +1635,11 @@ exports.InjectDiagHooks = () => {
                     try {
                         var t = arguments[0];
                         var msg = Array.isArray(t) ? t.join('{}') : String(t);
-                        if (_WAL_KW.test(msg)) {
+                        if (_WAL_KW.test(msg) || _WAL_TERMINAL.test(msg)) {
                             var extra = [];
                             for (var i = 1; i < arguments.length && i < 5; i++) { try { extra.push(safeStr(arguments[i])); } catch (e) { extra.push('<?>'); } }
                             var st = null; try { st = window.require('WAWebSocketModel').Socket.state; } catch (e) {}
-                            safeDiagLog('debug', 'WA_INTERNAL_' + lvl, { msg: msg.slice(0, 300), args: extra, socketState: st });
+                            safeDiagLog(_WAL_TERMINAL.test(msg) ? 'info' : 'debug', 'WA_INTERNAL_' + lvl, { msg: msg.slice(0, 300), args: extra, socketState: st });
                         }
                     } catch (e) {}
                     return orig.apply(this, arguments);
