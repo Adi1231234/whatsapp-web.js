@@ -14,91 +14,115 @@
  *
  * Screen resolution stays mode-first, which is a deliberate divergence from
  * WhatsApp's displayInfo-first switch: `qr` is a separate event with its own
- * path here, so QR mode has to win over a transient OPENING/PAIRING displayInfo
- * that WhatsApp merely covers with a "connecting" popup.
+ * path here, so QR mode has to win over the CONNECTING displayInfo that a
+ * waiting QR carries the whole time (measured: mode QR / displayInfo
+ * CONNECTING / info OPENING).
  */
 exports.ExposeStreamScreenWatcher = () => {
-    const {
-        Stream,
-        StreamMode: M,
-        StreamInfo: I,
-    } = window.require('WAWebStreamModel');
-    const { Socket } = window.require('WAWebSocketModel');
-    const { SOCKET_STATE } = window.require('WAWebSocketConstants');
-
-    // inject() can run several times on the same page (framenavigated), and
-    // Backbone would happily stack a second listener on top of the first.
-    if (window.__wwjsStreamWatcher) {
-        Stream.off(
-            'change:mode change:displayInfo',
-            window.__wwjsStreamWatcher,
-        );
-        Socket.off('change:state', window.__wwjsStreamWatcher);
-    }
-
-    const resolveScreen = () => {
-        switch (Stream.mode) {
-            case M.MAIN:
-                return Stream.displayInfo === I.NORMAL
-                    ? 'CONNECTED'
-                    : 'LOADING';
-            case M.QR:
-                return 'QR';
-            case M.OFFLINE:
-                return 'DISCONNECTED';
-            case M.SYNCING:
-                return 'LOADING';
-            default:
-                return 'ERROR';
+    const req = (name) => {
+        try {
+            return window.require(name);
+        } catch (e) {
+            return null;
         }
     };
 
-    // READY is a contract: the Store is injected and ClientInfo exists. The
-    // stream can reach MAIN/NORMAL before that (it does on every reconnect of
-    // an already-authenticated session), so CONNECTED stays bottled up until
-    // the sync handler calls __wwjsMarkStoreReady. Deliberately without
-    // updating lastScreen, so the same screen still reports once unblocked.
-    let storeReady = typeof window.WWebJS !== 'undefined';
-    let lastScreen = null;
+    const install = () => {
+        const streamMod = req('WAWebStreamModel');
+        const socketMod = req('WAWebSocketModel');
+        const socketConsts = req('WAWebSocketConstants');
+        if (!streamMod || !socketMod?.Socket || !socketConsts?.SOCKET_STATE) {
+            return false;
+        }
+        const { Stream, StreamMode: M, StreamInfo: I } = streamMod;
+        const { Socket } = socketMod;
+        const { SOCKET_STATE } = socketConsts;
 
-    // Before the first sync, the stream says almost nothing trustworthy: it is
-    // constructed at SYNCING and only becomes QR inside its own initialize(),
-    // and while a QR waits to be scanned it keeps flapping through
-    // OPENING/PAIRING on every socket cycle. Reporting those as loading_screen
-    // walks an account off its Qr stage every few seconds - measured live, it
-    // re-fired the "QR shown" alert on every refresh. The one pre-sync screen
-    // that is real is the sync that follows a successful pairing, and the
-    // socket is what proves it: it only reaches CONNECTED once the phone has
-    // paired. Everything else waits for the Store, as CONNECTED already does.
-    //
-    // The socket is therefore part of the input, and it settles LAST: measured
-    // on a real scan, the stream turned SYNCING 1.1s BEFORE the socket reached
-    // CONNECTED, and nothing on the stream moved again for the next 10s. Gating
-    // on the socket without also listening to it would drop exactly the event
-    // this whole watcher exists for.
-    const preSyncScanOnly = (screen) =>
-        screen === 'LOADING' && Socket.state === SOCKET_STATE.CONNECTED;
+        // inject() can run several times on the same page (framenavigated), and
+        // Backbone would happily stack a second listener on top of the first.
+        if (window.__wwjsStreamWatcher) {
+            Stream.off(
+                'change:mode change:displayInfo',
+                window.__wwjsStreamWatcher,
+            );
+            Socket.off('change:state', window.__wwjsStreamWatcher);
+        }
 
-    const notify = () => {
-        const screen = resolveScreen();
-        if (screen === lastScreen) return;
-        if (!storeReady && !preSyncScanOnly(screen)) return;
-        lastScreen = screen;
-        window.onConnectionStateEvent(
-            screen,
-            window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
-                0,
-        );
-    };
+        const resolveScreen = () => {
+            switch (Stream.mode) {
+                case M.MAIN:
+                    return Stream.displayInfo === I.NORMAL
+                        ? 'CONNECTED'
+                        : 'LOADING';
+                case M.QR:
+                    return 'QR';
+                case M.OFFLINE:
+                    return 'DISCONNECTED';
+                case M.SYNCING:
+                    return 'LOADING';
+                default:
+                    return 'ERROR';
+            }
+        };
 
-    window.__wwjsStreamWatcher = notify;
-    window.__wwjsMarkStoreReady = () => {
-        storeReady = true;
+        // READY is a contract: the Store is injected and ClientInfo exists. The
+        // stream can reach MAIN/NORMAL before that (it does on every reconnect
+        // of an already-authenticated session), so CONNECTED stays bottled up
+        // until the sync handler calls __wwjsMarkStoreReady. Deliberately
+        // without updating lastScreen, so the same screen still reports once
+        // unblocked.
+        let storeReady = typeof window.WWebJS !== 'undefined';
+        let lastScreen = null;
+
+        // Before the first sync the stream says almost nothing trustworthy: it
+        // is constructed at SYNCING and only becomes QR inside its own
+        // initialize(), and a waiting QR keeps cycling OPENING/PAIRING on every
+        // socket attempt. Reporting those as loading_screen walks a client off
+        // its QR state every few seconds - measured live, the consumer re-fired
+        // its "QR shown" alert on every refresh. The one pre-sync screen that
+        // is real is the sync that follows a successful pairing, and the socket
+        // is what proves it: it only reaches CONNECTED once the phone paired.
+        const preSyncScanOnly = (screen) =>
+            screen === 'LOADING' && Socket.state === SOCKET_STATE.CONNECTED;
+
+        const notify = () => {
+            const screen = resolveScreen();
+            if (screen === lastScreen) return;
+            if (!storeReady && !preSyncScanOnly(screen)) return;
+            lastScreen = screen;
+            window.onConnectionStateEvent(
+                screen,
+                window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
+                    0,
+            );
+        };
+
+        window.__wwjsStreamWatcher = notify;
+        window.__wwjsMarkStoreReady = () => {
+            storeReady = true;
+            notify();
+        };
+
+        Stream.on('change:mode change:displayInfo', notify);
+        // The socket is an input to the gate above, and it settles LAST:
+        // measured on a real scan, the stream turned SYNCING 1.1s BEFORE the
+        // socket reached CONNECTED and then nothing on the stream moved for
+        // another 10s. Watching the stream alone would suppress that LOADING
+        // and never revisit it - dropping the one event this exists for.
+        Socket.on('change:state', notify);
+        // Backbone only fires on real changes, so report the current state once.
         notify();
+        return true;
     };
 
-    Stream.on('change:mode change:displayInfo', notify);
-    Socket.on('change:state', notify);
-    // Backbone only fires on real changes, so report the current state once.
-    notify();
+    if (install()) return;
+
+    // The modules were not up yet. READY is emitted through
+    // __wwjsMarkStoreReady, so it must exist either way: leaving it undefined
+    // would leave a healthy client stuck short of ready. Retry the install when
+    // the sync handler calls it, by which point the app has certainly finished
+    // loading, and hand over to the real one.
+    window.__wwjsMarkStoreReady = () => {
+        if (install()) window.__wwjsMarkStoreReady();
+    };
 };
