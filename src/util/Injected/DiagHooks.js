@@ -38,7 +38,10 @@ exports.InjectDiagHooks = () => {
 
             for (const key of path) {
                 if (!module[key]) {
-                    safeDiagLog('warn', 'HOOK_FAIL', { hook: hookId, reason: 'path not found: ' + key });
+                    safeDiagLog('warn', 'HOOK_FAIL', {
+                        hook: hookId,
+                        reason: 'path not found: ' + key,
+                    });
                     return;
                 }
                 module = module[key];
@@ -46,11 +49,14 @@ exports.InjectDiagHooks = () => {
 
             const originalFunction = module[funcName];
             if (typeof originalFunction !== 'function') {
-                safeDiagLog('warn', 'HOOK_FAIL', { hook: hookId, reason: 'not a function' });
+                safeDiagLog('warn', 'HOOK_FAIL', {
+                    hook: hookId,
+                    reason: 'not a function',
+                });
                 return;
             }
 
-            module[funcName] = function(...args) {
+            module[funcName] = function (...args) {
                 try {
                     return callback(originalFunction.bind(this), ...args);
                 } catch {
@@ -59,286 +65,406 @@ exports.InjectDiagHooks = () => {
             };
 
             safeDiagLog('debug', 'HOOK_OK', hookId);
-        } catch(e) {
-            safeDiagLog('warn', 'HOOK_FAIL', { hook: hookId, reason: e ? (e.message || String(e)) : 'unknown' });
+        } catch (e) {
+            safeDiagLog('warn', 'HOOK_FAIL', {
+                hook: hookId,
+                reason: e ? e.message || String(e) : 'unknown',
+            });
             return;
         }
     };
 
     // --- Retry receipt monitoring ---
-    window.injectToFunction({ module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' }, function(func, ...args) {
-        var params = args[0] || {};
-        if (_isStatusOrGroup(params.to)) return func.apply(this, args);
-        safeDiagLog('debug', 'RETRY_RECEIPT_SENT', {
-            externalId: params.externalId,
-            to: wid(params.to),
-            retryCount: params.retryCount,
-            retryReason: params.retryReason,
-            isPeer: params.isPeer,
-        });
-        return func.apply(this, args);
-    });
+    window.injectToFunction(
+        { module: 'WAWebSendRetryReceiptJob', function: 'sendRetryReceipt' },
+        function (func, ...args) {
+            var params = args[0] || {};
+            if (_isStatusOrGroup(params.to)) return func.apply(this, args);
+            safeDiagLog('debug', 'RETRY_RECEIPT_SENT', {
+                externalId: params.externalId,
+                to: wid(params.to),
+                retryCount: params.retryCount,
+                retryReason: params.retryReason,
+                isPeer: params.isPeer,
+            });
+            return func.apply(this, args);
+        },
+    );
 
     // --- Decrypt receipt decision logging ---
-    window.injectToFunction({ module: 'WAWebHandleMsgSendReceipt', function: 'sendReceipt' }, function(func, ...args) {
-        var receipt = args[0] || {};
-        var msgInfo = args[1];
-        var decryptResult = args[2];
-        var from = wid(receipt.senderPn) || wid(receipt.participant) || wid(receipt.senderLid) || wid(receipt.peerRecipientPn) || wid(receipt.peerRecipientLid) || wid(receipt.from);
-        // fromMe is NOT available on msgInfo (args[1] is { rawTs, type, isGroupStatus } - it has no `id`),
-        // so the old `msgInfo.id.fromMe` was always false and let own-message receipts through.
-        // Determine ownership the way WA core sendReceipt itself does: isMeAccount(receipt.author).
-        // Without this, a burst of the user's own media (synced from the phone during an offline
-        // flush) inflates receiptCount while the message/store-add counters correctly skip fromMe,
-        // producing a false SILENT_MESSAGE_LOSS alert even though every message was saved.
-        var isFromMe = false;
-        try {
-            var _meUser = window.require('WAWebUserPrefsMeUser');
-            isFromMe = !!(_meUser && receipt.author && _meUser.isMeAccount(receipt.author));
-        } catch (e) {}
-        if (!isFromMe && msgInfo && msgInfo.id && msgInfo.id.fromMe) isFromMe = true;
-        // Unified receipt filter (groups, status, newsletters, stickers, non-media, fromMe)
-        if (_shouldSkipReceipt({ from: from, to: wid(receipt.to), chatId: wid(receipt.chatId), type: receipt.type, msgType: msgInfo ? msgInfo.type : null, fromMe: isFromMe })) {
-            return func.apply(this, args);
-        }
-        var participant = wid(receipt.participant);
-        var resultStr = safeStr(decryptResult);
-        var logData = {
-            msgId: receipt.externalId,
-            from: from,
-            fromMe: isFromMe,
-            participant: participant !== from ? participant : null,
-            type: receipt.type,
-            pushname: receipt.pushname,
-            msgType: msgInfo ? msgInfo.type : null,
-            result: resultStr,
-        };
-        if (resultStr && resultStr.indexOf('BACKFILL') !== -1) {
-            logData.receiptKeys = Object.keys(receipt).sort().join(',');
-            logData.receiptRaw = safeStr(receipt);
-            logData.msgInfoRaw = safeStr(msgInfo);
-            logData.decryptResultRaw = safeStr(decryptResult);
-        }
-        // For SUCCESS after a BACKFILL - check store state to understand if processMsgs worked
-        if (resultStr && resultStr.indexOf('SUCCESS') !== -1 && receipt.externalId) {
+    window.injectToFunction(
+        { module: 'WAWebHandleMsgSendReceipt', function: 'sendReceipt' },
+        function (func, ...args) {
+            var receipt = args[0] || {};
+            var msgInfo = args[1];
+            var decryptResult = args[2];
+            var from =
+                wid(receipt.senderPn) ||
+                wid(receipt.participant) ||
+                wid(receipt.senderLid) ||
+                wid(receipt.peerRecipientPn) ||
+                wid(receipt.peerRecipientLid) ||
+                wid(receipt.from);
+            // fromMe is NOT available on msgInfo (args[1] is { rawTs, type, isGroupStatus } - it has no `id`),
+            // so the old `msgInfo.id.fromMe` was always false and let own-message receipts through.
+            // Determine ownership the way WA core sendReceipt itself does: isMeAccount(receipt.author).
+            // Without this, a burst of the user's own media (synced from the phone during an offline
+            // flush) inflates receiptCount while the message/store-add counters correctly skip fromMe,
+            // producing a false SILENT_MESSAGE_LOSS alert even though every message was saved.
+            var isFromMe = false;
             try {
-                var _Msg = window.require('WAWebCollections').Msg;
-                // Build the possible serialized IDs for this message
-                var senderLid = wid(receipt.senderLid);
-                var senderPn = wid(receipt.senderPn);
-                var extId = receipt.externalId;
-                var candidates = [];
-                if (senderLid) candidates.push('false_' + senderLid + '_' + extId);
-                if (senderPn) candidates.push('false_' + senderPn + '_' + extId);
-                // Also try the msgInfo.id if available
-                if (msgInfo && msgInfo.id && msgInfo.id._serialized) candidates.push(msgInfo.id._serialized);
-                var storeHits = {};
-                for (var ci = 0; ci < candidates.length; ci++) {
-                    var cand = candidates[ci];
-                    var found = _Msg.get(cand);
-                    if (found) {
-                        storeHits[cand] = { type: found.type, subtype: found.subtype || null };
-                    }
-                }
-                logData.storeCheckAtReceipt = {
-                    candidateIds: candidates,
-                    hits: storeHits,
-                    hitCount: Object.keys(storeHits).length,
-                };
-                if (msgInfo && msgInfo.id) {
-                    logData.msgInfoId = msgInfo.id._serialized || null;
-                    logData.msgInfoIdRemote = wid(msgInfo.id.remote) || null;
-                }
-            } catch(e) {
-                logData.storeCheckError = String(e);
+                var _meUser = window.require('WAWebUserPrefsMeUser');
+                isFromMe = !!(
+                    _meUser &&
+                    receipt.author &&
+                    _meUser.isMeAccount(receipt.author)
+                );
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
             }
-        }
-        safeDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', logData);
-        return func.apply(this, args);
-    });
+            if (!isFromMe && msgInfo && msgInfo.id && msgInfo.id.fromMe)
+                isFromMe = true;
+            // Unified receipt filter (groups, status, newsletters, stickers, non-media, fromMe)
+            if (
+                _shouldSkipReceipt({
+                    from: from,
+                    to: wid(receipt.to),
+                    chatId: wid(receipt.chatId),
+                    type: receipt.type,
+                    msgType: msgInfo ? msgInfo.type : null,
+                    fromMe: isFromMe,
+                })
+            ) {
+                return func.apply(this, args);
+            }
+            var participant = wid(receipt.participant);
+            var resultStr = safeStr(decryptResult);
+            var logData = {
+                msgId: receipt.externalId,
+                from: from,
+                fromMe: isFromMe,
+                participant: participant !== from ? participant : null,
+                type: receipt.type,
+                pushname: receipt.pushname,
+                msgType: msgInfo ? msgInfo.type : null,
+                result: resultStr,
+            };
+            if (resultStr && resultStr.indexOf('BACKFILL') !== -1) {
+                logData.receiptKeys = Object.keys(receipt).sort().join(',');
+                logData.receiptRaw = safeStr(receipt);
+                logData.msgInfoRaw = safeStr(msgInfo);
+                logData.decryptResultRaw = safeStr(decryptResult);
+            }
+            // For SUCCESS after a BACKFILL - check store state to understand if processMsgs worked
+            if (
+                resultStr &&
+                resultStr.indexOf('SUCCESS') !== -1 &&
+                receipt.externalId
+            ) {
+                try {
+                    var _Msg = window.require('WAWebCollections').Msg;
+                    // Build the possible serialized IDs for this message
+                    var senderLid = wid(receipt.senderLid);
+                    var senderPn = wid(receipt.senderPn);
+                    var extId = receipt.externalId;
+                    var candidates = [];
+                    if (senderLid)
+                        candidates.push('false_' + senderLid + '_' + extId);
+                    if (senderPn)
+                        candidates.push('false_' + senderPn + '_' + extId);
+                    // Also try the msgInfo.id if available
+                    if (msgInfo && msgInfo.id && msgInfo.id._serialized)
+                        candidates.push(msgInfo.id._serialized);
+                    var storeHits = {};
+                    for (var ci = 0; ci < candidates.length; ci++) {
+                        var cand = candidates[ci];
+                        var found = _Msg.get(cand);
+                        if (found) {
+                            storeHits[cand] = {
+                                type: found.type,
+                                subtype: found.subtype || null,
+                            };
+                        }
+                    }
+                    logData.storeCheckAtReceipt = {
+                        candidateIds: candidates,
+                        hits: storeHits,
+                        hitCount: Object.keys(storeHits).length,
+                    };
+                    if (msgInfo && msgInfo.id) {
+                        logData.msgInfoId = msgInfo.id._serialized || null;
+                        logData.msgInfoIdRemote =
+                            wid(msgInfo.id.remote) || null;
+                    }
+                } catch (e) {
+                    logData.storeCheckError = String(e);
+                }
+            }
+            safeDiagLog('debug', 'DECRYPT_RECEIPT_DECISION', logData);
+            return func.apply(this, args);
+        },
+    );
 
     // --- E2E identity change monitoring ---
-    window.injectToFunction({ module: 'WAWebHandleIdentityChange', function: 'handleE2eIdentityChange' }, function(func, ...args) {
-        var node = args[0] || {};
-        var from = wid(node.senderPn) || wid(node.participant) || wid(node.from);
-        var participant = null;
-        var arg0Keys = [];
-        try {
-            arg0Keys = Object.keys(node).sort();
-            if (!from && node.attrs) {
-                from = wid(node.attrs.from) || wid(node.attrs.participant) || wid(node.attrs.sender_pn);
-                participant = wid(node.attrs.participant) || wid(node.attrs.participant_lid);
-            }
-            if (!from && node.content && Array.isArray(node.content)) {
-                for (var i = 0; i < node.content.length; i++) {
-                    var child = node.content[i];
-                    if (child && child.attrs) {
-                        from = from || wid(child.attrs.from) || wid(child.attrs.jid);
+    window.injectToFunction(
+        {
+            module: 'WAWebHandleIdentityChange',
+            function: 'handleE2eIdentityChange',
+        },
+        function (func, ...args) {
+            var node = args[0] || {};
+            var from =
+                wid(node.senderPn) || wid(node.participant) || wid(node.from);
+            var participant = null;
+            var arg0Keys = [];
+            try {
+                arg0Keys = Object.keys(node).sort();
+                if (!from && node.attrs) {
+                    from =
+                        wid(node.attrs.from) ||
+                        wid(node.attrs.participant) ||
+                        wid(node.attrs.sender_pn);
+                    participant =
+                        wid(node.attrs.participant) ||
+                        wid(node.attrs.participant_lid);
+                }
+                if (!from && node.content && Array.isArray(node.content)) {
+                    for (var i = 0; i < node.content.length; i++) {
+                        var child = node.content[i];
+                        if (child && child.attrs) {
+                            from =
+                                from ||
+                                wid(child.attrs.from) ||
+                                wid(child.attrs.jid);
+                        }
                     }
                 }
+                if (!from && args[1]) {
+                    from =
+                        wid(args[1].from) || wid(args[1].jid) || wid(args[1]);
+                }
+                if (!participant) {
+                    participant =
+                        wid(node.participantLid) || wid(node.participant);
+                }
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
             }
-            if (!from && args[1]) {
-                from = wid(args[1].from) || wid(args[1].jid) || wid(args[1]);
+            // Filter group and status identity changes - not relevant for 1:1 diagnostics
+            if (!_isStatusOrGroup(from)) {
+                safeDiagLog('debug', 'IDENTITY_CHANGE', {
+                    from: from,
+                    participant: participant !== from ? participant : null,
+                    argCount: args.length,
+                    arg0Keys: arg0Keys.join(','),
+                    arg0Raw: safeStr(node),
+                });
             }
-            if (!participant) {
-                participant = wid(node.participantLid) || wid(node.participant);
-            }
-        } catch(e) {}
-        // Filter group and status identity changes - not relevant for 1:1 diagnostics
-        if (!_isStatusOrGroup(from)) {
-            safeDiagLog('debug', 'IDENTITY_CHANGE', {
-                from: from,
-                participant: participant !== from ? participant : null,
-                argCount: args.length,
-                arg0Keys: arg0Keys.join(','),
-                arg0Raw: safeStr(node),
-            });
-        }
-        return func.apply(this, args);
-    });
+            return func.apply(this, args);
+        },
+    );
 
     // --- Encrypted message handling ---
-    window.injectToFunction({ module: 'WAWebHandleEncMsg', function: 'handleEncMsg' }, function(func, ...args) {
-        var stanza = args[0];
-        var traceId = '';
-        var encType = '';
-        var senderJid = '';
-        try {
-            if (stanza && stanza.attrs) {
-                traceId = stanza.attrs.id || '';
-                senderJid = stanza.attrs.participant || stanza.attrs.from || '';
-            }
-            if (stanza && Array.isArray(stanza.content)) {
-                for (var i = 0; i < stanza.content.length; i++) {
-                    var child = stanza.content[i];
-                    if (child && child.tag === 'enc') {
-                        encType = child.attrs ? child.attrs.type || '' : '';
-                        break;
-                    }
+    window.injectToFunction(
+        { module: 'WAWebHandleEncMsg', function: 'handleEncMsg' },
+        function (func, ...args) {
+            var stanza = args[0];
+            var traceId = '';
+            var encType = '';
+            var senderJid = '';
+            try {
+                if (stanza && stanza.attrs) {
+                    traceId = stanza.attrs.id || '';
+                    senderJid =
+                        stanza.attrs.participant || stanza.attrs.from || '';
                 }
-            }
-        } catch(e) {}
-        var skipDiag = _isStatusOrGroup(senderJid) || _isStatusOrGroup(stanza && stanza.attrs && stanza.attrs.from);
-        var startTime = Date.now();
-        var result = func.apply(this, args);
-        if (result && typeof result.then === 'function') {
-            return result.then(function(res) {
-                if (!skipDiag) {
-                    var resultInfo = {
-                        traceId: traceId,
-                        sender: senderJid,
-                        encType: encType,
-                        elapsed: Date.now() - startTime,
-                    };
-                    try {
-                        if (res !== undefined && res !== null) {
-                            resultInfo.resultType = typeof res;
-                            if (typeof res === 'object') {
-                                resultInfo.resultKeys = Object.keys(res).slice(0, 15).join(',');
-                                if (res.type) resultInfo.msgType = res.type;
-                                if (res.id) resultInfo.msgId = typeof res.id === 'object' ? res.id._serialized || res.id.id : String(res.id);
-                                if (res.body !== undefined) resultInfo.hasBody = !!res.body;
-                                if (res.isNewMsg !== undefined) resultInfo.isNewMsg = res.isNewMsg;
-                            }
+                if (stanza && Array.isArray(stanza.content)) {
+                    for (var i = 0; i < stanza.content.length; i++) {
+                        var child = stanza.content[i];
+                        if (child && child.tag === 'enc') {
+                            encType = child.attrs ? child.attrs.type || '' : '';
+                            break;
                         }
-                    } catch(e2) {}
-                    safeDiagLog('debug', 'ENC_MSG_RESULT', resultInfo);
-                }
-                return res;
-            }).catch(function(err) {
-                if (!skipDiag) {
-                    safeDiagLog('warn', 'ENC_MSG_FAIL', {
-                        traceId: traceId,
-                        sender: senderJid,
-                        encType: encType,
-                        elapsed: Date.now() - startTime,
-                        error: err ? (err.message || String(err)) : 'unknown',
-                        errorName: err ? err.name : null,
-                    });
-                }
-                throw err;
-            });
-        }
-        return result;
-    });
-
-    // --- Peer message handling (PDO, history sync) ---
-    window.injectToFunction({ module: 'WAWebHandlePeerMsg', function: 'handlePeerMsg' }, function(func, ...args) {
-        var peerMsg = args[0];
-        var msgType = 'unknown';
-        var details = {};
-        try {
-            if (peerMsg) {
-                if (peerMsg.peerDataOperationRequestMessage) {
-                    msgType = 'PDO_REQUEST';
-                    var req = peerMsg.peerDataOperationRequestMessage;
-                    details.requestType = req.peerDataOperationRequestType;
-                    if (req.placeholderMessageResendRequest && req.placeholderMessageResendRequest.length > 0) {
-                        details.resendMsgIds = req.placeholderMessageResendRequest.map(function(r) {
-                            return r.messageKey ? r.messageKey.id : null;
-                        });
                     }
                 }
-                if (peerMsg.peerDataOperationRequestResponseMessage) {
-                    msgType = 'PDO_RESPONSE';
-                    var resp = peerMsg.peerDataOperationRequestResponseMessage;
-                    details.requestType = resp.peerDataOperationRequestType;
-                    details.resultCount = resp.peerDataOperationResult ? resp.peerDataOperationResult.length : 0;
-                    if (resp.peerDataOperationResult) {
-                        details.results = resp.peerDataOperationResult.map(function(r) {
-                            return {
-                                hasPlaceholder: !!r.placeholderMessageResendResponse,
-                                hasMedia: !!r.mediaUploadResult,
-                            };
-                        });
-                    }
-                }
-                if (peerMsg.historySyncNotification) {
-                    msgType = 'HISTORY_SYNC';
-                    details.syncType = peerMsg.historySyncNotification.syncType;
-                    details.progress = peerMsg.historySyncNotification.progress;
-                }
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
             }
-        } catch(e) { details.parseError = String(e); }
-        // Peer messages are self-to-self protocol messages (PDO, history sync) - skip to reduce noise (fromMe equivalent)
-        // Only log errors for debugging protocol failures
-        var result = func.apply(this, args);
-        if (result && typeof result.then === 'function') {
-            return result.catch(function(err) {
-                safeDiagLog('debug', 'PEER_MSG_ERROR', {
-                    msgType: msgType,
-                    error: err ? (err.message || String(err)) : 'unknown',
-                });
-                throw err;
-            });
-        }
-        return result;
-    });
-
-    // --- PDO request sending ---
-    try {
-        window.injectToFunction({ module: 'WAWebSendNonMessageDataRequest', function: 'sendPeerDataOperationRequest' }, function(func, ...args) {
-            var requestType = args[0];
-            safeDiagLog('debug', 'PDO_REQUEST_SENT', {
-                requestType: requestType,
-                params: safeStr(args[1]),
-            });
+            var skipDiag =
+                _isStatusOrGroup(senderJid) ||
+                _isStatusOrGroup(stanza && stanza.attrs && stanza.attrs.from);
+            var startTime = Date.now();
             var result = func.apply(this, args);
             if (result && typeof result.then === 'function') {
-                return result.then(function(res) {
-                    safeDiagLog('debug', 'PDO_REQUEST_ACK', { requestType: requestType });
-                    return res;
-                }).catch(function(err) {
-                    safeDiagLog('warn', 'PDO_REQUEST_FAIL', {
-                        requestType: requestType,
-                        error: err ? (err.message || String(err)) : 'unknown',
+                return result
+                    .then(function (res) {
+                        if (!skipDiag) {
+                            var resultInfo = {
+                                traceId: traceId,
+                                sender: senderJid,
+                                encType: encType,
+                                elapsed: Date.now() - startTime,
+                            };
+                            try {
+                                if (res !== undefined && res !== null) {
+                                    resultInfo.resultType = typeof res;
+                                    if (typeof res === 'object') {
+                                        resultInfo.resultKeys = Object.keys(res)
+                                            .slice(0, 15)
+                                            .join(',');
+                                        if (res.type)
+                                            resultInfo.msgType = res.type;
+                                        if (res.id)
+                                            resultInfo.msgId =
+                                                typeof res.id === 'object'
+                                                    ? res.id._serialized ||
+                                                      res.id.id
+                                                    : String(res.id);
+                                        if (res.body !== undefined)
+                                            resultInfo.hasBody = !!res.body;
+                                        if (res.isNewMsg !== undefined)
+                                            resultInfo.isNewMsg = res.isNewMsg;
+                                    }
+                                }
+                            } catch (e2) {
+                                // best-effort diagnostic: never let it break the caller
+                            }
+                            safeDiagLog('debug', 'ENC_MSG_RESULT', resultInfo);
+                        }
+                        return res;
+                    })
+                    .catch(function (err) {
+                        if (!skipDiag) {
+                            safeDiagLog('warn', 'ENC_MSG_FAIL', {
+                                traceId: traceId,
+                                sender: senderJid,
+                                encType: encType,
+                                elapsed: Date.now() - startTime,
+                                error: err
+                                    ? err.message || String(err)
+                                    : 'unknown',
+                                errorName: err ? err.name : null,
+                            });
+                        }
+                        throw err;
+                    });
+            }
+            return result;
+        },
+    );
+
+    // --- Peer message handling (PDO, history sync) ---
+    window.injectToFunction(
+        { module: 'WAWebHandlePeerMsg', function: 'handlePeerMsg' },
+        function (func, ...args) {
+            var peerMsg = args[0];
+            var msgType = 'unknown';
+            var details = {};
+            try {
+                if (peerMsg) {
+                    if (peerMsg.peerDataOperationRequestMessage) {
+                        msgType = 'PDO_REQUEST';
+                        var req = peerMsg.peerDataOperationRequestMessage;
+                        details.requestType = req.peerDataOperationRequestType;
+                        if (
+                            req.placeholderMessageResendRequest &&
+                            req.placeholderMessageResendRequest.length > 0
+                        ) {
+                            details.resendMsgIds =
+                                req.placeholderMessageResendRequest.map(
+                                    function (r) {
+                                        return r.messageKey
+                                            ? r.messageKey.id
+                                            : null;
+                                    },
+                                );
+                        }
+                    }
+                    if (peerMsg.peerDataOperationRequestResponseMessage) {
+                        msgType = 'PDO_RESPONSE';
+                        var resp =
+                            peerMsg.peerDataOperationRequestResponseMessage;
+                        details.requestType = resp.peerDataOperationRequestType;
+                        details.resultCount = resp.peerDataOperationResult
+                            ? resp.peerDataOperationResult.length
+                            : 0;
+                        if (resp.peerDataOperationResult) {
+                            details.results = resp.peerDataOperationResult.map(
+                                function (r) {
+                                    return {
+                                        hasPlaceholder:
+                                            !!r.placeholderMessageResendResponse,
+                                        hasMedia: !!r.mediaUploadResult,
+                                    };
+                                },
+                            );
+                        }
+                    }
+                    if (peerMsg.historySyncNotification) {
+                        msgType = 'HISTORY_SYNC';
+                        details.syncType =
+                            peerMsg.historySyncNotification.syncType;
+                        details.progress =
+                            peerMsg.historySyncNotification.progress;
+                    }
+                }
+            } catch (e) {
+                details.parseError = String(e);
+            }
+            // Peer messages are self-to-self protocol messages (PDO, history sync) - skip to reduce noise (fromMe equivalent)
+            // Only log errors for debugging protocol failures
+            var result = func.apply(this, args);
+            if (result && typeof result.then === 'function') {
+                return result.catch(function (err) {
+                    safeDiagLog('debug', 'PEER_MSG_ERROR', {
+                        msgType: msgType,
+                        error: err ? err.message || String(err) : 'unknown',
                     });
                     throw err;
                 });
             }
             return result;
-        });
-    } catch(e) {}
+        },
+    );
+
+    // --- PDO request sending ---
+    try {
+        window.injectToFunction(
+            {
+                module: 'WAWebSendNonMessageDataRequest',
+                function: 'sendPeerDataOperationRequest',
+            },
+            function (func, ...args) {
+                var requestType = args[0];
+                safeDiagLog('debug', 'PDO_REQUEST_SENT', {
+                    requestType: requestType,
+                    params: safeStr(args[1]),
+                });
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result
+                        .then(function (res) {
+                            safeDiagLog('debug', 'PDO_REQUEST_ACK', {
+                                requestType: requestType,
+                            });
+                            return res;
+                        })
+                        .catch(function (err) {
+                            safeDiagLog('warn', 'PDO_REQUEST_FAIL', {
+                                requestType: requestType,
+                                error: err
+                                    ? err.message || String(err)
+                                    : 'unknown',
+                            });
+                            throw err;
+                        });
+                }
+                return result;
+            },
+        );
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- Signal crypto hooks (decrypt/encrypt) ---
     // Raw crypto args: for Cipher.decryptGroupSignalProto they are
@@ -349,19 +475,34 @@ exports.InjectDiagHooks = () => {
         try {
             if (w == null) return null;
             if (typeof w === 'string') return w.length <= 96 ? w : null;
-            if (typeof w.user === 'string' || typeof w.device === 'number' || w._serialized) {
+            if (
+                typeof w.user === 'string' ||
+                typeof w.device === 'number' ||
+                w._serialized
+            ) {
                 return {
                     user: w.user,
                     device: w.device,
                     server: w.server,
-                    isLid: typeof w.isLid === 'function' ? w.isLid() : undefined,
-                    ser: w._serialized || (typeof w.toString === 'function' ? String(w.toString()) : null),
+                    isLid:
+                        typeof w.isLid === 'function' ? w.isLid() : undefined,
+                    ser:
+                        w._serialized ||
+                        (typeof w.toString === 'function'
+                            ? String(w.toString())
+                            : null),
                 };
             }
-        } catch (e) {}
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
         return null;
     }
-    var signalFns = ['Cipher.decryptSignalProto', 'Cipher.decryptGroupSignalProto', 'Cipher.encryptSignalProto'];
+    var signalFns = [
+        'Cipher.decryptSignalProto',
+        'Cipher.decryptGroupSignalProto',
+        'Cipher.encryptSignalProto',
+    ];
 
     // --- Sender-key distribution (root-cause signal for errLoadSenderKeySession) ---
     // WAWebCryptoLibrary.processSenderKeyDistributionMsg is the single choke point
@@ -380,55 +521,93 @@ exports.InjectDiagHooks = () => {
     function tryInstallSkdmHook() {
         if (__skdmInstalled) return;
         var mod = null;
-        try { mod = window.require('WAWebCryptoLibrary'); } catch (e) {}
-        if (!mod || typeof mod.processSenderKeyDistributionMsg !== 'function') return;
+        try {
+            mod = window.require('WAWebCryptoLibrary');
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
+        if (!mod || typeof mod.processSenderKeyDistributionMsg !== 'function')
+            return;
         __skdmInstalled = true;
-        window.injectToFunction({ module: 'WAWebCryptoLibrary', function: 'processSenderKeyDistributionMsg' }, function(func, ...args) {
-            var chat = signalWidInfo(args[0]);
-            var sender = signalWidInfo(args[1]);
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(res) {
-                    safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
-                    return res;
-                }).catch(function(err) {
-                    safeDiagLog('warn', 'SKDM_PROCESS_ERROR', {
-                        chat: chat, sender: sender, error: err ? (err.message || String(err)) : 'unknown',
-                    });
-                    throw err;
+        window.injectToFunction(
+            {
+                module: 'WAWebCryptoLibrary',
+                function: 'processSenderKeyDistributionMsg',
+            },
+            function (func, ...args) {
+                var chat = signalWidInfo(args[0]);
+                var sender = signalWidInfo(args[1]);
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result
+                        .then(function (res) {
+                            safeDiagLog('info', 'SKDM_PROCESSED', {
+                                chat: chat,
+                                sender: sender,
+                            });
+                            return res;
+                        })
+                        .catch(function (err) {
+                            safeDiagLog('warn', 'SKDM_PROCESS_ERROR', {
+                                chat: chat,
+                                sender: sender,
+                                error: err
+                                    ? err.message || String(err)
+                                    : 'unknown',
+                            });
+                            throw err;
+                        });
+                }
+                safeDiagLog('info', 'SKDM_PROCESSED', {
+                    chat: chat,
+                    sender: sender,
                 });
-            }
-            safeDiagLog('info', 'SKDM_PROCESSED', { chat: chat, sender: sender });
-            return result;
-        });
+                return result;
+            },
+        );
     }
 
     for (var si = 0; si < signalFns.length; si++) {
         try {
-            (function(fnName) {
-                window.injectToFunction({ module: 'WAWebSignal', function: fnName }, function(func, ...args) {
-                    tryInstallSkdmHook();
-                    var result;
-                    try { result = func.apply(this, args); } catch(err) {
-                        safeDiagLog('warn', 'SIGNAL_DECRYPT_ERROR', {
-                            op: fnName, error: err ? (err.message || String(err)) : 'unknown',
-                            chat: signalWidInfo(args[0]), sender: signalWidInfo(args[1]),
-                        });
-                        throw err;
-                    }
-                    if (result && typeof result.then === 'function') {
-                        return result.catch(function(err) {
+            (function (fnName) {
+                window.injectToFunction(
+                    { module: 'WAWebSignal', function: fnName },
+                    function (func, ...args) {
+                        tryInstallSkdmHook();
+                        var result;
+                        try {
+                            result = func.apply(this, args);
+                        } catch (err) {
                             safeDiagLog('warn', 'SIGNAL_DECRYPT_ERROR', {
-                                op: fnName, error: err ? (err.message || String(err)) : 'unknown',
-                                chat: signalWidInfo(args[0]), sender: signalWidInfo(args[1]),
+                                op: fnName,
+                                error: err
+                                    ? err.message || String(err)
+                                    : 'unknown',
+                                chat: signalWidInfo(args[0]),
+                                sender: signalWidInfo(args[1]),
                             });
                             throw err;
-                        });
-                    }
-                    return result;
-                });
+                        }
+                        if (result && typeof result.then === 'function') {
+                            return result.catch(function (err) {
+                                safeDiagLog('warn', 'SIGNAL_DECRYPT_ERROR', {
+                                    op: fnName,
+                                    error: err
+                                        ? err.message || String(err)
+                                        : 'unknown',
+                                    chat: signalWidInfo(args[0]),
+                                    sender: signalWidInfo(args[1]),
+                                });
+                                throw err;
+                            });
+                        }
+                        return result;
+                    },
+                );
             })(signalFns[si]);
-        } catch(e) {}
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
     }
     // In case WAWebCryptoLibrary is already loaded (e.g. later re-injection), try now.
     tryInstallSkdmHook();
@@ -437,217 +616,352 @@ exports.InjectDiagHooks = () => {
     var sessionFns = ['ensureE2ESessions'];
     for (var ei = 0; ei < sessionFns.length; ei++) {
         try {
-            (function(fnName) {
-                window.injectToFunction({ module: 'WAWebManageE2ESessionsJob', function: fnName }, function(func, ...args) {
-                    var jid = '';
-                    try {
-                        if (typeof args[0] === 'string') jid = args[0];
-                        else if (args[0] && args[0]._serialized) jid = args[0]._serialized;
-                        else if (args[0] && args[0].jid) jid = args[0].jid;
-                    } catch(e) {}
-                    if (!_isStatusOrGroup(jid)) {
-                        safeDiagLog('debug', 'E2E_SESSION_OP', { op: fnName, jid: jid });
-                    }
-                    var result = func.apply(this, args);
-                    if (result && typeof result.then === 'function') {
-                        return result.catch(function(err) {
-                            if (!_isStatusOrGroup(jid)) {
-                                safeDiagLog('debug', 'E2E_SESSION_ERROR', {
-                                    op: fnName, jid: jid, error: err ? (err.message || String(err)) : 'unknown',
-                                });
-                            }
-                            throw err;
-                        });
-                    }
-                    return result;
-                });
+            (function (fnName) {
+                window.injectToFunction(
+                    { module: 'WAWebManageE2ESessionsJob', function: fnName },
+                    function (func, ...args) {
+                        var jid = '';
+                        try {
+                            if (typeof args[0] === 'string') jid = args[0];
+                            else if (args[0] && args[0]._serialized)
+                                jid = args[0]._serialized;
+                            else if (args[0] && args[0].jid) jid = args[0].jid;
+                        } catch (e) {
+                            // best-effort diagnostic: never let it break the caller
+                        }
+                        if (!_isStatusOrGroup(jid)) {
+                            safeDiagLog('debug', 'E2E_SESSION_OP', {
+                                op: fnName,
+                                jid: jid,
+                            });
+                        }
+                        var result = func.apply(this, args);
+                        if (result && typeof result.then === 'function') {
+                            return result.catch(function (err) {
+                                if (!_isStatusOrGroup(jid)) {
+                                    safeDiagLog('debug', 'E2E_SESSION_ERROR', {
+                                        op: fnName,
+                                        jid: jid,
+                                        error: err
+                                            ? err.message || String(err)
+                                            : 'unknown',
+                                    });
+                                }
+                                throw err;
+                            });
+                        }
+                        return result;
+                    },
+                );
             })(sessionFns[ei]);
-        } catch(e) {}
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
     }
 
     // --- Signal session lifecycle (create/delete) for debugging session corruption ---
-    var signalSessionFns = ['createSignalSession', 'deleteRemoteSession', 'deleteRemoteInfo'];
+    var signalSessionFns = [
+        'createSignalSession',
+        'deleteRemoteSession',
+        'deleteRemoteInfo',
+    ];
     for (var ssi = 0; ssi < signalSessionFns.length; ssi++) {
         try {
-            (function(fnName) {
-                window.injectToFunction({ module: 'WAWebSignal', function: 'Session.' + fnName }, function(func, ...args) {
-                    var jid = '';
-                    try {
-                        if (typeof args[0] === 'string') jid = args[0];
-                        else if (args[0] && args[0]._serialized) jid = args[0]._serialized;
-                        else if (args[0] && args[0].user) jid = args[0].user;
-                    } catch(e) {}
-                    if (!_isStatusOrGroup(jid)) {
-                        safeDiagLog('debug', 'SIGNAL_SESSION_OP', { op: fnName, jid: wid(args[0]) || jid });
-                    }
-                    var result = func.apply(this, args);
-                    if (result && typeof result.then === 'function') {
-                        return result.catch(function(err) {
-                            if (!_isStatusOrGroup(jid)) {
-                                safeDiagLog('debug', 'SIGNAL_SESSION_ERROR', {
-                                    op: fnName, jid: wid(args[0]) || jid, error: err ? (err.message || String(err)) : 'unknown',
-                                });
-                            }
-                            throw err;
-                        });
-                    }
-                    return result;
-                });
+            (function (fnName) {
+                window.injectToFunction(
+                    { module: 'WAWebSignal', function: 'Session.' + fnName },
+                    function (func, ...args) {
+                        var jid = '';
+                        try {
+                            if (typeof args[0] === 'string') jid = args[0];
+                            else if (args[0] && args[0]._serialized)
+                                jid = args[0]._serialized;
+                            else if (args[0] && args[0].user)
+                                jid = args[0].user;
+                        } catch (e) {
+                            // best-effort diagnostic: never let it break the caller
+                        }
+                        if (!_isStatusOrGroup(jid)) {
+                            safeDiagLog('debug', 'SIGNAL_SESSION_OP', {
+                                op: fnName,
+                                jid: wid(args[0]) || jid,
+                            });
+                        }
+                        var result = func.apply(this, args);
+                        if (result && typeof result.then === 'function') {
+                            return result.catch(function (err) {
+                                if (!_isStatusOrGroup(jid)) {
+                                    safeDiagLog(
+                                        'debug',
+                                        'SIGNAL_SESSION_ERROR',
+                                        {
+                                            op: fnName,
+                                            jid: wid(args[0]) || jid,
+                                            error: err
+                                                ? err.message || String(err)
+                                                : 'unknown',
+                                        },
+                                    );
+                                }
+                                throw err;
+                            });
+                        }
+                        return result;
+                    },
+                );
             })(signalSessionFns[ssi]);
-        } catch(e) {}
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
     }
 
     // --- Sender key message handling ---
     try {
-        window.injectToFunction({ module: 'WAWebSenderKeyMsgHandler', function: 'handleSenderKeyMsg' }, function(func, ...args) {
-            var stanza = args[0];
-            var traceId = stanza && stanza.attrs ? stanza.attrs.id : '';
-            var sender = stanza && stanza.attrs ? (stanza.attrs.participant || stanza.attrs.from || '') : '';
-            // Sender keys are used exclusively for group encryption - filter group senders
-            var fromJid = stanza && stanza.attrs ? (stanza.attrs.from || '') : '';
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.catch(function(err) {
-                    if (!_isStatusOrGroup(fromJid)) {
-                        safeDiagLog('warn', 'SENDER_KEY_FAIL', {
-                            traceId: traceId, sender: sender,
-                            error: err ? (err.message || String(err)) : 'unknown',
-                        });
-                    }
-                    throw err;
-                });
-            }
-            return result;
-        });
-    } catch(e) {}
+        window.injectToFunction(
+            {
+                module: 'WAWebSenderKeyMsgHandler',
+                function: 'handleSenderKeyMsg',
+            },
+            function (func, ...args) {
+                var stanza = args[0];
+                var traceId = stanza && stanza.attrs ? stanza.attrs.id : '';
+                var sender =
+                    stanza && stanza.attrs
+                        ? stanza.attrs.participant || stanza.attrs.from || ''
+                        : '';
+                // Sender keys are used exclusively for group encryption - filter group senders
+                var fromJid =
+                    stanza && stanza.attrs ? stanza.attrs.from || '' : '';
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result.catch(function (err) {
+                        if (!_isStatusOrGroup(fromJid)) {
+                            safeDiagLog('warn', 'SENDER_KEY_FAIL', {
+                                traceId: traceId,
+                                sender: sender,
+                                error: err
+                                    ? err.message || String(err)
+                                    : 'unknown',
+                            });
+                        }
+                        throw err;
+                    });
+                }
+                return result;
+            },
+        );
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- Media download monitoring (downloadMediaBlob) ---
     // NOTE: WAWebMediaDownloadUtils was removed in WAWeb 2.3000+. downloadMediaBlob is inlined.
     //       The DL_DECRYPT hook on downloadAndMaybeDecrypt covers the main download path.
     //       Try WAWebMediaDownloadUtils first, fall back to WAWebMedia.downloadMsg if available.
     try {
-        var _mediaDownloadMod = window.require('WAWebMediaDownloadUtils') ? 'WAWebMediaDownloadUtils' : null;
+        var _mediaDownloadMod = window.require('WAWebMediaDownloadUtils')
+            ? 'WAWebMediaDownloadUtils'
+            : null;
         if (_mediaDownloadMod) {
-            window.injectToFunction({ module: _mediaDownloadMod, function: 'downloadMediaBlob' }, function(func, ...args) {
-                var startTime = Date.now();
-                var url = '';
-                try { url = typeof args[0] === 'string' ? args[0].slice(0, 100) : (args[0] && args[0].directPath ? args[0].directPath.slice(0, 100) : ''); } catch(e) {}
-                var result = func.apply(this, args);
-                if (result && typeof result.then === 'function') {
-                    return result.then(function(res) {
-                        safeDiagLog('debug', 'MEDIA_DOWNLOAD_OK', {
-                            elapsed: Date.now() - startTime,
-                            url: url,
-                            size: res ? (res.byteLength || res.size || res.length || 0) : 0,
-                        });
-                        return res;
-                    }).catch(function(err) {
-                        safeDiagLog('debug', 'MEDIA_DOWNLOAD_FAIL', {
-                            elapsed: Date.now() - startTime,
-                            url: url,
-                            error: err ? (err.message || String(err)) : 'unknown',
-                        });
-                        throw err;
-                    });
-                }
-                return result;
-            });
+            window.injectToFunction(
+                { module: _mediaDownloadMod, function: 'downloadMediaBlob' },
+                function (func, ...args) {
+                    var startTime = Date.now();
+                    var url = '';
+                    try {
+                        url =
+                            typeof args[0] === 'string'
+                                ? args[0].slice(0, 100)
+                                : args[0] && args[0].directPath
+                                  ? args[0].directPath.slice(0, 100)
+                                  : '';
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
+                    var result = func.apply(this, args);
+                    if (result && typeof result.then === 'function') {
+                        return result
+                            .then(function (res) {
+                                safeDiagLog('debug', 'MEDIA_DOWNLOAD_OK', {
+                                    elapsed: Date.now() - startTime,
+                                    url: url,
+                                    size: res
+                                        ? res.byteLength ||
+                                          res.size ||
+                                          res.length ||
+                                          0
+                                        : 0,
+                                });
+                                return res;
+                            })
+                            .catch(function (err) {
+                                safeDiagLog('debug', 'MEDIA_DOWNLOAD_FAIL', {
+                                    elapsed: Date.now() - startTime,
+                                    url: url,
+                                    error: err
+                                        ? err.message || String(err)
+                                        : 'unknown',
+                                });
+                                throw err;
+                            });
+                    }
+                    return result;
+                },
+            );
 
-            window.injectToFunction({ module: _mediaDownloadMod, function: 'downloadMedia' }, function(func, ...args) {
-                var startTime = Date.now();
-                var directPath = '';
-                try { directPath = (args[0] && args[0].directPath) ? args[0].directPath.slice(0, 100) : ''; } catch(e) {}
-                var result = func.apply(this, args);
-                if (result && typeof result.then === 'function') {
-                    return result.then(function(res) {
-                        safeDiagLog('debug', 'MEDIA_DOWNLOAD2_OK', {
-                            elapsed: Date.now() - startTime, directPath: directPath,
-                        });
-                        return res;
-                    }).catch(function(err) {
-                        safeDiagLog('debug', 'MEDIA_DOWNLOAD2_FAIL', {
-                            elapsed: Date.now() - startTime, directPath: directPath,
-                            error: err ? (err.message || String(err)) : 'unknown',
-                        });
-                        throw err;
-                    });
-                }
-                return result;
-            });
+            window.injectToFunction(
+                { module: _mediaDownloadMod, function: 'downloadMedia' },
+                function (func, ...args) {
+                    var startTime = Date.now();
+                    var directPath = '';
+                    try {
+                        directPath =
+                            args[0] && args[0].directPath
+                                ? args[0].directPath.slice(0, 100)
+                                : '';
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
+                    var result = func.apply(this, args);
+                    if (result && typeof result.then === 'function') {
+                        return result
+                            .then(function (res) {
+                                safeDiagLog('debug', 'MEDIA_DOWNLOAD2_OK', {
+                                    elapsed: Date.now() - startTime,
+                                    directPath: directPath,
+                                });
+                                return res;
+                            })
+                            .catch(function (err) {
+                                safeDiagLog('debug', 'MEDIA_DOWNLOAD2_FAIL', {
+                                    elapsed: Date.now() - startTime,
+                                    directPath: directPath,
+                                    error: err
+                                        ? err.message || String(err)
+                                        : 'unknown',
+                                });
+                                throw err;
+                            });
+                    }
+                    return result;
+                },
+            );
         } else {
             // WAWebMediaDownloadUtils removed in 2.3000+, covered by DL_DECRYPT
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- PreKey get/upload ---
     // NOTE: WAWebPreKeyUtils was removed in WAWeb 2.3000+. getOrGenPreKeys is inlined.
     //       uploadPreKeys moved to WAWebUploadPreKeysJob.
     try {
-        var _preKeyGetMod = window.require('WAWebPreKeyUtils') ? 'WAWebPreKeyUtils' : null;
+        var _preKeyGetMod = window.require('WAWebPreKeyUtils')
+            ? 'WAWebPreKeyUtils'
+            : null;
         if (_preKeyGetMod) {
-            window.injectToFunction({ module: _preKeyGetMod, function: 'getOrGenPreKeys' }, function(func, ...args) {
-                var result = func.apply(this, args);
-                if (result && typeof result.then === 'function') {
-                    return result.then(function(res) {
-                        var count = Array.isArray(res) ? res.length : (res ? 1 : 0);
-                        safeDiagLog('debug', 'PREKEY_GET', { count: count });
-                        return res;
-                    }).catch(function(err) {
-                        safeDiagLog('warn', 'PREKEY_GET_FAIL', {
-                            error: err ? (err.message || String(err)) : 'unknown',
-                        });
-                        throw err;
-                    });
-                }
-                return result;
-            });
+            window.injectToFunction(
+                { module: _preKeyGetMod, function: 'getOrGenPreKeys' },
+                function (func, ...args) {
+                    var result = func.apply(this, args);
+                    if (result && typeof result.then === 'function') {
+                        return result
+                            .then(function (res) {
+                                var count = Array.isArray(res)
+                                    ? res.length
+                                    : res
+                                      ? 1
+                                      : 0;
+                                safeDiagLog('debug', 'PREKEY_GET', {
+                                    count: count,
+                                });
+                                return res;
+                            })
+                            .catch(function (err) {
+                                safeDiagLog('warn', 'PREKEY_GET_FAIL', {
+                                    error: err
+                                        ? err.message || String(err)
+                                        : 'unknown',
+                                });
+                                throw err;
+                            });
+                    }
+                    return result;
+                },
+            );
         } else {
             // WAWebPreKeyUtils.getOrGenPreKeys inlined in 2.3000+
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // uploadPreKeys: try WAWebUploadPreKeysJob (2.3000+), fall back to WAWebPreKeyUtils
     try {
-        var _preKeyUploadMod = window.require('WAWebUploadPreKeysJob') ? 'WAWebUploadPreKeysJob'
-            : window.require('WAWebPreKeyUtils') ? 'WAWebPreKeyUtils' : null;
+        var _preKeyUploadMod = window.require('WAWebUploadPreKeysJob')
+            ? 'WAWebUploadPreKeysJob'
+            : window.require('WAWebPreKeyUtils')
+              ? 'WAWebPreKeyUtils'
+              : null;
         if (_preKeyUploadMod) {
-            window.injectToFunction({ module: _preKeyUploadMod, function: 'uploadPreKeys' }, function(func, ...args) {
-                safeDiagLog('debug', 'PREKEY_UPLOAD', { count: Array.isArray(args[0]) ? args[0].length : 0 });
-                var result = func.apply(this, args);
-                if (result && typeof result.then === 'function') {
-                    return result.catch(function(err) {
-                        safeDiagLog('warn', 'PREKEY_UPLOAD_FAIL', {
-                            error: err ? (err.message || String(err)) : 'unknown',
-                        });
-                        throw err;
+            window.injectToFunction(
+                { module: _preKeyUploadMod, function: 'uploadPreKeys' },
+                function (func, ...args) {
+                    safeDiagLog('debug', 'PREKEY_UPLOAD', {
+                        count: Array.isArray(args[0]) ? args[0].length : 0,
                     });
-                }
-                return result;
-            });
+                    var result = func.apply(this, args);
+                    if (result && typeof result.then === 'function') {
+                        return result.catch(function (err) {
+                            safeDiagLog('warn', 'PREKEY_UPLOAD_FAIL', {
+                                error: err
+                                    ? err.message || String(err)
+                                    : 'unknown',
+                            });
+                            throw err;
+                        });
+                    }
+                    return result;
+                },
+            );
         } else {
             // uploadPreKeys module not available
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- Session deletion ---
     // NOTE: WAWebDeleteSessionJob was removed in WAWeb 2.3000+.
     //       deleteRemoteSession is still available via WAWebSignal.Session (hooked above).
     //       Try WAWebDeleteSessionJob first, then fall back to WAWebSignal.Session hook.
     try {
-        var _deleteSessionMod = window.require('WAWebDeleteSessionJob') ? 'WAWebDeleteSessionJob' : null;
+        var _deleteSessionMod = window.require('WAWebDeleteSessionJob')
+            ? 'WAWebDeleteSessionJob'
+            : null;
         if (_deleteSessionMod) {
-            window.injectToFunction({ module: _deleteSessionMod, function: 'deleteRemoteSession' }, function(func, ...args) {
-                var jid = '';
-                try { jid = wid(args[0]) || safeStr(args[0]); } catch(e) {}
-                if (!_isStatusOrGroup(jid)) {
-                    safeDiagLog('warn', 'SESSION_DELETE', { jid: jid });
-                }
-                return func.apply(this, args);
-            });
+            window.injectToFunction(
+                { module: _deleteSessionMod, function: 'deleteRemoteSession' },
+                function (func, ...args) {
+                    var jid = '';
+                    try {
+                        jid = wid(args[0]) || safeStr(args[0]);
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
+                    if (!_isStatusOrGroup(jid)) {
+                        safeDiagLog('warn', 'SESSION_DELETE', { jid: jid });
+                    }
+                    return func.apply(this, args);
+                },
+            );
         } else {
             // WAWebDeleteSessionJob removed in 2.3000+, covered by WAWebSignal.Session hooks
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- Socket close monitoring ---
     // NOTE: WAWebSocketConnectModel and onSocketClose were removed in WAWeb 2.3000+.
@@ -661,227 +975,384 @@ exports.InjectDiagHooks = () => {
             try {
                 var _connMod = window.require(connMods[ci]);
                 if (_connMod && typeof _connMod.onSocketClose === 'function') {
-                    window.injectToFunction({ module: connMods[ci], function: 'onSocketClose' }, function(func, ...args) {
-                        var code = args[0];
-                        var reason = args[1];
-                        safeDiagLog('warn', 'SOCKET_CLOSE', {
-                            code: code, reason: typeof reason === 'string' ? reason.slice(0, 200) : String(reason),
-                        });
-                        return func.apply(this, args);
-                    });
+                    window.injectToFunction(
+                        { module: connMods[ci], function: 'onSocketClose' },
+                        function (func, ...args) {
+                            var code = args[0];
+                            var reason = args[1];
+                            safeDiagLog('warn', 'SOCKET_CLOSE', {
+                                code: code,
+                                reason:
+                                    typeof reason === 'string'
+                                        ? reason.slice(0, 200)
+                                        : String(reason),
+                            });
+                            return func.apply(this, args);
+                        },
+                    );
                     _socketHooked = true;
                     break;
                 }
-            } catch(e) {}
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
         }
         // Fallback: hook SocketBridgeApi disconnect trigger (WAWeb 2.3000+)
         if (!_socketHooked) {
             try {
-                window.injectToFunction({ module: 'WAWebSocketBridgeApi', function: 'SocketBridgeApi.triggerSocketStreamDisconnectedFromBridge' }, function(func, ...args) {
-                    safeDiagLog('warn', 'SOCKET_CLOSE', { source: 'bridgeApi', args: safeStr(args[0]) });
-                    return func.apply(this, args);
-                });
-            } catch(e) {
+                window.injectToFunction(
+                    {
+                        module: 'WAWebSocketBridgeApi',
+                        function:
+                            'SocketBridgeApi.triggerSocketStreamDisconnectedFromBridge',
+                    },
+                    function (func, ...args) {
+                        safeDiagLog('warn', 'SOCKET_CLOSE', {
+                            source: 'bridgeApi',
+                            args: safeStr(args[0]),
+                        });
+                        return func.apply(this, args);
+                    },
+                );
+            } catch (e) {
                 // SOCKET_CLOSE: no hookable module found
             }
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- History sync processing ---
     // NOTE: WAWebHistorySyncJobUtils.processHistorySyncData was removed in WAWeb 2.3000+.
     //       Replaced by WAWebHandleHistorySyncChunk.handleHistorySyncChunk.
     try {
-        var _historySyncMod = window.require('WAWebHistorySyncJobUtils') ? 'WAWebHistorySyncJobUtils' : null;
+        var _historySyncMod = window.require('WAWebHistorySyncJobUtils')
+            ? 'WAWebHistorySyncJobUtils'
+            : null;
         var _historySyncFn = _historySyncMod ? 'processHistorySyncData' : null;
         if (!_historySyncMod) {
-            _historySyncMod = window.require('WAWebHandleHistorySyncChunk') ? 'WAWebHandleHistorySyncChunk' : null;
+            _historySyncMod = window.require('WAWebHandleHistorySyncChunk')
+                ? 'WAWebHandleHistorySyncChunk'
+                : null;
             _historySyncFn = _historySyncMod ? 'handleHistorySyncChunk' : null;
         }
         if (_historySyncMod && _historySyncFn) {
-            window.injectToFunction({ module: _historySyncMod, function: _historySyncFn }, function(func, ...args) {
-                var data = args[0];
-                var msgCount = 0;
-                try {
-                    if (data && data.conversations) {
-                        for (var hi = 0; hi < data.conversations.length; hi++) {
-                            msgCount += (data.conversations[hi].messages || []).length;
+            window.injectToFunction(
+                { module: _historySyncMod, function: _historySyncFn },
+                function (func, ...args) {
+                    var data = args[0];
+                    var msgCount = 0;
+                    try {
+                        if (data && data.conversations) {
+                            for (
+                                var hi = 0;
+                                hi < data.conversations.length;
+                                hi++
+                            ) {
+                                msgCount += (
+                                    data.conversations[hi].messages || []
+                                ).length;
+                            }
                         }
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
                     }
-                } catch(e) {}
-                safeDiagLog('debug', 'HISTORY_SYNC_PROCESS', {
-                    conversationCount: data && data.conversations ? data.conversations.length : 0,
-                    msgCount: msgCount,
-                    syncType: data ? data.syncType : null,
-                    progress: data ? data.progress : null,
-                });
-                return func.apply(this, args);
-            });
+                    safeDiagLog('debug', 'HISTORY_SYNC_PROCESS', {
+                        conversationCount:
+                            data && data.conversations
+                                ? data.conversations.length
+                                : 0,
+                        msgCount: msgCount,
+                        syncType: data ? data.syncType : null,
+                        progress: data ? data.progress : null,
+                    });
+                    return func.apply(this, args);
+                },
+            );
         } else {
             // HISTORY_SYNC_PROCESS: no module found
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- [L13] downloadAndMaybeDecrypt hook for filehash mismatch root cause ---
     // NOTE: Limited filtering - only opts.type available (no from/fromMe). Can filter stickers.
     try {
-        window.injectToFunction({ module: 'WAWebDownloadManager', function: 'downloadManager.downloadAndMaybeDecrypt' }, function(func, ...args) {
-            var opts = args[0] || {};
-            // Skip sticker and thumbnail downloads from diagnostics
-            if (opts.type === 'sticker' || _isThumbnailType(opts.type)) return func.apply(this, args);
-            var startTime = Date.now();
-            var inputLog = {
-                directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
-                encFilehash: opts.encFilehash || null,
-                filehash: opts.filehash || null,
-                mediaKeyPrefix: null,
-                mediaKeyTimestamp: opts.mediaKeyTimestamp,
-                type: opts.type,
-                hasSignal: !!opts.signal,
-            };
-            try {
-                if (opts.mediaKey) {
-                    var keyBytes = new Uint8Array(opts.mediaKey.slice(0, 8));
-                    inputLog.mediaKeyPrefix = btoa(String.fromCharCode.apply(null, keyBytes));
-                    inputLog.mediaKeyLength = opts.mediaKey.byteLength || opts.mediaKey.length;
+        window.injectToFunction(
+            {
+                module: 'WAWebDownloadManager',
+                function: 'downloadManager.downloadAndMaybeDecrypt',
+            },
+            function (func, ...args) {
+                var opts = args[0] || {};
+                // Skip sticker and thumbnail downloads from diagnostics
+                if (opts.type === 'sticker' || _isThumbnailType(opts.type))
+                    return func.apply(this, args);
+                var startTime = Date.now();
+                var inputLog = {
+                    directPath: opts.directPath
+                        ? opts.directPath.slice(0, 80)
+                        : null,
+                    encFilehash: opts.encFilehash || null,
+                    filehash: opts.filehash || null,
+                    mediaKeyPrefix: null,
+                    mediaKeyTimestamp: opts.mediaKeyTimestamp,
+                    type: opts.type,
+                    hasSignal: !!opts.signal,
+                };
+                try {
+                    if (opts.mediaKey) {
+                        var keyBytes = new Uint8Array(
+                            opts.mediaKey.slice(0, 8),
+                        );
+                        inputLog.mediaKeyPrefix = btoa(
+                            String.fromCharCode.apply(null, keyBytes),
+                        );
+                        inputLog.mediaKeyLength =
+                            opts.mediaKey.byteLength || opts.mediaKey.length;
+                    }
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
                 }
-            } catch(e) {}
 
-            safeDiagLog('debug', 'DL_DECRYPT_START', inputLog);
+                safeDiagLog('debug', 'DL_DECRYPT_START', inputLog);
 
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(decrypted) {
-                    safeDiagLog('debug', 'DL_DECRYPT_OK', {
-                        elapsed: Date.now() - startTime,
-                        byteLength: decrypted ? (decrypted.byteLength || 0) : 0,
-                        type: opts.type,
-                    });
-                    return decrypted;
-                }).catch(function(err) {
-                    var errorInfo = {
-                        elapsed: Date.now() - startTime,
-                        type: opts.type,
-                        errorName: err ? err.name : null,
-                        errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 500) : null,
-                        errorStatus: err ? err.status : null,
-                        errorCode: err ? err.code : null,
-                        expectedEncFilehash: opts.encFilehash,
-                        expectedFilehash: opts.filehash,
-                        directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
-                        mediaKeyTimestamp: opts.mediaKeyTimestamp,
-                        userDownloadAttemptCount: opts.userDownloadAttemptCount,
-                    };
-                    try {
-                        var allProps = {};
-                        for (var k in err) {
-                            if (err.hasOwnProperty(k) && !['message', 'stack', 'name'].includes(k)) {
-                                var v = err[k];
-                                allProps[k] = (typeof v === 'object' && v !== null)
-                                    ? JSON.stringify(v).substring(0, 300)
-                                    : String(v);
-                            }
-                        }
-                        errorInfo.errorProps = allProps;
-                        var proto = Object.getPrototypeOf(err);
-                        if (proto && proto !== Error.prototype) {
-                            var descriptors = Object.getOwnPropertyNames(proto);
-                            var protoProps = {};
-                            for (var pi = 0; pi < descriptors.length; pi++) {
-                                var pn = descriptors[pi];
-                                if (!['constructor', 'message', 'stack', 'name', 'toString'].includes(pn)) {
-                                    try { protoProps[pn] = String(err[pn]).substring(0, 200); } catch(e2) {}
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result
+                        .then(function (decrypted) {
+                            safeDiagLog('debug', 'DL_DECRYPT_OK', {
+                                elapsed: Date.now() - startTime,
+                                byteLength: decrypted
+                                    ? decrypted.byteLength || 0
+                                    : 0,
+                                type: opts.type,
+                            });
+                            return decrypted;
+                        })
+                        .catch(function (err) {
+                            var errorInfo = {
+                                elapsed: Date.now() - startTime,
+                                type: opts.type,
+                                errorName: err ? err.name : null,
+                                errorMessage: err
+                                    ? (typeof err.message === 'object'
+                                          ? JSON.stringify(err.message)
+                                          : String(err.message || err)
+                                      ).substring(0, 500)
+                                    : null,
+                                errorStatus: err ? err.status : null,
+                                errorCode: err ? err.code : null,
+                                expectedEncFilehash: opts.encFilehash,
+                                expectedFilehash: opts.filehash,
+                                directPath: opts.directPath
+                                    ? opts.directPath.slice(0, 80)
+                                    : null,
+                                mediaKeyTimestamp: opts.mediaKeyTimestamp,
+                                userDownloadAttemptCount:
+                                    opts.userDownloadAttemptCount,
+                            };
+                            try {
+                                var allProps = {};
+                                for (var k in err) {
+                                    if (
+                                        Object.prototype.hasOwnProperty.call(
+                                            err,
+                                            k,
+                                        ) &&
+                                        !['message', 'stack', 'name'].includes(
+                                            k,
+                                        )
+                                    ) {
+                                        var v = err[k];
+                                        allProps[k] =
+                                            typeof v === 'object' && v !== null
+                                                ? JSON.stringify(v).substring(
+                                                      0,
+                                                      300,
+                                                  )
+                                                : String(v);
+                                    }
                                 }
+                                errorInfo.errorProps = allProps;
+                                var proto = Object.getPrototypeOf(err);
+                                if (proto && proto !== Error.prototype) {
+                                    var descriptors =
+                                        Object.getOwnPropertyNames(proto);
+                                    var protoProps = {};
+                                    for (
+                                        var pi = 0;
+                                        pi < descriptors.length;
+                                        pi++
+                                    ) {
+                                        var pn = descriptors[pi];
+                                        if (
+                                            ![
+                                                'constructor',
+                                                'message',
+                                                'stack',
+                                                'name',
+                                                'toString',
+                                            ].includes(pn)
+                                        ) {
+                                            try {
+                                                protoProps[pn] = String(
+                                                    err[pn],
+                                                ).substring(0, 200);
+                                            } catch (e2) {
+                                                // best-effort diagnostic: never let it break the caller
+                                            }
+                                        }
+                                    }
+                                    if (Object.keys(protoProps).length > 0)
+                                        errorInfo.errorProtoProps = protoProps;
+                                }
+                            } catch (e2) {
+                                // best-effort diagnostic: never let it break the caller
                             }
-                            if (Object.keys(protoProps).length > 0) errorInfo.errorProtoProps = protoProps;
-                        }
-                    } catch(e2) {}
-                    // Only surface as a warning when WE initiated the download
-                    // (userDownloadAttemptCount>=1). WhatsApp's own background
-                    // auto-downloads (e.g. history-sync of expired media that 404s)
-                    // report userDownloadAttemptCount=0 and are logged at debug only.
-                    var _dlUserInitiated = (opts.userDownloadAttemptCount || 0) >= 1;
-                    safeDiagLog(_dlUserInitiated ? 'warn' : 'debug', 'DL_DECRYPT_FAIL', errorInfo);
-                    throw err;
-                });
-            }
-            return result;
+                            // Only surface as a warning when WE initiated the download
+                            // (userDownloadAttemptCount>=1). WhatsApp's own background
+                            // auto-downloads (e.g. history-sync of expired media that 404s)
+                            // report userDownloadAttemptCount=0 and are logged at debug only.
+                            var _dlUserInitiated =
+                                (opts.userDownloadAttemptCount || 0) >= 1;
+                            safeDiagLog(
+                                _dlUserInitiated ? 'warn' : 'debug',
+                                'DL_DECRYPT_FAIL',
+                                errorInfo,
+                            );
+                            throw err;
+                        });
+                }
+                return result;
+            },
+        );
+    } catch (e) {
+        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', {
+            hook: 'downloadAndMaybeDecrypt',
+            error: String(e),
         });
-    } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'downloadAndMaybeDecrypt', error: String(e) });
     }
 
     // --- [L13] WAWebMmsClient.download hook - wraps ciphertextValidator to capture actual vs expected hash ---
     // NOTE: Limited filtering - only opts.type available. Can filter stickers.
     try {
-        window.injectToFunction({ module: 'WAWebMmsClient', function: 'download' }, function(func, ...args) {
-            var opts = args[0] || {};
-            // Skip sticker and thumbnail downloads from diagnostics
-            if (opts.type === 'sticker' || _isThumbnailType(opts.type)) return func.apply(this, args);
-            var originalValidator = opts.ciphertextValidator;
-            var expectedHash = opts.filehash || opts.encFilehash; // download() receives encFilehash as 'filehash' param
+        window.injectToFunction(
+            { module: 'WAWebMmsClient', function: 'download' },
+            function (func, ...args) {
+                var opts = args[0] || {};
+                // Skip sticker and thumbnail downloads from diagnostics
+                if (opts.type === 'sticker' || _isThumbnailType(opts.type))
+                    return func.apply(this, args);
+                var originalValidator = opts.ciphertextValidator;
+                var expectedHash = opts.filehash || opts.encFilehash; // download() receives encFilehash as 'filehash' param
 
-            if (originalValidator) {
-                args[0] = Object.assign({}, opts, { ciphertextValidator: function(downloadedBytes) {
-                    // Compute hash once and compare - avoids double SHA-256 computation
-                    var size = downloadedBytes ? (downloadedBytes.byteLength || 0) : 0;
-                    return window.require('WAMediaCalculateFilehash').calculateFilehash(downloadedBytes).then(function(computedHash) {
-                        var isValid = computedHash === expectedHash;
-                        if (!isValid) {
-                            safeDiagLog('error', 'ENC_HASH_MISMATCH_DETAIL', {
-                                computedEncHash: computedHash,
-                                expectedEncHash: expectedHash,
-                                downloadedSize: size,
-                                directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
-                                debugString: opts.debugString || null,
-                            });
-                        }
-                        return isValid;
-                    }).catch(function(e) {
-                        safeDiagLog('debug', 'ENC_HASH_CALC_ERROR', {
-                            error: String(e),
-                            downloadedSize: size,
-                        });
-                        return originalValidator(downloadedBytes);
+                if (originalValidator) {
+                    args[0] = Object.assign({}, opts, {
+                        ciphertextValidator: function (downloadedBytes) {
+                            // Compute hash once and compare - avoids double SHA-256 computation
+                            var size = downloadedBytes
+                                ? downloadedBytes.byteLength || 0
+                                : 0;
+                            return window
+                                .require('WAMediaCalculateFilehash')
+                                .calculateFilehash(downloadedBytes)
+                                .then(function (computedHash) {
+                                    var isValid = computedHash === expectedHash;
+                                    if (!isValid) {
+                                        safeDiagLog(
+                                            'error',
+                                            'ENC_HASH_MISMATCH_DETAIL',
+                                            {
+                                                computedEncHash: computedHash,
+                                                expectedEncHash: expectedHash,
+                                                downloadedSize: size,
+                                                directPath: opts.directPath
+                                                    ? opts.directPath.slice(
+                                                          0,
+                                                          80,
+                                                      )
+                                                    : null,
+                                                debugString:
+                                                    opts.debugString || null,
+                                            },
+                                        );
+                                    }
+                                    return isValid;
+                                })
+                                .catch(function (e) {
+                                    safeDiagLog(
+                                        'debug',
+                                        'ENC_HASH_CALC_ERROR',
+                                        {
+                                            error: String(e),
+                                            downloadedSize: size,
+                                        },
+                                    );
+                                    return originalValidator(downloadedBytes);
+                                });
+                        },
                     });
-                } });
-                opts = args[0];
-            }
+                    opts = args[0];
+                }
 
-            safeDiagLog('debug', 'MMS_DOWNLOAD_START', {
-                directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
-                expectedHash: expectedHash,
-                hasValidator: !!originalValidator,
-                type: opts.type,
-                mode: opts.mode,
-                staticUrl: opts.staticUrl ? 'present' : null,
-            });
-
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(data) {
-                    safeDiagLog('debug', 'MMS_DOWNLOAD_OK', {
-                        directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
-                        size: data ? (data.byteLength || 0) : 0,
-                    });
-                    return data;
-                }).catch(function(err) {
-                    // mode==='manual' means WE initiated the download (isUserInitiated).
-                    // WhatsApp's own auto-downloads use mode==='auto' and are logged at
-                    // debug only, so background 404s on expired media don't look like errors.
-                    var _mmsUserInitiated = opts.mode === 'manual';
-                    safeDiagLog(_mmsUserInitiated ? 'warn' : 'debug', 'MMS_DOWNLOAD_FAIL', {
-                        directPath: opts.directPath ? opts.directPath.slice(0, 80) : null,
-                        errorName: err ? err.name : null,
-                        errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 300) : null,
-                        mode: opts.mode,
-                    });
-                    throw err;
+                safeDiagLog('debug', 'MMS_DOWNLOAD_START', {
+                    directPath: opts.directPath
+                        ? opts.directPath.slice(0, 80)
+                        : null,
+                    expectedHash: expectedHash,
+                    hasValidator: !!originalValidator,
+                    type: opts.type,
+                    mode: opts.mode,
+                    staticUrl: opts.staticUrl ? 'present' : null,
                 });
-            }
-            return result;
+
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result
+                        .then(function (data) {
+                            safeDiagLog('debug', 'MMS_DOWNLOAD_OK', {
+                                directPath: opts.directPath
+                                    ? opts.directPath.slice(0, 80)
+                                    : null,
+                                size: data ? data.byteLength || 0 : 0,
+                            });
+                            return data;
+                        })
+                        .catch(function (err) {
+                            // mode==='manual' means WE initiated the download (isUserInitiated).
+                            // WhatsApp's own auto-downloads use mode==='auto' and are logged at
+                            // debug only, so background 404s on expired media don't look like errors.
+                            var _mmsUserInitiated = opts.mode === 'manual';
+                            safeDiagLog(
+                                _mmsUserInitiated ? 'warn' : 'debug',
+                                'MMS_DOWNLOAD_FAIL',
+                                {
+                                    directPath: opts.directPath
+                                        ? opts.directPath.slice(0, 80)
+                                        : null,
+                                    errorName: err ? err.name : null,
+                                    errorMessage: err
+                                        ? (typeof err.message === 'object'
+                                              ? JSON.stringify(err.message)
+                                              : String(err.message || err)
+                                          ).substring(0, 300)
+                                        : null,
+                                    mode: opts.mode,
+                                },
+                            );
+                            throw err;
+                        });
+                }
+                return result;
+            },
+        );
+    } catch (e) {
+        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', {
+            hook: 'WAWebMmsClient.download',
+            error: String(e),
         });
-    } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'WAWebMmsClient.download', error: String(e) });
     }
 
     // --- [L13] WAWebCryptoDecryptMedia hook - capture decryption details ---
@@ -895,78 +1366,122 @@ exports.InjectDiagHooks = () => {
         if (typeof _cryptoMod === 'function' && !('default' in _cryptoMod)) {
             // WAWebCryptoDecryptMedia is module-level function in 2.3000+, covered by DL_DECRYPT
         } else {
-            window.injectToFunction({ module: 'WAWebCryptoDecryptMedia', function: 'default' }, function(func, ...args) {
-                var opts = args[0] || {};
-                var startTime = Date.now();
-                safeDiagLog('debug', 'DECRYPT_MEDIA_START', {
-                    expectedPlaintextHash: opts.expectedPlaintextHash || null,
-                    ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
-                    hasMediaKeys: !!opts.mediaKeys,
-                    debugString: opts.debugString || null,
-                });
-
-                var result = func.apply(this, args);
-                if (result && typeof result.then === 'function') {
-                    return result.then(function(plaintext) {
-                        safeDiagLog('debug', 'DECRYPT_MEDIA_OK', {
-                            elapsed: Date.now() - startTime,
-                            plaintextSize: plaintext ? (plaintext.byteLength || 0) : 0,
-                        });
-                        return plaintext;
-                    }).catch(function(err) {
-                        safeDiagLog('warn', 'DECRYPT_MEDIA_FAIL', {
-                            elapsed: Date.now() - startTime,
-                            errorName: err ? err.name : null,
-                            errorMessage: err ? (typeof err.message === 'object' ? JSON.stringify(err.message) : String(err.message || err)).substring(0, 500) : null,
-                            expectedPlaintextHash: opts.expectedPlaintextHash,
-                            ciphertextSize: opts.ciphertextHmac ? (opts.ciphertextHmac.byteLength || 0) : 0,
-                        });
-                        throw err;
+            window.injectToFunction(
+                { module: 'WAWebCryptoDecryptMedia', function: 'default' },
+                function (func, ...args) {
+                    var opts = args[0] || {};
+                    var startTime = Date.now();
+                    safeDiagLog('debug', 'DECRYPT_MEDIA_START', {
+                        expectedPlaintextHash:
+                            opts.expectedPlaintextHash || null,
+                        ciphertextSize: opts.ciphertextHmac
+                            ? opts.ciphertextHmac.byteLength || 0
+                            : 0,
+                        hasMediaKeys: !!opts.mediaKeys,
+                        debugString: opts.debugString || null,
                     });
-                }
-                return result;
-            });
+
+                    var result = func.apply(this, args);
+                    if (result && typeof result.then === 'function') {
+                        return result
+                            .then(function (plaintext) {
+                                safeDiagLog('debug', 'DECRYPT_MEDIA_OK', {
+                                    elapsed: Date.now() - startTime,
+                                    plaintextSize: plaintext
+                                        ? plaintext.byteLength || 0
+                                        : 0,
+                                });
+                                return plaintext;
+                            })
+                            .catch(function (err) {
+                                safeDiagLog('warn', 'DECRYPT_MEDIA_FAIL', {
+                                    elapsed: Date.now() - startTime,
+                                    errorName: err ? err.name : null,
+                                    errorMessage: err
+                                        ? (typeof err.message === 'object'
+                                              ? JSON.stringify(err.message)
+                                              : String(err.message || err)
+                                          ).substring(0, 500)
+                                        : null,
+                                    expectedPlaintextHash:
+                                        opts.expectedPlaintextHash,
+                                    ciphertextSize: opts.ciphertextHmac
+                                        ? opts.ciphertextHmac.byteLength || 0
+                                        : 0,
+                                });
+                                throw err;
+                            });
+                    }
+                    return result;
+                },
+            );
         }
-    } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', { hook: 'WAWebCryptoDecryptMedia', error: String(e) });
+    } catch (e) {
+        safeDiagLog('warn', 'HOOK_FAIL_MANUAL', {
+            hook: 'WAWebCryptoDecryptMedia',
+            error: String(e),
+        });
     }
 
     // --- [L13] WAWebValidateMediaFilehash hook - capture unencrypted media hash validation ---
     try {
-        window.injectToFunction({ module: 'WAWebValidateMediaFilehash', function: 'validateFileash' }, function(func, ...args) {
-            var data = args[0];
-            var expectedHash = args[1];
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(isValid) {
-                    if (!isValid) {
-                        // Hash mismatch on unencrypted media - compute actual hash
-                        return window.require('WAMediaCalculateFilehash').calculateFilehash(data).then(function(actual) {
-                            safeDiagLog('error', 'PLAINTEXT_HASH_MISMATCH_DETAIL', {
-                                computedHash: actual,
-                                expectedHash: expectedHash,
-                                dataSize: data ? (data.byteLength || 0) : 0,
-                            });
-                            return isValid;
-                        }).catch(function() { return isValid; });
-                    }
-                    return isValid;
-                });
-            }
-            return result;
-        });
-    } catch(e) {}
+        window.injectToFunction(
+            {
+                module: 'WAWebValidateMediaFilehash',
+                function: 'validateFileash',
+            },
+            function (func, ...args) {
+                var data = args[0];
+                var expectedHash = args[1];
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result.then(function (isValid) {
+                        if (!isValid) {
+                            // Hash mismatch on unencrypted media - compute actual hash
+                            return window
+                                .require('WAMediaCalculateFilehash')
+                                .calculateFilehash(data)
+                                .then(function (actual) {
+                                    safeDiagLog(
+                                        'error',
+                                        'PLAINTEXT_HASH_MISMATCH_DETAIL',
+                                        {
+                                            computedHash: actual,
+                                            expectedHash: expectedHash,
+                                            dataSize: data
+                                                ? data.byteLength || 0
+                                                : 0,
+                                        },
+                                    );
+                                    return isValid;
+                                })
+                                .catch(function () {
+                                    return isValid;
+                                });
+                        }
+                        return isValid;
+                    });
+                }
+                return result;
+            },
+        );
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- [L13] Detect BACKFILL/placeholder messages ---
     // NOTE: In newer WAWeb (2.3000+), isPlaceholder was removed from Msg prototype.
     //       We try Msg.prototype first (via WAWebMsgModel.Msg), then fall back to .default.
     try {
         var _msgModelMod = window.require('WAWebMsgModel');
-        var _msgProto = (_msgModelMod && _msgModelMod.Msg && _msgModelMod.Msg.prototype)
-            || (_msgModelMod && _msgModelMod.default && _msgModelMod.default.prototype);
+        var _msgProto =
+            (_msgModelMod && _msgModelMod.Msg && _msgModelMod.Msg.prototype) ||
+            (_msgModelMod &&
+                _msgModelMod.default &&
+                _msgModelMod.default.prototype);
         if (_msgProto && typeof _msgProto.isPlaceholder === 'function') {
             var _origIsPlaceholder = _msgProto.isPlaceholder;
-            _msgProto.isPlaceholder = function() {
+            _msgProto.isPlaceholder = function () {
                 var result = _origIsPlaceholder.apply(this, arguments);
                 if (result && !_shouldSkipDiag(this)) {
                     safeDiagLog('debug', 'MSG_IS_PLACEHOLDER', {
@@ -981,14 +1496,16 @@ exports.InjectDiagHooks = () => {
         } else {
             // WAWebMsgModel.isPlaceholder removed in 2.3000+
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- [SILENT_LOSS] Wrap Msg.add to trace ALL add attempts ---
     // window.Store.Msg -> window.require('WAWebCollections').Msg
     try {
         var MsgCollection = window.require('WAWebCollections').Msg;
         const origMsgAdd = MsgCollection.add.bind(MsgCollection);
-        MsgCollection.add = function(...args) {
+        MsgCollection.add = function (...args) {
             try {
                 const models = Array.isArray(args[0]) ? args[0] : [args[0]];
                 const opts = args[1] || {};
@@ -1010,12 +1527,17 @@ exports.InjectDiagHooks = () => {
                         hasBody: !!(m.body || m.caption),
                     });
                 }
-            } catch(e) {}
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
             return origMsgAdd(...args);
         };
         safeDiagLog('debug', 'HOOK_OK', 'Msg.add-wrapper');
-    } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'Msg.add-wrapper', reason: String(e) });
+    } catch (e) {
+        safeDiagLog('warn', 'HOOK_FAIL', {
+            hook: 'Msg.add-wrapper',
+            reason: String(e),
+        });
     }
 
     // --- [SILENT_LOSS] Hook Msg.addAndGet if it exists ---
@@ -1024,22 +1546,29 @@ exports.InjectDiagHooks = () => {
         var MsgCollection2 = window.require('WAWebCollections').Msg;
         if (typeof MsgCollection2.addAndGet === 'function') {
             var origAddAndGet = MsgCollection2.addAndGet.bind(MsgCollection2);
-            MsgCollection2.addAndGet = function(...args) {
+            MsgCollection2.addAndGet = function (...args) {
                 try {
                     var m = args[0];
                     var id = m?.id?._serialized || m?.id?.id || '';
                     var from = m?.from?._serialized || m?.from?.user || '';
                     if (!_shouldSkipDiag(m)) {
                         safeDiagLog('debug', 'MSG_ADD_AND_GET', {
-                            traceId: id, from: from, type: m?.type, isNewMsg: !!m?.isNewMsg,
+                            traceId: id,
+                            from: from,
+                            type: m?.type,
+                            isNewMsg: !!m?.isNewMsg,
                         });
                     }
-                } catch(e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
                 return origAddAndGet(...args);
             };
             safeDiagLog('debug', 'HOOK_OK', 'Msg.addAndGet-wrapper');
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- [SILENT_LOSS] Discover message processing modules ---
     var msgProcessModules = [
@@ -1058,33 +1587,45 @@ exports.InjectDiagHooks = () => {
             var modName = msgProcessModules[mi];
             var mod = window.require(modName);
             if (mod) {
-                var fnNames = Object.keys(mod).filter(function(k) { return typeof mod[k] === 'function'; });
+                var fnNames = Object.keys(mod).filter(function (k) {
+                    return typeof mod[k] === 'function';
+                });
                 safeDiagLog('debug', 'MSG_PROCESS_MODULE_FOUND', {
                     module: modName,
                     functions: fnNames.slice(0, 20).join(','),
                 });
             }
-        } catch(e) {}
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
     }
 
     // --- Message revoke monitoring ---
     // NOTE: WAWebMsgDeleteCollection was removed in WAWeb 2.3000+. Use WAWebRevokeMsgAction instead.
     try {
-        var _revokeModule = window.require('WAWebRevokeMsgAction') ? 'WAWebRevokeMsgAction'
-            : window.require('WAWebMsgDeleteCollection') ? 'WAWebMsgDeleteCollection' : null;
+        var _revokeModule = window.require('WAWebRevokeMsgAction')
+            ? 'WAWebRevokeMsgAction'
+            : window.require('WAWebMsgDeleteCollection')
+              ? 'WAWebMsgDeleteCollection'
+              : null;
         if (!_revokeModule) throw 'no revoke module found';
-        window.injectToFunction({ module: _revokeModule, function: 'sendRevoke' }, function(func, ...args) {
-            var msg = args[0];
-            if (!_shouldSkipDiag(msg)) {
-                safeDiagLog('debug', 'MSG_REVOKE', {
-                    id: msg && msg.id ? msg.id._serialized : '',
-                    from: msg ? wid(msg.from) : null,
-                    type: msg ? msg.type : null,
-                });
-            }
-            return func.apply(this, args);
-        });
-    } catch(e) {}
+        window.injectToFunction(
+            { module: _revokeModule, function: 'sendRevoke' },
+            function (func, ...args) {
+                var msg = args[0];
+                if (!_shouldSkipDiag(msg)) {
+                    safeDiagLog('debug', 'MSG_REVOKE', {
+                        id: msg && msg.id ? msg.id._serialized : '',
+                        from: msg ? wid(msg.from) : null,
+                        type: msg ? msg.type : null,
+                    });
+                }
+                return func.apply(this, args);
+            },
+        );
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // =====================================================================
     // CIPHERTEXT_TIMEOUT deep-investigation hooks
@@ -1094,16 +1635,31 @@ exports.InjectDiagHooks = () => {
     try {
         var _MsgCollection = window.require('WAWebCollections').Msg;
         if (_MsgCollection && _MsgCollection.processMultipleMessages) {
-            var _origPMM = _MsgCollection.processMultipleMessages.bind(_MsgCollection);
-            _MsgCollection.processMultipleMessages = function(chatId, msgs, overwriteOption, origin, extraOpts, sequential) {
+            var _origPMM =
+                _MsgCollection.processMultipleMessages.bind(_MsgCollection);
+            _MsgCollection.processMultipleMessages = function (
+                chatId,
+                msgs,
+                overwriteOption,
+                origin,
+                extraOpts,
+                sequential,
+            ) {
                 var msgSummaries = [];
                 try {
                     if (msgs && msgs.length) {
                         for (var mi = 0; mi < msgs.length && mi < 10; mi++) {
                             var m = msgs[mi];
-                            var mId = m && m.id ? (m.id._serialized || m.id.id || '') : '';
-                            var existsInStore = mId ? !!_MsgCollection.get(mId) : false;
-                            var existingType = existsInStore ? _MsgCollection.get(mId).type : null;
+                            var mId =
+                                m && m.id
+                                    ? m.id._serialized || m.id.id || ''
+                                    : '';
+                            var existsInStore = mId
+                                ? !!_MsgCollection.get(mId)
+                                : false;
+                            var existingType = existsInStore
+                                ? _MsgCollection.get(mId).type
+                                : null;
                             msgSummaries.push({
                                 traceId: mId,
                                 type: m ? m.type : null,
@@ -1117,9 +1673,19 @@ exports.InjectDiagHooks = () => {
                             });
                         }
                     }
-                } catch(e) {}
-                var hasCiphertext = msgSummaries.some(function(s) { return s.type === 'ciphertext' || s.existingType === 'ciphertext'; });
-                if (hasCiphertext || (overwriteOption != null && overwriteOption !== 0)) {
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
+                var hasCiphertext = msgSummaries.some(function (s) {
+                    return (
+                        s.type === 'ciphertext' ||
+                        s.existingType === 'ciphertext'
+                    );
+                });
+                if (
+                    hasCiphertext ||
+                    (overwriteOption != null && overwriteOption !== 0)
+                ) {
                     safeDiagLog('info', 'PROCESS_MULTIPLE_MSGS', {
                         chatId: chatId ? String(chatId) : null,
                         msgCount: msgs ? msgs.length : 0,
@@ -1129,145 +1695,232 @@ exports.InjectDiagHooks = () => {
                         msgs: msgSummaries,
                     });
                 }
-                var result = _origPMM(chatId, msgs, overwriteOption, origin, extraOpts, sequential);
+                var result = _origPMM(
+                    chatId,
+                    msgs,
+                    overwriteOption,
+                    origin,
+                    extraOpts,
+                    sequential,
+                );
                 if (result && typeof result.then === 'function') {
-                    return result.then(function(res) {
-                        if (hasCiphertext) {
-                            var afterState = [];
-                            try {
-                                for (var ai = 0; ai < msgSummaries.length; ai++) {
-                                    var tid = msgSummaries[ai].traceId;
-                                    if (!tid) continue;
-                                    var afterMsg = _MsgCollection.get(tid);
-                                    afterState.push({
-                                        traceId: tid,
-                                        existsAfter: !!afterMsg,
-                                        typeAfter: afterMsg ? afterMsg.type : null,
-                                        subtypeAfter: afterMsg ? afterMsg.subtype : null,
-                                    });
+                    return result
+                        .then(function (res) {
+                            if (hasCiphertext) {
+                                var afterState = [];
+                                try {
+                                    for (
+                                        var ai = 0;
+                                        ai < msgSummaries.length;
+                                        ai++
+                                    ) {
+                                        var tid = msgSummaries[ai].traceId;
+                                        if (!tid) continue;
+                                        var afterMsg = _MsgCollection.get(tid);
+                                        afterState.push({
+                                            traceId: tid,
+                                            existsAfter: !!afterMsg,
+                                            typeAfter: afterMsg
+                                                ? afterMsg.type
+                                                : null,
+                                            subtypeAfter: afterMsg
+                                                ? afterMsg.subtype
+                                                : null,
+                                        });
+                                    }
+                                } catch (e) {
+                                    // best-effort diagnostic: never let it break the caller
                                 }
-                            } catch(e) {}
-                            safeDiagLog('info', 'PROCESS_MULTIPLE_MSGS_DONE', {
-                                chatId: chatId ? String(chatId) : null,
-                                overwriteOption: overwriteOption,
-                                origin: origin,
-                                afterState: afterState,
-                            });
-                        }
-                        return res;
-                    }).catch(function(err) {
-                        safeDiagLog('error', 'PROCESS_MULTIPLE_MSGS_ERROR', {
-                            chatId: chatId ? String(chatId) : null,
-                            overwriteOption: overwriteOption,
-                            origin: origin,
-                            error: err ? (err.message || String(err)) : 'unknown',
-                            msgs: msgSummaries,
+                                safeDiagLog(
+                                    'info',
+                                    'PROCESS_MULTIPLE_MSGS_DONE',
+                                    {
+                                        chatId: chatId ? String(chatId) : null,
+                                        overwriteOption: overwriteOption,
+                                        origin: origin,
+                                        afterState: afterState,
+                                    },
+                                );
+                            }
+                            return res;
+                        })
+                        .catch(function (err) {
+                            safeDiagLog(
+                                'error',
+                                'PROCESS_MULTIPLE_MSGS_ERROR',
+                                {
+                                    chatId: chatId ? String(chatId) : null,
+                                    overwriteOption: overwriteOption,
+                                    origin: origin,
+                                    error: err
+                                        ? err.message || String(err)
+                                        : 'unknown',
+                                    msgs: msgSummaries,
+                                },
+                            );
+                            throw err;
                         });
-                        throw err;
-                    });
                 }
                 return result;
             };
-            safeDiagLog('debug', 'HOOK_OK', 'WAWebCollections.Msg.processMultipleMessages');
+            safeDiagLog(
+                'debug',
+                'HOOK_OK',
+                'WAWebCollections.Msg.processMultipleMessages',
+            );
         }
-    } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'Msg.processMultipleMessages', reason: e ? (e.message || String(e)) : 'unknown' });
+    } catch (e) {
+        safeDiagLog('warn', 'HOOK_FAIL', {
+            hook: 'Msg.processMultipleMessages',
+            reason: e ? e.message || String(e) : 'unknown',
+        });
     }
 
     // --- Hook handlePlaceholderResendOperationRequestResponse for PDO response details ---
     try {
-        window.injectToFunction({
-            module: 'WAWebNonMessageDataRequestHandlerPlaceholderResend',
-            function: 'handlePlaceholderResendOperationRequestResponse'
-        }, function(func, ...args) {
-            // WA signature is (peerMsgId, peerDataOperationResult) - see
-            // WAWebNonMessageDataRequestHandler: the results array is args[1],
-            // NOT args[0]. args[0] is the originating peer message id (a string).
-            var peerMsgId = args[0];
-            var results = args[1];
-            var logData = {
-                peerMsgId: typeof peerMsgId === 'string' ? peerMsgId : safeStr(peerMsgId),
-                resultCount: Array.isArray(results) ? results.length : 0,
-            };
-            // The phone answers with one result per requested message. A resend
-            // that is never answered produces NO event at all (WA has no timeout
-            // for PLACEHOLDER_MESSAGE_RESEND), so the absence of this log after a
-            // resend request is itself the signal that the phone never replied.
-            try {
-                if (Array.isArray(results) && results.length) {
-                    // Counters are deliberately split: bytes being present is NOT
-                    // the same as the phone returning usable content. Only
-                    // withContent answers the question "can this be recovered".
-                    var withBytes = 0, withContent = 0, decodeErrors = 0;
-                    var nullResponse = 0, nullBytes = 0;
-                    logData.results = results.slice(0, 20).map(function(r, idx) {
-                        var pr = r ? r.placeholderMessageResendResponse : null;
-                        var info = { index: idx, hasPlaceholderResponse: !!pr };
-                        if (!pr) { nullResponse++; return info; }
-                        // WA's protobuf decoder yields an ArrayBuffer for a
-                        // TYPES.BYTES field, which has byteLength and NO length.
-                        // Reading .length here would score every real answer as
-                        // "no bytes" and skip the decode entirely.
-                        var bytes = pr.webMessageInfoBytes;
-                        var byteLen = 0;
-                        if (bytes) byteLen = bytes.byteLength != null ? bytes.byteLength : (bytes.length || 0);
-                        info.webMessageInfoBytesLength = byteLen;
-                        if (!byteLen) { nullBytes++; return info; }
-                        withBytes++;
-                        // Decode just enough to correlate with the request and to
-                        // see whether the phone returned real content or another
-                        // undecryptable placeholder.
-                        try {
-                            var decoded = window.require('decodeProtobuf').decodeProtobuf(
-                                window.require('WAWebProtobufsWeb.pb').WebMessageInfoSpec, bytes);
-                            var key = decoded ? decoded.key : null;
-                            if (key) {
-                                info.traceId = key.id || '';
-                                info.remoteJid = key.remoteJid || '';
-                                info.keyFromMe = !!key.fromMe;
-                            }
-                            info.hasMessageContent = !!(decoded && decoded.message);
-                            if (info.hasMessageContent) withContent++;
-                            if (decoded && decoded.messageStubType != null) {
-                                info.messageStubType = decoded.messageStubType;
-                            }
-                        } catch(de) { decodeErrors++; info.decodeError = String(de); }
-                        return info;
-                    });
-                    logData.withBytes = withBytes;
-                    logData.withContent = withContent;
-                    logData.decodeErrors = decodeErrors;
-                    logData.nullResponse = nullResponse;
-                    logData.nullMessageBytes = nullBytes;
+        window.injectToFunction(
+            {
+                module: 'WAWebNonMessageDataRequestHandlerPlaceholderResend',
+                function: 'handlePlaceholderResendOperationRequestResponse',
+            },
+            function (func, ...args) {
+                // WA signature is (peerMsgId, peerDataOperationResult) - see
+                // WAWebNonMessageDataRequestHandler: the results array is args[1],
+                // NOT args[0]. args[0] is the originating peer message id (a string).
+                var peerMsgId = args[0];
+                var results = args[1];
+                var logData = {
+                    peerMsgId:
+                        typeof peerMsgId === 'string'
+                            ? peerMsgId
+                            : safeStr(peerMsgId),
+                    resultCount: Array.isArray(results) ? results.length : 0,
+                };
+                // The phone answers with one result per requested message. A resend
+                // that is never answered produces NO event at all (WA has no timeout
+                // for PLACEHOLDER_MESSAGE_RESEND), so the absence of this log after a
+                // resend request is itself the signal that the phone never replied.
+                try {
+                    if (Array.isArray(results) && results.length) {
+                        // Counters are deliberately split: bytes being present is NOT
+                        // the same as the phone returning usable content. Only
+                        // withContent answers the question "can this be recovered".
+                        var withBytes = 0,
+                            withContent = 0,
+                            decodeErrors = 0;
+                        var nullResponse = 0,
+                            nullBytes = 0;
+                        logData.results = results
+                            .slice(0, 20)
+                            .map(function (r, idx) {
+                                var pr = r
+                                    ? r.placeholderMessageResendResponse
+                                    : null;
+                                var info = {
+                                    index: idx,
+                                    hasPlaceholderResponse: !!pr,
+                                };
+                                if (!pr) {
+                                    nullResponse++;
+                                    return info;
+                                }
+                                // WA's protobuf decoder yields an ArrayBuffer for a
+                                // TYPES.BYTES field, which has byteLength and NO length.
+                                // Reading .length here would score every real answer as
+                                // "no bytes" and skip the decode entirely.
+                                var bytes = pr.webMessageInfoBytes;
+                                var byteLen = 0;
+                                if (bytes)
+                                    byteLen =
+                                        bytes.byteLength != null
+                                            ? bytes.byteLength
+                                            : bytes.length || 0;
+                                info.webMessageInfoBytesLength = byteLen;
+                                if (!byteLen) {
+                                    nullBytes++;
+                                    return info;
+                                }
+                                withBytes++;
+                                // Decode just enough to correlate with the request and to
+                                // see whether the phone returned real content or another
+                                // undecryptable placeholder.
+                                try {
+                                    var decoded = window
+                                        .require('decodeProtobuf')
+                                        .decodeProtobuf(
+                                            window.require(
+                                                'WAWebProtobufsWeb.pb',
+                                            ).WebMessageInfoSpec,
+                                            bytes,
+                                        );
+                                    var key = decoded ? decoded.key : null;
+                                    if (key) {
+                                        info.traceId = key.id || '';
+                                        info.remoteJid = key.remoteJid || '';
+                                        info.keyFromMe = !!key.fromMe;
+                                    }
+                                    info.hasMessageContent = !!(
+                                        decoded && decoded.message
+                                    );
+                                    if (info.hasMessageContent) withContent++;
+                                    if (
+                                        decoded &&
+                                        decoded.messageStubType != null
+                                    ) {
+                                        info.messageStubType =
+                                            decoded.messageStubType;
+                                    }
+                                } catch (de) {
+                                    decodeErrors++;
+                                    info.decodeError = String(de);
+                                }
+                                return info;
+                            });
+                        logData.withBytes = withBytes;
+                        logData.withContent = withContent;
+                        logData.decodeErrors = decodeErrors;
+                        logData.nullResponse = nullResponse;
+                        logData.nullMessageBytes = nullBytes;
+                    }
+                } catch (e) {
+                    logData.parseError = String(e);
                 }
-            } catch(e) { logData.parseError = String(e); }
-            safeDiagLog('info', 'PDO_RESEND_RESPONSE', logData);
-            // logData.results is either unset or an array we built above, so no guard needed.
-            var answeredIds = logData.results
-                ? logData.results.map(function(r) { return r.traceId || null; })
-                : [];
-            var result = func.apply(this, args);
-            if (result && typeof result.then === 'function') {
-                return result.then(function(res) {
-                    safeDiagLog('info', 'PDO_RESEND_RESPONSE_DONE', {
-                        peerMsgId: logData.peerMsgId,
-                        answeredIds: answeredIds,
-                        resultCount: logData.resultCount,
-                        success: true,
-                    });
-                    return res;
-                }).catch(function(err) {
-                    safeDiagLog('error', 'PDO_RESEND_RESPONSE_ERROR', {
-                        peerMsgId: logData.peerMsgId,
-                        answeredIds: answeredIds,
-                        error: err ? (err.message || String(err)) : 'unknown',
-                    });
-                    throw err;
-                });
-            }
-            return result;
-        });
-    } catch(e) {}
+                safeDiagLog('info', 'PDO_RESEND_RESPONSE', logData);
+                // logData.results is either unset or an array we built above, so no guard needed.
+                var answeredIds = logData.results
+                    ? logData.results.map(function (r) {
+                          return r.traceId || null;
+                      })
+                    : [];
+                var result = func.apply(this, args);
+                if (result && typeof result.then === 'function') {
+                    return result
+                        .then(function (res) {
+                            safeDiagLog('info', 'PDO_RESEND_RESPONSE_DONE', {
+                                peerMsgId: logData.peerMsgId,
+                                answeredIds: answeredIds,
+                                resultCount: logData.resultCount,
+                                success: true,
+                            });
+                            return res;
+                        })
+                        .catch(function (err) {
+                            safeDiagLog('error', 'PDO_RESEND_RESPONSE_ERROR', {
+                                peerMsgId: logData.peerMsgId,
+                                answeredIds: answeredIds,
+                                error: err
+                                    ? err.message || String(err)
+                                    : 'unknown',
+                            });
+                            throw err;
+                        });
+                }
+                return result;
+            },
+        );
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // NOTE: WAWebHandlePeerMsg does not exist in current WAWeb versions.
     // PDO responses are captured via handlePlaceholderResendOperationRequestResponse hook above.
@@ -1276,11 +1929,24 @@ exports.InjectDiagHooks = () => {
     try {
         var _MsgForRemove = window.require('WAWebCollections').Msg;
         if (_MsgForRemove) {
-            _MsgForRemove.on('remove', function(msg) {
+            _MsgForRemove.on('remove', function (msg) {
                 try {
-                    if (msg && (msg.type === 'ciphertext' || msg.subtype === 'fanout' || msg.subtype === 'hosted_unavailable_fanout' || msg.subtype === 'bot_unavailable_fanout')) {
+                    if (
+                        msg &&
+                        (msg.type === 'ciphertext' ||
+                            msg.subtype === 'fanout' ||
+                            msg.subtype === 'hosted_unavailable_fanout' ||
+                            msg.subtype === 'bot_unavailable_fanout')
+                    ) {
                         var removeStack = '';
-                        try { removeStack = new Error().stack.split('\n').slice(1, 8).join(' | '); } catch(_e) {}
+                        try {
+                            removeStack = new Error().stack
+                                .split('\n')
+                                .slice(1, 8)
+                                .join(' | ');
+                        } catch (_e) {
+                            // best-effort diagnostic: never let it break the caller
+                        }
                         safeDiagLog('warn', 'CIPHERTEXT_STORE_REMOVE', {
                             traceId: msg.id ? msg.id._serialized : '',
                             type: msg.type,
@@ -1292,17 +1958,25 @@ exports.InjectDiagHooks = () => {
                             stack: removeStack,
                         });
                     }
-                } catch(e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
             });
-            safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.remove (ciphertext tracking)');
+            safeDiagLog(
+                'debug',
+                'HOOK_OK',
+                'Store.Msg.remove (ciphertext tracking)',
+            );
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- Track ciphertext add events with full detail ---
     try {
         var _MsgForAdd = window.require('WAWebCollections').Msg;
         if (_MsgForAdd) {
-            _MsgForAdd.on('add', function(msg) {
+            _MsgForAdd.on('add', function (msg) {
                 try {
                     if (!msg || msg.type !== 'ciphertext') return;
                     if (window.__metrics?.shouldSkipMsg?.(msg)) return;
@@ -1313,69 +1987,98 @@ exports.InjectDiagHooks = () => {
                         subtype: msg.subtype || null,
                         isNewMsg: !!msg.isNewMsg,
                         timestamp: msg.t,
-                        isPlaceholder: typeof msg.isPlaceholder === 'function' ? msg.isPlaceholder() : null,
+                        isPlaceholder:
+                            typeof msg.isPlaceholder === 'function'
+                                ? msg.isPlaceholder()
+                                : null,
                     });
-                } catch(e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
             });
-            safeDiagLog('debug', 'HOOK_OK', 'Store.Msg.add (ciphertext add tracking)');
+            safeDiagLog(
+                'debug',
+                'HOOK_OK',
+                'Store.Msg.add (ciphertext add tracking)',
+            );
         }
-    } catch(e) {}
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- Hook generatePlaceholder to see exactly when placeholders are created ---
     try {
-        window.injectToFunction({
-            module: 'WAWebMsgProcessingApiUtils',
-            function: 'generatePlaceholder'
-        }, function(func, ...args) {
-            var opts = args[0] || {};
-            var msgInfo = opts.msgInfo;
-            var placeholderType = opts.placeholderType;
-            var placeholderAddReason = opts.placeholderAddReason;
-            var msgMeta = opts.msgMeta || {};
-            safeDiagLog('info', 'GENERATE_PLACEHOLDER', {
-                traceId: msgInfo && msgInfo.id ? (msgInfo.id._serialized || msgInfo.id.id || '') : '',
-                from: msgInfo ? wid(msgInfo.from || msgInfo.id?.remote) : null,
-                type: msgInfo ? msgInfo.type : null,
-                placeholderType: placeholderType,
-                placeholderAddReason: placeholderAddReason,
-                isUnavailable: !!msgMeta.isUnavailable,
-                isHostedMsgUnavailable: !!msgMeta.isHostedMsgUnavailable,
-                isViewOnceUnavailable: !!msgMeta.isViewOnceUnavailable,
-            });
-            return func.apply(this, args);
-        });
-    } catch(e) {}
+        window.injectToFunction(
+            {
+                module: 'WAWebMsgProcessingApiUtils',
+                function: 'generatePlaceholder',
+            },
+            function (func, ...args) {
+                var opts = args[0] || {};
+                var msgInfo = opts.msgInfo;
+                var placeholderType = opts.placeholderType;
+                var placeholderAddReason = opts.placeholderAddReason;
+                var msgMeta = opts.msgMeta || {};
+                safeDiagLog('info', 'GENERATE_PLACEHOLDER', {
+                    traceId:
+                        msgInfo && msgInfo.id
+                            ? msgInfo.id._serialized || msgInfo.id.id || ''
+                            : '',
+                    from: msgInfo
+                        ? wid(msgInfo.from || msgInfo.id?.remote)
+                        : null,
+                    type: msgInfo ? msgInfo.type : null,
+                    placeholderType: placeholderType,
+                    placeholderAddReason: placeholderAddReason,
+                    isUnavailable: !!msgMeta.isUnavailable,
+                    isHostedMsgUnavailable: !!msgMeta.isHostedMsgUnavailable,
+                    isViewOnceUnavailable: !!msgMeta.isViewOnceUnavailable,
+                });
+                return func.apply(this, args);
+            },
+        );
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- Hook handlePlaceholderMsgsSeen to see what messages are sent for resend ---
     try {
-        window.injectToFunction({
-            module: 'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
-            function: 'handlePlaceholderMsgsSeen'
-        }, function(func, ...args) {
-            var msgs = args[0];
-            var flag = args[1];
-            var eligible = [];
-            try {
-                if (msgs && msgs.length) {
-                    for (var hi = 0; hi < msgs.length && hi < 20; hi++) {
-                        var hm = msgs[hi];
-                        eligible.push({
-                            traceId: hm && hm.id ? (hm.id._serialized || '') : '',
-                            type: hm ? hm.type : null,
-                            subtype: hm ? hm.subtype : null,
-                            timestamp: hm ? hm.t : null,
-                        });
+        window.injectToFunction(
+            {
+                module: 'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
+                function: 'handlePlaceholderMsgsSeen',
+            },
+            function (func, ...args) {
+                var msgs = args[0];
+                var flag = args[1];
+                var eligible = [];
+                try {
+                    if (msgs && msgs.length) {
+                        for (var hi = 0; hi < msgs.length && hi < 20; hi++) {
+                            var hm = msgs[hi];
+                            eligible.push({
+                                traceId:
+                                    hm && hm.id ? hm.id._serialized || '' : '',
+                                type: hm ? hm.type : null,
+                                subtype: hm ? hm.subtype : null,
+                                timestamp: hm ? hm.t : null,
+                            });
+                        }
                     }
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
                 }
-            } catch(e) {}
-            safeDiagLog('info', 'PLACEHOLDER_MSGS_SEEN', {
-                totalCount: msgs ? msgs.length : 0,
-                flag: flag,
-                msgs: eligible,
-            });
-            return func.apply(this, args);
-        });
-    } catch(e) {}
+                safeDiagLog('info', 'PLACEHOLDER_MSGS_SEEN', {
+                    totalCount: msgs ? msgs.length : 0,
+                    flag: flag,
+                    msgs: eligible,
+                });
+                return func.apply(this, args);
+            },
+        );
+    } catch (e) {
+        // best-effort diagnostic: never let it break the caller
+    }
 
     // --- getChat abandoned-query detector (deterministic root-cause probe) ---
     // The EVALUATE_CDP_ERROR "Promise was collected" on getChatById happens when a
@@ -1399,27 +2102,48 @@ exports.InjectDiagHooks = () => {
     // Self-cleaning (settled calls delete themselves; stuck calls are removed after being
     // reported), and the report count is capped so a teardown storm cannot flood the logs.
     try {
-        if (window.WWebJS && typeof window.WWebJS.getChat === 'function'
-            && !window.WWebJS.getChat.__gcStuckWrapped) {
-
+        if (
+            window.WWebJS &&
+            typeof window.WWebJS.getChat === 'function' &&
+            !window.WWebJS.getChat.__gcStuckWrapped
+        ) {
             var _wac = null;
             var _sockSnap = function () {
                 var s = {};
                 try {
                     if (!_wac) _wac = window.require('WAComms');
-                    var inst = (_wac && _wac.getComms) ? _wac.getComms() : null;
-                    if (inst) { s.socketId = inst.socketId; try { s.pendingIqs = inst.pendingIqs ? inst.pendingIqs.size : null; } catch (e) {} }
-                    try { s.connected = !!_wac.isSocketConnected(); } catch (e) {}
-                } catch (e) {}
+                    var inst = _wac && _wac.getComms ? _wac.getComms() : null;
+                    if (inst) {
+                        s.socketId = inst.socketId;
+                        try {
+                            s.pendingIqs = inst.pendingIqs
+                                ? inst.pendingIqs.size
+                                : null;
+                        } catch (e) {
+                            // best-effort diagnostic: never let it break the caller
+                        }
+                    }
+                    try {
+                        s.connected = !!_wac.isSocketConnected();
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
                 return s;
             };
 
-            var _inflight = window.__getChatInflight || (window.__getChatInflight = new Map());
+            var _inflight =
+                window.__getChatInflight ||
+                (window.__getChatInflight = new Map());
             var _seq = window.__getChatSeq || (window.__getChatSeq = { n: 0 });
-            var _reports = window.__getChatStuckReports || (window.__getChatStuckReports = { n: 0 });
-            var STUCK_MS = 15000;   // normal getChat completes in <100ms; 15s => certainly abandoned
+            var _reports =
+                window.__getChatStuckReports ||
+                (window.__getChatStuckReports = { n: 0 });
+            var STUCK_MS = 15000; // normal getChat completes in <100ms; 15s => certainly abandoned
             var SWEEP_MS = 5000;
-            var MAX_REPORTS = 50;   // cap so a teardown storm cannot flood the logs
+            var MAX_REPORTS = 50; // cap so a teardown storm cannot flood the logs
 
             var _sweep = function () {
                 try {
@@ -1435,7 +2159,8 @@ exports.InjectDiagHooks = () => {
                                     ageMs: now - rec.startTs,
                                     startSocketId: rec.startSocketId,
                                     endSocketId: s.socketId,
-                                    socketChangedDuringCall: rec.startSocketId !== s.socketId,
+                                    socketChangedDuringCall:
+                                        rec.startSocketId !== s.socketId,
                                     startConnected: rec.startConnected,
                                     endConnected: s.connected,
                                     pendingIqs: s.pendingIqs,
@@ -1443,12 +2168,20 @@ exports.InjectDiagHooks = () => {
                             }
                         }
                     });
-                } catch (e) {}
-                if (_inflight.size > 0) { setTimeout(_sweep, SWEEP_MS); }
-                else { window.__getChatSweepArmed = false; }
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
+                if (_inflight.size > 0) {
+                    setTimeout(_sweep, SWEEP_MS);
+                } else {
+                    window.__getChatSweepArmed = false;
+                }
             };
             var _arm = function () {
-                if (!window.__getChatSweepArmed) { window.__getChatSweepArmed = true; setTimeout(_sweep, SWEEP_MS); }
+                if (!window.__getChatSweepArmed) {
+                    window.__getChatSweepArmed = true;
+                    setTimeout(_sweep, SWEEP_MS);
+                }
             };
 
             var _origGetChat = window.WWebJS.getChat;
@@ -1464,20 +2197,27 @@ exports.InjectDiagHooks = () => {
                             startSocketId: start.socketId,
                             startConnected: start.connected,
                         });
-                        var done = function () { _inflight.delete(key); };
+                        var done = function () {
+                            _inflight.delete(key);
+                        };
                         p.then(done, done);
                         _arm();
                     }
-                } catch (e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
                 return p;
             };
             _wrappedGetChat.__gcStuckWrapped = true;
-            _wrappedGetChat.__gcProbeWrapped = true;   // keep prior guard name so nothing double-wraps
+            _wrappedGetChat.__gcProbeWrapped = true; // keep prior guard name so nothing double-wraps
             window.WWebJS.getChat = _wrappedGetChat;
             safeDiagLog('debug', 'HOOK_OK', 'WWebJS.getChat (stuck-detector)');
         }
-    } catch(e) {
-        safeDiagLog('warn', 'HOOK_FAIL', { hook: 'getChat-stuck-detector', reason: e ? (e.message || String(e)) : 'unknown' });
+    } catch (e) {
+        safeDiagLog('warn', 'HOOK_FAIL', {
+            hook: 'getChat-stuck-detector',
+            reason: e ? e.message || String(e) : 'unknown',
+        });
     }
 
     // ============================================================
@@ -1496,37 +2236,127 @@ exports.InjectDiagHooks = () => {
         var _logoutReasonName = {};
         try {
             var _LR = window.require('WAWebLogoutReasonConstants').LogoutReason;
-            for (var _rk of Object.getOwnPropertyNames(_LR)) _logoutReasonName[_LR[_rk]] = _rk;
-        } catch (e) {}
+            for (var _rk of Object.getOwnPropertyNames(_LR))
+                _logoutReasonName[_LR[_rk]] = _rk;
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
 
         // Rich context snapshot, captured at the moment of logout.
         var _logoutCtx = function () {
             var c = {};
-            try { c.socketState = window.require('WAWebSocketModel').Socket.state; } catch (e) { c.socketErr = String((e && e.message) || e); }
+            try {
+                c.socketState = window.require('WAWebSocketModel').Socket.state;
+            } catch (e) {
+                c.socketErr = String((e && e.message) || e);
+            }
             // Real connection lifecycle lives on the Stream model (reliably populated).
-            try { var St = window.require('WAWebStreamModel').Stream; c.streamInfo = St.info; c.streamMode = St.mode; c.streamDisplayInfo = St.displayInfo; c.streamPhoneAuthed = St.phoneAuthed; c.streamAvailable = St.available; c.streamResumeCount = St.resumeCount; } catch (e) {}
+            try {
+                var St = window.require('WAWebStreamModel').Stream;
+                c.streamInfo = St.info;
+                c.streamMode = St.mode;
+                c.streamDisplayInfo = St.displayInfo;
+                c.streamPhoneAuthed = St.phoneAuthed;
+                c.streamAvailable = St.available;
+                c.streamResumeCount = St.resumeCount;
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
             // Conn is a Backbone model — its fields are attributes, not direct props.
-            try { var _A = (window.require('WAWebConnModel').Conn.attributes) || {}; c.platform = _A.platform; c.connConnected = _A.connected; c.connIs24h = _A.is24h; c.connStale = _A.stale; c.connMeReady = _A.meReadyTriggered; c.connWid = _A.wid ? String(_A.wid) : undefined; c.connWaVersion = _A.phone && _A.phone.wa_version; c.connOsVersion = _A.phone && _A.phone.os_version; } catch (e) {}
-            try { c.hasNoiseInfo = 'WANoiseInfo' in localStorage; c.hasEncKeySalt = 'WebEncKeySalt' in localStorage; c.hasWebEncKeySalt = 'WAWebEncKeySalt' in localStorage; c.lastWid = (localStorage.getItem('last-wid-md') || '').replace(/"/g, '').slice(0, 40); } catch (e) {}
-            try { var ICU = window.require('WAWebIntegrityChallengeUtils'); c.integrityChallengePending = window.require('WAWebUserPrefsIndexedDBStorage').userPrefsIdb.get(ICU.INTEGRITY_CHALLENGE_IDB_KEY) != null; } catch (e) {}
-            try { var CU = window.require('WAWebCanonicalUtils'); c.canonicalReloadPending = !!(CU.isCanonicalReloadPending && CU.isCanonicalReloadPending()); c.canonicalTokenPresent = !!(CU.isCanonicalTokenPresent && CU.isCanonicalTokenPresent()); } catch (e) {}
-            try { c.msSincePageLoad = Math.round(performance.now()); } catch (e) {}
-            try { c.waVersion = window.Debug && window.Debug.VERSION; } catch (e) {}
-            try { c.url = (location.href || '').slice(0, 120); } catch (e) {}
+            try {
+                var _A = window.require('WAWebConnModel').Conn.attributes || {};
+                c.platform = _A.platform;
+                c.connConnected = _A.connected;
+                c.connIs24h = _A.is24h;
+                c.connStale = _A.stale;
+                c.connMeReady = _A.meReadyTriggered;
+                c.connWid = _A.wid ? String(_A.wid) : undefined;
+                c.connWaVersion = _A.phone && _A.phone.wa_version;
+                c.connOsVersion = _A.phone && _A.phone.os_version;
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
+            try {
+                c.hasNoiseInfo = 'WANoiseInfo' in localStorage;
+                c.hasEncKeySalt = 'WebEncKeySalt' in localStorage;
+                c.hasWebEncKeySalt = 'WAWebEncKeySalt' in localStorage;
+                c.lastWid = (localStorage.getItem('last-wid-md') || '')
+                    .replace(/"/g, '')
+                    .slice(0, 40);
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
+            try {
+                var ICU = window.require('WAWebIntegrityChallengeUtils');
+                c.integrityChallengePending =
+                    window
+                        .require('WAWebUserPrefsIndexedDBStorage')
+                        .userPrefsIdb.get(ICU.INTEGRITY_CHALLENGE_IDB_KEY) !=
+                    null;
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
+            try {
+                var CU = window.require('WAWebCanonicalUtils');
+                c.canonicalReloadPending = !!(
+                    CU.isCanonicalReloadPending && CU.isCanonicalReloadPending()
+                );
+                c.canonicalTokenPresent = !!(
+                    CU.isCanonicalTokenPresent && CU.isCanonicalTokenPresent()
+                );
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
+            try {
+                c.msSincePageLoad = Math.round(performance.now());
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
+            try {
+                c.waVersion = window.Debug && window.Debug.VERSION;
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
+            try {
+                c.url = (location.href || '').slice(0, 120);
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
             return c;
         };
-        var _logoutStack = function () { try { throw new Error('logout-trace'); } catch (e) { return String(e.stack || '').split('\n').slice(2, 9).join(' | '); } };
+        var _logoutStack = function () {
+            try {
+                throw new Error('logout-trace');
+            } catch (e) {
+                return String(e.stack || '')
+                    .split('\n')
+                    .slice(2, 9)
+                    .join(' | ');
+            }
+        };
         // Storage/quota is async; emit it as a companion log (StorageQuotaExceeded /
         // CacheStorageOpenFailed / WebFailStorageInitialization diagnosis).
         var _logoutStorage = function (tag) {
             try {
                 if (navigator.storage && navigator.storage.estimate) {
-                    navigator.storage.estimate().then(function (est) {
-                        var d = est.usageDetails || {};
-                        safeDiagLog('debug', tag + '_STORAGE', { usage: est.usage, quota: est.quota, caches: d.caches, indexedDB: d.indexedDB, serviceWorkerRegistrations: d.serviceWorkerRegistrations });
-                    }).catch(function () {});
+                    navigator.storage
+                        .estimate()
+                        .then(function (est) {
+                            var d = est.usageDetails || {};
+                            safeDiagLog('debug', tag + '_STORAGE', {
+                                usage: est.usage,
+                                quota: est.quota,
+                                caches: d.caches,
+                                indexedDB: d.indexedDB,
+                                serviceWorkerRegistrations:
+                                    d.serviceWorkerRegistrations,
+                            });
+                        })
+                        .catch(function () {});
                 }
-            } catch (e) {}
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
         };
 
         // 1) Socket.logout(reason) - the NAMED logout path. It is NOT the only
@@ -1534,23 +2364,36 @@ exports.InjectDiagHooks = () => {
         //    `clearCredentialsAndStoredData()` directly, so a device unlinked on
         //    the account side produces no LOGOUT_REASON at all. Hook 1b below is
         //    the real funnel; keep this one for the reason argument.
-        window.injectToFunction({ module: 'WAWebSocketModel', function: 'Socket.logout' }, function (func, reason) {
-            try {
-                var ctx = _logoutCtx();
-                ctx.reasonRaw = (reason === undefined) ? null : reason;
-                ctx.reasonName = (reason === undefined) ? 'UNDEFINED_DEFAULTS_UserInitiated' : (_logoutReasonName[reason] || String(reason));
-                ctx.stack = _logoutStack();
-                // info (not debug): the logout REASON must reach GCP even when
-                // debugLogsEnabled is off (it is off fleet-wide), otherwise we
-                // never learn WHY WhatsApp logged a device out. Low volume: one
-                // per logout.
-                safeDiagLog('info', 'LOGOUT_REASON', ctx);
-                _logoutStorage('LOGOUT_REASON');
-            } catch (e) {
-                try { safeDiagLog('info', 'LOGOUT_REASON', { captureErr: String(e), reasonRaw: String(reason) }); } catch (e2) {}
-            }
-            return func(reason);
-        });
+        window.injectToFunction(
+            { module: 'WAWebSocketModel', function: 'Socket.logout' },
+            function (func, reason) {
+                try {
+                    var ctx = _logoutCtx();
+                    ctx.reasonRaw = reason === undefined ? null : reason;
+                    ctx.reasonName =
+                        reason === undefined
+                            ? 'UNDEFINED_DEFAULTS_UserInitiated'
+                            : _logoutReasonName[reason] || String(reason);
+                    ctx.stack = _logoutStack();
+                    // info (not debug): the logout REASON must reach GCP even when
+                    // debugLogsEnabled is off (it is off fleet-wide), otherwise we
+                    // never learn WHY WhatsApp logged a device out. Low volume: one
+                    // per logout.
+                    safeDiagLog('info', 'LOGOUT_REASON', ctx);
+                    _logoutStorage('LOGOUT_REASON');
+                } catch (e) {
+                    try {
+                        safeDiagLog('info', 'LOGOUT_REASON', {
+                            captureErr: String(e),
+                            reasonRaw: String(reason),
+                        });
+                    } catch (e2) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
+                }
+                return func(reason);
+            },
+        );
 
         // 1b) MASTER: Socket.clearCredentialsAndStoredData(reason) is the one
         //     funnel EVERY credential wipe passes through - all three async
@@ -1562,42 +2405,100 @@ exports.InjectDiagHooks = () => {
         //     LOGOUT_REASON is the signature of a server-side device removal.
         //     info, not debug: one line per logout, and it is the line that says
         //     why an account died.
-        window.injectToFunction({ module: 'WAWebSocketModel', function: 'Socket.clearCredentialsAndStoredData' }, function (func, reason) {
-            try {
-                var ctx = _logoutCtx();
-                ctx.reasonRaw = (reason === undefined) ? null : reason;
-                ctx.reasonName = (reason === undefined) ? 'ABSENT_NOT_VIA_SocketLogout' : (_logoutReasonName[reason] || String(reason));
-                ctx.stack = _logoutStack();
-                safeDiagLog('info', 'CREDENTIALS_CLEARED', ctx);
-            } catch (e) {
-                try { safeDiagLog('info', 'CREDENTIALS_CLEARED', { captureErr: String(e), reasonRaw: String(reason) }); } catch (e2) {}
-            }
-            return func(reason);
-        });
+        window.injectToFunction(
+            {
+                module: 'WAWebSocketModel',
+                function: 'Socket.clearCredentialsAndStoredData',
+            },
+            function (func, reason) {
+                try {
+                    var ctx = _logoutCtx();
+                    ctx.reasonRaw = reason === undefined ? null : reason;
+                    ctx.reasonName =
+                        reason === undefined
+                            ? 'ABSENT_NOT_VIA_SocketLogout'
+                            : _logoutReasonName[reason] || String(reason);
+                    ctx.stack = _logoutStack();
+                    safeDiagLog('info', 'CREDENTIALS_CLEARED', ctx);
+                } catch (e) {
+                    try {
+                        safeDiagLog('info', 'CREDENTIALS_CLEARED', {
+                            captureErr: String(e),
+                            reasonRaw: String(reason),
+                        });
+                    } catch (e2) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
+                }
+                return func(reason);
+            },
+        );
 
         // 2) Bridge socketLogout({reason}) — reason delivered by the service-worker socket.
-        window.injectToFunction({ module: 'WAWebSocketBridgeApi', function: 'SocketBridgeApi.socketLogout' }, function (func, arg) {
-            try {
-                var reason = arg && arg.reason;
-                safeDiagLog('info', 'LOGOUT_FROM_BRIDGE', { reasonRaw: reason == null ? null : reason, reasonName: _logoutReasonName[reason] || String(reason), ctx: _logoutCtx(), stack: _logoutStack() });
-            } catch (e) {}
-            return func(arg);
-        });
+        window.injectToFunction(
+            {
+                module: 'WAWebSocketBridgeApi',
+                function: 'SocketBridgeApi.socketLogout',
+            },
+            function (func, arg) {
+                try {
+                    var reason = arg && arg.reason;
+                    safeDiagLog('info', 'LOGOUT_FROM_BRIDGE', {
+                        reasonRaw: reason == null ? null : reason,
+                        reasonName: _logoutReasonName[reason] || String(reason),
+                        ctx: _logoutCtx(),
+                        stack: _logoutStack(),
+                    });
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
+                return func(arg);
+            },
+        );
 
         // 3) Cmd logout-family events (bridge-driven): logout, starting-logout, unexpected-logout, temporary-ban.
-        ['onLogoutFromBridge', 'onStartingLogoutFromBridge', 'onUnexpectedLogoutModalFromBridge', 'onTemporaryBanFromBridge'].forEach(function (fn) {
-            window.injectToFunction({ module: 'WAWebCmd', function: 'Cmd.' + fn }, function (func) {
-                var a = Array.prototype.slice.call(arguments, 1);
-                try { safeDiagLog('info', 'CMD_' + fn, { arg: safeStr(a[0]), ctx: _logoutCtx(), stack: _logoutStack() }); } catch (e) {}
-                return func.apply(null, a);
-            });
+        [
+            'onLogoutFromBridge',
+            'onStartingLogoutFromBridge',
+            'onUnexpectedLogoutModalFromBridge',
+            'onTemporaryBanFromBridge',
+        ].forEach(function (fn) {
+            window.injectToFunction(
+                { module: 'WAWebCmd', function: 'Cmd.' + fn },
+                function (func) {
+                    var a = Array.prototype.slice.call(arguments, 1);
+                    try {
+                        safeDiagLog('info', 'CMD_' + fn, {
+                            arg: safeStr(a[0]),
+                            ctx: _logoutCtx(),
+                            stack: _logoutStack(),
+                        });
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
+                    return func.apply(null, a);
+                },
+            );
         });
 
         // 4) Integrity checkpoint (anti-abuse challenge) — challenge type + context.
-        window.injectToFunction({ module: 'WAWebIntegrityCheckpointOpener', function: 'openChallengeModal' }, function (func, ch) {
-            try { safeDiagLog('debug', 'INTEGRITY_CHALLENGE_OPENED', { challengeType: ch && ch.challenge_type, ctx: _logoutCtx() }); } catch (e) {}
-            return func(ch);
-        });
+        window.injectToFunction(
+            {
+                module: 'WAWebIntegrityCheckpointOpener',
+                function: 'openChallengeModal',
+            },
+            function (func, ch) {
+                try {
+                    safeDiagLog('debug', 'INTEGRITY_CHALLENGE_OPENED', {
+                        challengeType: ch && ch.challenge_type,
+                        ctx: _logoutCtx(),
+                    });
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
+                return func(ch);
+            },
+        );
 
         // 5) Forward WhatsApp's OWN internal logs (WALogger LOG/WARN/ERROR) for
         //    logout/socket/stream/sync/integrity/session topics. pic2desk only
@@ -1626,8 +2527,10 @@ exports.InjectDiagHooks = () => {
         //    same way before adding it.
         try {
             var _WAL = window.require('WALogger');
-            var _WAL_KW = /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked/i;
-            var _WAL_TERMINAL = /logging out|logged out|device removed|fatal error|failure stanza|dirty bit|identity changed|native logout failed|forced logout/i;
+            var _WAL_KW =
+                /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked/i;
+            var _WAL_TERMINAL =
+                /logging out|logged out|device removed|fatal error|failure stanza|dirty bit|identity changed|native logout failed|forced logout/i;
             ['ERROR', 'WARN', 'LOG'].forEach(function (lvl) {
                 var orig = _WAL[lvl];
                 if (typeof orig !== 'function' || orig.__p2dWrapped) return;
@@ -1637,17 +2540,49 @@ exports.InjectDiagHooks = () => {
                         var msg = Array.isArray(t) ? t.join('{}') : String(t);
                         if (_WAL_KW.test(msg) || _WAL_TERMINAL.test(msg)) {
                             var extra = [];
-                            for (var i = 1; i < arguments.length && i < 5; i++) { try { extra.push(safeStr(arguments[i])); } catch (e) { extra.push('<?>'); } }
-                            var st = null; try { st = window.require('WAWebSocketModel').Socket.state; } catch (e) {}
-                            safeDiagLog(_WAL_TERMINAL.test(msg) ? 'info' : 'debug', 'WA_INTERNAL_' + lvl, { msg: msg.slice(0, 300), args: extra, socketState: st });
+                            for (
+                                var i = 1;
+                                i < arguments.length && i < 5;
+                                i++
+                            ) {
+                                try {
+                                    extra.push(safeStr(arguments[i]));
+                                } catch (e) {
+                                    extra.push('<?>');
+                                }
+                            }
+                            var st = null;
+                            try {
+                                st =
+                                    window.require('WAWebSocketModel').Socket
+                                        .state;
+                            } catch (e) {
+                                // best-effort diagnostic: never let it break the caller
+                            }
+                            safeDiagLog(
+                                _WAL_TERMINAL.test(msg) ? 'info' : 'debug',
+                                'WA_INTERNAL_' + lvl,
+                                {
+                                    msg: msg.slice(0, 300),
+                                    args: extra,
+                                    socketState: st,
+                                },
+                            );
                         }
-                    } catch (e) {}
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
                     return orig.apply(this, arguments);
                 };
                 wrapped.__p2dWrapped = true;
                 _WAL[lvl] = wrapped;
             });
-        } catch (e) { safeDiagLog('debug', 'HOOK_FAIL', { hook: 'wa-internal-logger', reason: String((e && e.message) || e) }); }
+        } catch (e) {
+            safeDiagLog('debug', 'HOOK_FAIL', {
+                hook: 'wa-internal-logger',
+                reason: String((e && e.message) || e),
+            });
+        }
 
         // 6) WhatsApp Stream state transitions — the connection lifecycle that
         //    precedes a logout (info/mode/displayInfo leaving NORMAL/MAIN).
@@ -1657,21 +2592,69 @@ exports.InjectDiagHooks = () => {
                 _Stream.__p2dStreamHooked = true;
                 var _streamSnap = function () {
                     var s = {};
-                    try { s.info = _Stream.info; s.mode = _Stream.mode; s.displayInfo = _Stream.displayInfo; s.available = _Stream.available; s.phoneAuthed = _Stream.phoneAuthed; s.resumeCount = _Stream.resumeCount; s.isHardRefresh = _Stream.isHardRefresh; } catch (e) { s.err = String(e); }
-                    try { s.socketState = window.require('WAWebSocketModel').Socket.state; } catch (e) {}
-                    try { s.msSincePageLoad = Math.round(performance.now()); } catch (e) {}
+                    try {
+                        s.info = _Stream.info;
+                        s.mode = _Stream.mode;
+                        s.displayInfo = _Stream.displayInfo;
+                        s.available = _Stream.available;
+                        s.phoneAuthed = _Stream.phoneAuthed;
+                        s.resumeCount = _Stream.resumeCount;
+                        s.isHardRefresh = _Stream.isHardRefresh;
+                    } catch (e) {
+                        s.err = String(e);
+                    }
+                    try {
+                        s.socketState =
+                            window.require('WAWebSocketModel').Socket.state;
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
+                    try {
+                        s.msSincePageLoad = Math.round(performance.now());
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
                     return s;
                 };
-                ['change:info', 'change:mode', 'change:displayInfo'].forEach(function (ev) {
-                    _Stream.on(ev, function () {
-                        try { safeDiagLog('debug', 'STREAM_' + ev.replace('change:', '').toUpperCase(), { event: ev, snap: _streamSnap() }); } catch (e) {}
-                    });
-                });
+                ['change:info', 'change:mode', 'change:displayInfo'].forEach(
+                    function (ev) {
+                        _Stream.on(ev, function () {
+                            try {
+                                safeDiagLog(
+                                    'debug',
+                                    'STREAM_' +
+                                        ev.replace('change:', '').toUpperCase(),
+                                    { event: ev, snap: _streamSnap() },
+                                );
+                            } catch (e) {
+                                // best-effort diagnostic: never let it break the caller
+                            }
+                        });
+                    },
+                );
             }
-        } catch (e) { safeDiagLog('debug', 'HOOK_FAIL', { hook: 'stream-transitions', reason: String((e && e.message) || e) }); }
+        } catch (e) {
+            safeDiagLog('debug', 'HOOK_FAIL', {
+                hook: 'stream-transitions',
+                reason: String((e && e.message) || e),
+            });
+        }
 
-        safeDiagLog('debug', 'LOGOUT_DIAG_INSTALLED', { hooks: ['Socket.logout', 'bridge.socketLogout', 'Cmd.logout-family', 'integrity.openChallengeModal', 'WALogger.LOG/WARN/ERROR', 'Stream.change:info/mode/displayInfo'], reasonMapSize: Object.keys(_logoutReasonName).length });
+        safeDiagLog('debug', 'LOGOUT_DIAG_INSTALLED', {
+            hooks: [
+                'Socket.logout',
+                'bridge.socketLogout',
+                'Cmd.logout-family',
+                'integrity.openChallengeModal',
+                'WALogger.LOG/WARN/ERROR',
+                'Stream.change:info/mode/displayInfo',
+            ],
+            reasonMapSize: Object.keys(_logoutReasonName).length,
+        });
     } catch (e) {
-        safeDiagLog('debug', 'HOOK_FAIL', { hook: 'logout-diagnostics', reason: e ? (e.message || String(e)) : 'unknown' });
+        safeDiagLog('debug', 'HOOK_FAIL', {
+            hook: 'logout-diagnostics',
+            reason: e ? e.message || String(e) : 'unknown',
+        });
     }
 };

@@ -257,7 +257,9 @@ class Client extends EventEmitter {
                                     let arg;
                                     try {
                                         arg = JSON.stringify(a).slice(0, 200);
-                                    } catch (e) {}
+                                    } catch (e) {
+                                        // best-effort diagnostic: never let it break the caller
+                                    }
                                     window.onSocketDiagEvent({
                                         event: name,
                                         reason:
@@ -267,7 +269,9 @@ class Client extends EventEmitter {
                                         arg,
                                         state: _st(),
                                     });
-                                } catch (e) {}
+                                } catch (e) {
+                                    // best-effort diagnostic: never let it break the caller
+                                }
                                 return orig.apply(this, args);
                             };
                         };
@@ -285,7 +289,9 @@ class Client extends EventEmitter {
                             '[wwjs-diag] socket bridge diag hooks installed (early)',
                         );
                     }
-                } catch (e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
                 // WhatsApp's own logger (the plain-text socket-close reason).
                 try {
                     const _WAL = window.require('WALogger');
@@ -308,13 +314,17 @@ class Client extends EventEmitter {
                                         state: _st(),
                                     });
                                 }
-                            } catch (e) {}
+                            } catch (e) {
+                                // best-effort diagnostic: never let it break the caller
+                            }
                             return orig.apply(this, arguments);
                         };
                         wrapped.__p2dWrapped = true;
                         _WAL[lvl] = wrapped;
                     });
-                } catch (e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
                 // Stream lifecycle transitions.
                 try {
                     const _S = window.require('WAWebStreamModel').Stream;
@@ -338,11 +348,15 @@ class Client extends EventEmitter {
                                         info: String(_S.info),
                                         state: _st(),
                                     });
-                                } catch (e) {}
+                                } catch (e) {
+                                    // best-effort diagnostic: never let it break the caller
+                                }
                             });
                         });
                     }
-                } catch (e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
                 // One-shot registered/state snapshot (guarded so the later block
                 // does not re-emit it).
                 try {
@@ -355,7 +369,9 @@ class Client extends EventEmitter {
                                 _me.getMaybeMePnUser() ||
                                 _me.getMaybeMeLidUser()
                             );
-                        } catch (e) {}
+                        } catch (e) {
+                            // best-effort diagnostic: never let it break the caller
+                        }
                         let _sm, _sd, _si, _rc, _hr, _stream;
                         try {
                             const S = window.require('WAWebStreamModel').Stream;
@@ -364,12 +380,17 @@ class Client extends EventEmitter {
                             _si = String(S.info);
                             _rc = S.resumeCount;
                             _hr = S.isHardRefresh;
-                        } catch (e) {}
+                        } catch (e) {
+                            // best-effort diagnostic: never let it break the caller
+                        }
                         try {
                             _stream = String(
-                                window.require('WAWebSocketModel').Socket.stream,
+                                window.require('WAWebSocketModel').Socket
+                                    .stream,
                             );
-                        } catch (e) {}
+                        } catch (e) {
+                            // best-effort diagnostic: never let it break the caller
+                        }
                         window.onSocketDiagEvent({
                             event: 'SESSION_SNAPSHOT_AT_INJECT',
                             registered: _reg,
@@ -382,7 +403,9 @@ class Client extends EventEmitter {
                             isHardRefresh: _hr,
                         });
                     }
-                } catch (e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
             });
 
             // Socket.state fires `change:state`, so wait on the event rather than
@@ -687,7 +710,11 @@ class Client extends EventEmitter {
             // QR / ERROR aren't listed: they have their own paths, emit nothing.
             const EMIT_BY_SCREEN = {
                 CONNECTED: () => [Events.READY],
-                LOADING: (percent) => [Events.LOADING_SCREEN, percent, 'WhatsApp'],
+                LOADING: (percent) => [
+                    Events.LOADING_SCREEN,
+                    percent,
+                    'WhatsApp',
+                ],
                 DISCONNECTED: (percent) => [
                     Events.LOADING_SCREEN,
                     percent,
@@ -794,12 +821,16 @@ class Client extends EventEmitter {
                             // Backbone only fires on real changes, so there is no
                             // race, no backstop and no manual de-dup.
                             await this.pupPage.evaluate(() => {
-                                const { Stream, StreamMode: M, StreamInfo: I } =
-                                    window.require('WAWebStreamModel');
+                                const {
+                                    Stream,
+                                    StreamMode: M,
+                                    StreamInfo: I,
+                                } = window.require('WAWebStreamModel');
                                 const resolveScreen = () => {
                                     switch (Stream.mode) {
                                         case M.MAIN:
-                                            return Stream.displayInfo === I.NORMAL
+                                            return Stream.displayInfo ===
+                                                I.NORMAL
                                                 ? 'CONNECTED'
                                                 : 'LOADING';
                                         case M.QR:
@@ -823,7 +854,10 @@ class Client extends EventEmitter {
                                             0,
                                     );
                                 };
-                                Stream.on('change:mode change:displayInfo', notify);
+                                Stream.on(
+                                    'change:mode change:displayInfo',
+                                    notify,
+                                );
                                 notify();
                             });
                         }
@@ -903,7 +937,9 @@ class Client extends EventEmitter {
                                     let arg;
                                     try {
                                         arg = JSON.stringify(a).slice(0, 200);
-                                    } catch (e) {}
+                                    } catch (e) {
+                                        // best-effort diagnostic: never let it break the caller
+                                    }
                                     window.onSocketDiagEvent({
                                         event: name,
                                         reason:
@@ -913,7 +949,9 @@ class Client extends EventEmitter {
                                         arg,
                                         state: String(Socket.state),
                                     });
-                                } catch (e) {}
+                                } catch (e) {
+                                    // best-effort diagnostic: never let it break the caller
+                                }
                                 return orig.apply(this, args);
                             };
                         };
@@ -972,13 +1010,17 @@ class Client extends EventEmitter {
                                         state: String(Socket.state),
                                     });
                                 }
-                            } catch (e) {}
+                            } catch (e) {
+                                // best-effort diagnostic: never let it break the caller
+                            }
                             return orig.apply(this, arguments);
                         };
                         wrapped.__p2dWrapped = true;
                         _WAL[lvl] = wrapped;
                     });
-                } catch (e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
 
                 // [diag] WhatsApp Stream lifecycle (info/mode/displayInfo) - the
                 // connection-screen transitions behind a stuck-connecting loop.
@@ -988,29 +1030,35 @@ class Client extends EventEmitter {
                     const _Stream = window.require('WAWebStreamModel').Stream;
                     if (_Stream && _Stream.on && !_Stream.__p2dStreamHooked) {
                         _Stream.__p2dStreamHooked = true;
-                        ['change:info', 'change:mode', 'change:displayInfo'].forEach(
-                            (ev) => {
-                                _Stream.on(ev, () => {
-                                    try {
-                                        window.onSocketDiagEvent({
-                                            event:
-                                                'STREAM_' +
-                                                ev
-                                                    .replace('change:', '')
-                                                    .toUpperCase(),
-                                            mode: String(_Stream.mode),
-                                            displayInfo: String(
-                                                _Stream.displayInfo,
-                                            ),
-                                            info: String(_Stream.info),
-                                            state: String(Socket.state),
-                                        });
-                                    } catch (e) {}
-                                });
-                            },
-                        );
+                        [
+                            'change:info',
+                            'change:mode',
+                            'change:displayInfo',
+                        ].forEach((ev) => {
+                            _Stream.on(ev, () => {
+                                try {
+                                    window.onSocketDiagEvent({
+                                        event:
+                                            'STREAM_' +
+                                            ev
+                                                .replace('change:', '')
+                                                .toUpperCase(),
+                                        mode: String(_Stream.mode),
+                                        displayInfo: String(
+                                            _Stream.displayInfo,
+                                        ),
+                                        info: String(_Stream.info),
+                                        state: String(Socket.state),
+                                    });
+                                } catch (e) {
+                                    // best-effort diagnostic: never let it break the caller
+                                }
+                            });
+                        });
                     }
-                } catch (e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
 
                 // [diag] One-shot session snapshot at inject time (pre-sync).
                 // The discriminator for "wedged after an auto-update": did the
@@ -1035,7 +1083,9 @@ class Client extends EventEmitter {
                         _registered = !!(
                             _me.getMaybeMePnUser() || _me.getMaybeMeLidUser()
                         );
-                    } catch (e) {}
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
                     let _stream = {};
                     try {
                         const S = window.require('WAWebStreamModel').Stream;
@@ -1046,7 +1096,9 @@ class Client extends EventEmitter {
                             resumeCount: S.resumeCount,
                             isHardRefresh: S.isHardRefresh,
                         };
-                    } catch (e) {}
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
                     window.onSocketDiagEvent({
                         event: 'SESSION_SNAPSHOT_AT_INJECT',
                         registered: _registered,
@@ -1059,7 +1111,9 @@ class Client extends EventEmitter {
                         resumeCount: _stream.resumeCount,
                         isHardRefresh: _stream.isHardRefresh,
                     });
-                } catch (e) {}
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
 
                 const listeners = [
                     [
