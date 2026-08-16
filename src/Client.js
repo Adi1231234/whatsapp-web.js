@@ -19,6 +19,7 @@ const {
     shouldSkipMsg: _shouldSkipDiagMsg,
 } = require('./util/Injected/DiagCommon');
 const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
+const { ExposeStreamScreenWatcher } = require('./util/Injected/StreamScreen');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -814,53 +815,12 @@ class Client extends EventEmitter {
                                 '[wwjs-diag] onAppStateHasSyncedEvent attachEventListeners done',
                                 { ts: Date.now() },
                             );
-
-                            // Connection lifecycle: subscribe to WA's own Stream
-                            // (change:mode/displayInfo) here, after ClientInfo
-                            // exists, and fire once for the current state.
-                            // Backbone only fires on real changes, so there is no
-                            // race, no backstop and no manual de-dup.
-                            await this.pupPage.evaluate(() => {
-                                const {
-                                    Stream,
-                                    StreamMode: M,
-                                    StreamInfo: I,
-                                } = window.require('WAWebStreamModel');
-                                const resolveScreen = () => {
-                                    switch (Stream.mode) {
-                                        case M.MAIN:
-                                            return Stream.displayInfo ===
-                                                I.NORMAL
-                                                ? 'CONNECTED'
-                                                : 'LOADING';
-                                        case M.QR:
-                                            return 'QR';
-                                        case M.OFFLINE:
-                                            return 'DISCONNECTED';
-                                        case M.SYNCING:
-                                            return 'LOADING';
-                                        default:
-                                            return 'ERROR';
-                                    }
-                                };
-                                let lastScreen = null;
-                                const notify = () => {
-                                    const screen = resolveScreen();
-                                    if (screen === lastScreen) return;
-                                    lastScreen = screen;
-                                    window.onConnectionStateEvent(
-                                        screen,
-                                        window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
-                                            0,
-                                    );
-                                };
-                                Stream.on(
-                                    'change:mode change:displayInfo',
-                                    notify,
-                                );
-                                notify();
-                            });
                         }
+                        // The Stream watcher is subscribed at inject; this only
+                        // unblocks CONNECTED, now that the Store exists.
+                        await this.pupPage.evaluate(() =>
+                            window.__wwjsMarkStoreReady?.(),
+                        );
                         this.authStrategy.afterAuthReady();
                     } catch (err) {
                         console.log(
@@ -883,6 +843,7 @@ class Client extends EventEmitter {
                     if (args) this.emit(...args);
                 },
             );
+            await this.pupPage.evaluate(ExposeStreamScreenWatcher);
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onLogoutEvent',
