@@ -33,6 +33,7 @@ exports.ExposeStreamScreenWatcher = () => {
             'change:mode change:displayInfo',
             window.__wwjsStreamWatcher,
         );
+        Socket.off('change:state', window.__wwjsStreamWatcher);
     }
 
     const resolveScreen = () => {
@@ -69,6 +70,12 @@ exports.ExposeStreamScreenWatcher = () => {
     // that is real is the sync that follows a successful pairing, and the
     // socket is what proves it: it only reaches CONNECTED once the phone has
     // paired. Everything else waits for the Store, as CONNECTED already does.
+    //
+    // The socket is therefore part of the input, and it settles LAST: measured
+    // on a real scan, the stream turned SYNCING 1.1s BEFORE the socket reached
+    // CONNECTED, and nothing on the stream moved again for the next 10s. Gating
+    // on the socket without also listening to it would drop exactly the event
+    // this whole watcher exists for.
     const preSyncScanOnly = (screen) =>
         screen === 'LOADING' && Socket.state === SOCKET_STATE.CONNECTED;
 
@@ -91,6 +98,7 @@ exports.ExposeStreamScreenWatcher = () => {
     };
 
     Stream.on('change:mode change:displayInfo', notify);
+    Socket.on('change:state', notify);
     // Backbone only fires on real changes, so report the current state once.
     notify();
 };
