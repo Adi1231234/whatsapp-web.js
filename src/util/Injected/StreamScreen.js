@@ -23,6 +23,8 @@ exports.ExposeStreamScreenWatcher = () => {
         StreamMode: M,
         StreamInfo: I,
     } = window.require('WAWebStreamModel');
+    const { Socket } = window.require('WAWebSocketModel');
+    const { SOCKET_STATE } = window.require('WAWebSocketConstants');
 
     // inject() can run several times on the same page (framenavigated), and
     // Backbone would happily stack a second listener on top of the first.
@@ -58,10 +60,22 @@ exports.ExposeStreamScreenWatcher = () => {
     let storeReady = typeof window.WWebJS !== 'undefined';
     let lastScreen = null;
 
+    // Before the first sync, the stream says almost nothing trustworthy: it is
+    // constructed at SYNCING and only becomes QR inside its own initialize(),
+    // and while a QR waits to be scanned it keeps flapping through
+    // OPENING/PAIRING on every socket cycle. Reporting those as loading_screen
+    // walks an account off its Qr stage every few seconds - measured live, it
+    // re-fired the "QR shown" alert on every refresh. The one pre-sync screen
+    // that is real is the sync that follows a successful pairing, and the
+    // socket is what proves it: it only reaches CONNECTED once the phone has
+    // paired. Everything else waits for the Store, as CONNECTED already does.
+    const preSyncScanOnly = (screen) =>
+        screen === 'LOADING' && Socket.state === SOCKET_STATE.CONNECTED;
+
     const notify = () => {
         const screen = resolveScreen();
         if (screen === lastScreen) return;
-        if (screen === 'CONNECTED' && !storeReady) return;
+        if (!storeReady && !preSyncScanOnly(screen)) return;
         lastScreen = screen;
         window.onConnectionStateEvent(
             screen,
