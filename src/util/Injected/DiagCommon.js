@@ -71,9 +71,12 @@ function shouldSkipReceipt(receipt) {
 
 /* ---------- Node-side: eval once to get real functions ---------- */
 
-const _node = new Function(HELPERS_SOURCE + `
+const _node = new Function(
+    HELPERS_SOURCE +
+        `
 return { isStatusOrGroup, isThumbnailType, wid, safeStr, shouldSkipMsg, shouldSkipReceipt };
-`)();
+`,
+)();
 
 /* ---------- Browser-side: self-contained function for page.evaluate ---------- */
 
