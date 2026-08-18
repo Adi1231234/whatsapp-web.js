@@ -373,8 +373,11 @@ class Client extends EventEmitter {
                         // Drive READY/LOADING from WhatsApp's own Stream state
                         // now that ClientInfo exists (re-run on re-injection).
                         await this.pupPage.evaluate(() => {
-                            const { Stream, StreamMode: M, StreamInfo: I } =
-                                window.require('WAWebStreamModel');
+                            const {
+                                Stream,
+                                StreamMode: M,
+                                StreamInfo: I,
+                            } = window.require('WAWebStreamModel');
                             const resolveScreen = () => {
                                 switch (Stream.mode) {
                                     case M.MAIN:
@@ -413,7 +416,11 @@ class Client extends EventEmitter {
             // QR / ERROR aren't listed: they have their own paths, emit nothing.
             const EMIT_BY_SCREEN = {
                 CONNECTED: () => [Events.READY],
-                LOADING: (percent) => [Events.LOADING_SCREEN, percent, 'WhatsApp'],
+                LOADING: (percent) => [
+                    Events.LOADING_SCREEN,
+                    percent,
+                    'WhatsApp',
+                ],
                 DISCONNECTED: (percent) => [
                     Events.LOADING_SCREEN,
                     percent,
