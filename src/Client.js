@@ -836,11 +836,19 @@ class Client extends EventEmitter {
                                     StreamMode: M,
                                     StreamInfo: I,
                                 } = window.require('WAWebStreamModel');
+                                // WA >= 2.3000.1046055909 moved displayInfo into
+                                // WAWebStreamGetters. Whichever a build has
+                                // answers; deriving it does not work, no
+                                // combination of the inputs is equivalent.
+                                const displayInfo = () =>
+                                    window
+                                        .require('WAWebStreamGetters')
+                                        ?.getDisplayInfo?.(Stream) ??
+                                    Stream.displayInfo;
                                 const resolveScreen = () => {
                                     switch (Stream.mode) {
                                         case M.MAIN:
-                                            return Stream.displayInfo ===
-                                                I.NORMAL
+                                            return displayInfo() === I.NORMAL
                                                 ? 'CONNECTED'
                                                 : 'LOADING';
                                         case M.QR:
@@ -864,10 +872,11 @@ class Client extends EventEmitter {
                                             0,
                                     );
                                 };
-                                Stream.on(
-                                    'change:mode change:displayInfo',
-                                    notify,
-                                );
+                                // The generic event: change:displayInfo cannot
+                                // fire where the attribute is gone, and naming
+                                // the inputs would break the next time WA moves
+                                // them.
+                                Stream.on('change', notify);
                                 notify();
                             });
                         }
