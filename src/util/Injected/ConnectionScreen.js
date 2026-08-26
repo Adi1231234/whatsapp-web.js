@@ -2,39 +2,19 @@
 
 /**
  * Reports WhatsApp's connection screen to the Node side, from WA's own Stream.
+ * Injected with page.evaluate(), so it has to stay self-contained.
  *
- * Injected with page.evaluate(), so it must stay self-contained: it may only
- * reach the page through `window`, never through a sibling module.
+ * WA >= 2.3000.1046055909 deleted the derived `Stream.displayInfo` and moved the
+ * same computation into `WAWebStreamGetters.getDisplayInfo`. Reading the old
+ * attribute there yields `undefined`, which never equals `StreamInfo.NORMAL`, so
+ * a connected account resolved to 'LOADING' forever and READY - whose only emit
+ * site is 'CONNECTED' - became unreachable. Ask for whichever of the two the
+ * page has; `window.require` returns `undefined` for an unknown module instead
+ * of throwing, so `?.` is the whole feature detection.
  *
- * WA >= 2.3000.1046055909 DELETED the derived `Stream.displayInfo` attribute
- * and moved the identical computation into a memoized getter module,
- * `WAWebStreamGetters.getDisplayInfo`. Reading the old attribute on such a
- * build yields `undefined`, which never equals `StreamInfo.NORMAL`, so
- * `Stream.mode === MAIN` resolved to 'LOADING' forever. READY has exactly one
- * emit site in this library - the 'CONNECTED' screen - so it became
- * unreachable, the consumer's watchdog restarted the client every ~2 minutes,
- * and the cycle repeated. Measured on three shops on 2026-08-26.
- *
- * Two things follow, and both are load-bearing:
- *
- * 1. `displayInfo` has to be resolved through the getter when it is there, with
- *    a local copy of WA's formula for builds that still carry the attribute.
- *    The two are equivalent: WA moved the code without changing it, down to the
- *    same "Stream:unknown obscure level:" fallthrough. The only substitution is
- *    where `hasSynced` comes from - the old attribute read `Socket.hasSynced`
- *    inside the HIDE branch, the getter takes `Stream.hasSynced` - and WA's own
- *    `$StreamImpl$p_1` mirrors the Socket onto the Stream on BOTH builds, so
- *    they carry the same value.
- *
- * 2. `change:displayInfo` can never fire where the attribute is gone. The
- *    subscription is the three events WA's own loading screen listens to
- *    (`change:info change:obscurity change:hasSynced`), plus `change:mode` for
- *    the branch below. Measured on a live 2.3000.1046055909 page: zero
- *    `change:displayInfo` against 572 `change:info` and 155 `change:mode`.
- *
- * `window.require()` of an unknown WA module RETURNS `undefined` here, it does
- * not throw - it only logs "Requiring unknown module" to the console - so both
- * module lookups below are plain feature detection.
+ * `change:displayInfo` cannot fire where the attribute is gone, so the
+ * subscription is the three WA's own loading screen listens to, plus
+ * `change:mode` for the branch below.
  */
 exports.InstallConnectionScreenWatcher = function () {
     const {
@@ -43,50 +23,14 @@ exports.InstallConnectionScreenWatcher = function () {
         StreamInfo: I,
     } = window.require('WAWebStreamModel');
 
-    const getters = window.require('WAWebStreamGetters');
-    const types = window.require('WAWebStreamTypes');
-
-    const displayInfoOf = () => {
-        if (getters && getters.getDisplayInfo) {
-            // Falling through to the local formula on a throw is not paranoia:
-            // this runs inside a Stream change handler, and a listener that
-            // throws aborts the rest of WhatsApp's own dispatch for that event.
-            // The old code read a property here and could not throw; calling
-            // into WA has to be guarded to keep that property.
-            try {
-                return getters.getDisplayInfo(Stream);
-            } catch (e) {
-                // fall through to the local computation
-            }
-        }
-        if (Stream.displayInfo !== undefined) return Stream.displayInfo;
-        if (!types) return undefined;
-        const SI = types.StreamInfo;
-        const OB = types.Obscurity;
-        switch (Stream.obscurity) {
-            case OB.SHOW:
-                return Stream.info;
-            case OB.HIDE:
-                return Stream.hasSynced === true ? SI.NORMAL : SI.CONNECTING;
-            case OB.OBSCURE:
-                switch (Stream.info) {
-                    case SI.OPENING:
-                    case SI.PAIRING:
-                    case SI.SYNCING:
-                    case SI.RESUMING:
-                        return SI.CONNECTING;
-                    default:
-                        return Stream.info;
-                }
-            default:
-                return Stream.info;
-        }
-    };
+    const displayInfo = () =>
+        window.require('WAWebStreamGetters')?.getDisplayInfo?.(Stream) ??
+        Stream.displayInfo;
 
     const resolveScreen = () => {
         switch (Stream.mode) {
             case M.MAIN:
-                return displayInfoOf() === I.NORMAL ? 'CONNECTED' : 'LOADING';
+                return displayInfo() === I.NORMAL ? 'CONNECTED' : 'LOADING';
             case M.QR:
                 return 'QR';
             case M.OFFLINE:
@@ -100,33 +44,23 @@ exports.InstallConnectionScreenWatcher = function () {
 
     let lastScreen = null;
     const notify = () => {
-        let screen;
         try {
-            screen = resolveScreen();
-        } catch (e) {
-            return;
-        }
-        if (screen === lastScreen) return;
-        // The binding can be absent: `exposeFunctionIfAbsent` is awaited
-        // separately and an expose that fails leaves nothing here. Latching
-        // `lastScreen` before the report actually goes out would suppress that
-        // screen for the life of the page, so it is only latched on success.
-        const report = window.onConnectionStateEvent;
-        if (typeof report !== 'function') return;
-        let progress = 0;
-        try {
-            progress =
+            const screen = resolveScreen();
+            if (screen === lastScreen) return;
+            window.onConnectionStateEvent(
+                screen,
                 window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
-                0;
+                    0,
+            );
+            // Latched only once the report is out, so a binding that is not
+            // there yet cannot suppress that screen for the life of the page.
+            lastScreen = screen;
         } catch (e) {
-            progress = 0;
-        }
-        lastScreen = screen;
-        try {
-            report(screen, progress);
-        } catch (e) {
-            // Nothing was reported, so do not pretend it was.
-            lastScreen = null;
+            // Throwing here would abort the rest of WhatsApp's own dispatch for
+            // the event, so it is reported instead.
+            window.__diag?.safeDiagLog?.('info', 'CONNECTION_SCREEN_FAILED', {
+                error: String((e && e.message) || e),
+            });
         }
     };
 

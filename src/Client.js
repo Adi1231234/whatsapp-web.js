@@ -857,19 +857,15 @@ class Client extends EventEmitter {
                 'onConnectionStateEvent',
                 (screen, percent) => {
                     const args = EMIT_BY_SCREEN[screen]?.(percent);
-                    if (args) {
-                        this.emit(...args);
-                        return;
-                    }
-                    // QR has its own path; ERROR (Stream.mode CONFLICT /
-                    // PROXYBLOCK / TOS_BLOCK / SMB_TOS_BLOCK) has none at all,
-                    // so without this line those modes are completely invisible:
-                    // no event, no log, and the consumer keeps waiting.
-                    console.log('[wwjs-diag] CONNECTION_SCREEN_UNMAPPED', {
-                        screen,
-                        percent,
-                        ts: Date.now(),
-                    });
+                    // QR has its own path, but ERROR (Stream.mode CONFLICT /
+                    // PROXYBLOCK / TOS_BLOCK) has none, so it would otherwise be
+                    // invisible: no event, no log, consumer still waiting.
+                    if (args) this.emit(...args);
+                    else
+                        console.log('[wwjs-diag] CONNECTION_SCREEN_UNMAPPED', {
+                            screen,
+                            percent,
+                        });
                 },
             );
             await exposeFunctionIfAbsent(
