@@ -19,6 +19,9 @@ const {
     shouldSkipMsg: _shouldSkipDiagMsg,
 } = require('./util/Injected/DiagCommon');
 const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
+const {
+    InstallConnectionScreenWatcher,
+} = require('./util/Injected/ConnectionScreen');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -825,51 +828,15 @@ class Client extends EventEmitter {
                                 { ts: Date.now() },
                             );
 
-                            // Connection lifecycle: subscribe to WA's own Stream
-                            // (change:mode/displayInfo) here, after ClientInfo
-                            // exists, and fire once for the current state.
-                            // Backbone only fires on real changes, so there is no
-                            // race, no backstop and no manual de-dup.
-                            await this.pupPage.evaluate(() => {
-                                const {
-                                    Stream,
-                                    StreamMode: M,
-                                    StreamInfo: I,
-                                } = window.require('WAWebStreamModel');
-                                const resolveScreen = () => {
-                                    switch (Stream.mode) {
-                                        case M.MAIN:
-                                            return Stream.displayInfo ===
-                                                I.NORMAL
-                                                ? 'CONNECTED'
-                                                : 'LOADING';
-                                        case M.QR:
-                                            return 'QR';
-                                        case M.OFFLINE:
-                                            return 'DISCONNECTED';
-                                        case M.SYNCING:
-                                            return 'LOADING';
-                                        default:
-                                            return 'ERROR';
-                                    }
-                                };
-                                let lastScreen = null;
-                                const notify = () => {
-                                    const screen = resolveScreen();
-                                    if (screen === lastScreen) return;
-                                    lastScreen = screen;
-                                    window.onConnectionStateEvent(
-                                        screen,
-                                        window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
-                                            0,
-                                    );
-                                };
-                                Stream.on(
-                                    'change:mode change:displayInfo',
-                                    notify,
-                                );
-                                notify();
-                            });
+                            // Connection lifecycle: subscribe to WA's own
+                            // Stream here, after ClientInfo exists, and fire
+                            // once for the current state. Backbone only fires on
+                            // real changes, so there is no race and no manual
+                            // de-dup. See ./util/Injected/ConnectionScreen.js
+                            // for why displayInfo is resolved the way it is.
+                            await this.pupPage.evaluate(
+                                InstallConnectionScreenWatcher,
+                            );
                         }
                         this.authStrategy.afterAuthReady();
                     } catch (err) {
@@ -890,7 +857,19 @@ class Client extends EventEmitter {
                 'onConnectionStateEvent',
                 (screen, percent) => {
                     const args = EMIT_BY_SCREEN[screen]?.(percent);
-                    if (args) this.emit(...args);
+                    if (args) {
+                        this.emit(...args);
+                        return;
+                    }
+                    // QR has its own path; ERROR (Stream.mode CONFLICT /
+                    // PROXYBLOCK / TOS_BLOCK / SMB_TOS_BLOCK) has none at all,
+                    // so without this line those modes are completely invisible:
+                    // no event, no log, and the consumer keeps waiting.
+                    console.log('[wwjs-diag] CONNECTION_SCREEN_UNMAPPED', {
+                        screen,
+                        percent,
+                        ts: Date.now(),
+                    });
                 },
             );
             await exposeFunctionIfAbsent(
