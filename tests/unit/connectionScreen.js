@@ -53,7 +53,7 @@ const waGetDisplayInfo = (S) => {
  *              'legacy'   WA <= 2.3000.1045986927: attribute, no getter module
  *              'ancient'  attribute only, no WAWebStreamTypes either
  */
-function install(build, state) {
+function install(build, state, overrides = {}) {
     const subscriptions = [];
     const stream = Object.assign({}, state, {
         on: (events, fn) => subscriptions.push({ events, fn }),
@@ -67,7 +67,13 @@ function install(build, state) {
         WAWebStreamModel: { Stream: stream, StreamMode: MODE, StreamInfo: SI },
         WAWebStreamGetters:
             build === 'current'
-                ? { getDisplayInfo: waGetDisplayInfo }
+                ? {
+                      getDisplayInfo: overrides.throwingGetter
+                          ? () => {
+                                throw new Error('WA moved it again');
+                            }
+                          : waGetDisplayInfo,
+                  }
                 : undefined,
         WAWebStreamTypes:
             build === 'ancient' ? undefined : { StreamInfo: SI, Obscurity: OB },
@@ -77,8 +83,13 @@ function install(build, state) {
     // throw. The fix feature-detects on that, so the stub must behave the same.
     const pageWindow = {
         require: (name) => modules[name],
-        onConnectionStateEvent: (screen, percent) =>
-            emitted.push({ screen, percent }),
+        onConnectionStateEvent: overrides.noBinding
+            ? undefined
+            : overrides.throwingBinding
+              ? () => {
+                    throw new Error('binding blew up');
+                }
+              : (screen, percent) => emitted.push({ screen, percent }),
     };
     // The watcher and its listener both run in the page, so anything the test
     // invokes later (a change handler) has to see the same window.
@@ -92,8 +103,15 @@ function install(build, state) {
         }
     };
     inPage(InstallConnectionScreenWatcher);
-    return { emitted, subscriptions, stream, inPage };
+    return { emitted, subscriptions, stream, inPage, pageWindow };
 }
+
+const connected = {
+    mode: MODE.MAIN,
+    info: SI.NORMAL,
+    obscurity: OB.HIDE,
+    hasSynced: true,
+};
 
 const builds = ['current', 'legacy', 'ancient'];
 
@@ -196,5 +214,51 @@ describe('InstallConnectionScreenWatcher', function () {
             'CONNECTED',
             'LOADING',
         ]);
+    });
+
+    // This runs inside a Stream change handler, and a listener that throws
+    // aborts the rest of WhatsApp's own dispatch for that event. None of the
+    // three failure modes below may escape.
+    describe('never throws into the WhatsApp dispatch', function () {
+        it('falls back to the local formula when the getter throws', function () {
+            const { emitted } = install('current', connected, {
+                throwingGetter: true,
+            });
+            expect(emitted).to.deep.equal([
+                { screen: 'CONNECTED', percent: 0 },
+            ]);
+        });
+
+        it('swallows a throwing binding and does not latch the screen', function () {
+            const { subscriptions, pageWindow, emitted, inPage } = install(
+                'current',
+                connected,
+                { throwingBinding: true },
+            );
+            expect(emitted).to.have.lengthOf(0);
+            // A later working binding must still get the current screen: the
+            // failed report must not have latched it.
+            pageWindow.onConnectionStateEvent = (screen, percent) =>
+                emitted.push({ screen, percent });
+            inPage(subscriptions[0].fn);
+            expect(emitted).to.deep.equal([
+                { screen: 'CONNECTED', percent: 0 },
+            ]);
+        });
+
+        it('survives a missing binding and reports once it appears', function () {
+            const { subscriptions, pageWindow, emitted, inPage } = install(
+                'current',
+                connected,
+                { noBinding: true },
+            );
+            expect(emitted).to.have.lengthOf(0);
+            pageWindow.onConnectionStateEvent = (screen, percent) =>
+                emitted.push({ screen, percent });
+            inPage(subscriptions[0].fn);
+            expect(emitted).to.deep.equal([
+                { screen: 'CONNECTED', percent: 0 },
+            ]);
+        });
     });
 });

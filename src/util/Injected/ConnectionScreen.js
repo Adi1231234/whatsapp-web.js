@@ -47,8 +47,18 @@ exports.InstallConnectionScreenWatcher = function () {
     const types = window.require('WAWebStreamTypes');
 
     const displayInfoOf = () => {
-        if (getters && getters.getDisplayInfo)
-            return getters.getDisplayInfo(Stream);
+        if (getters && getters.getDisplayInfo) {
+            // Falling through to the local formula on a throw is not paranoia:
+            // this runs inside a Stream change handler, and a listener that
+            // throws aborts the rest of WhatsApp's own dispatch for that event.
+            // The old code read a property here and could not throw; calling
+            // into WA has to be guarded to keep that property.
+            try {
+                return getters.getDisplayInfo(Stream);
+            } catch (e) {
+                // fall through to the local computation
+            }
+        }
         if (Stream.displayInfo !== undefined) return Stream.displayInfo;
         if (!types) return undefined;
         const SI = types.StreamInfo;
@@ -90,14 +100,34 @@ exports.InstallConnectionScreenWatcher = function () {
 
     let lastScreen = null;
     const notify = () => {
-        const screen = resolveScreen();
+        let screen;
+        try {
+            screen = resolveScreen();
+        } catch (e) {
+            return;
+        }
         if (screen === lastScreen) return;
+        // The binding can be absent: `exposeFunctionIfAbsent` is awaited
+        // separately and an expose that fails leaves nothing here. Latching
+        // `lastScreen` before the report actually goes out would suppress that
+        // screen for the life of the page, so it is only latched on success.
+        const report = window.onConnectionStateEvent;
+        if (typeof report !== 'function') return;
+        let progress = 0;
+        try {
+            progress =
+                window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
+                0;
+        } catch (e) {
+            progress = 0;
+        }
         lastScreen = screen;
-        window.onConnectionStateEvent(
-            screen,
-            window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
-                0,
-        );
+        try {
+            report(screen, progress);
+        } catch (e) {
+            // Nothing was reported, so do not pretend it was.
+            lastScreen = null;
+        }
     };
 
     Stream.on(
