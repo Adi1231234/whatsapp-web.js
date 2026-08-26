@@ -1,63 +1,56 @@
 'use strict';
 
 /**
- * Reports WhatsApp's connection screen to the Node side, from WA's own Stream.
- * Injected with page.evaluate(), so it has to stay self-contained.
+ * Reports WhatsApp's connection screen to the Node side. Injected, so it has to
+ * be self-contained.
  *
- * WA >= 2.3000.1046055909 deleted the derived `Stream.displayInfo` and moved the
- * same computation into `WAWebStreamGetters.getDisplayInfo`. Reading the old
- * attribute there yields `undefined`, which never equals `StreamInfo.NORMAL`, so
- * a connected account resolved to 'LOADING' forever and READY - whose only emit
- * site is 'CONNECTED' - became unreachable. Ask for whichever of the two the
- * page has; `window.require` returns `undefined` for an unknown module instead
- * of throwing, so `?.` is the whole feature detection.
+ * WA >= 2.3000.1046055909 moved `Stream.displayInfo` into
+ * `WAWebStreamGetters.getDisplayInfo`. Whichever of the two a build has is the
+ * one that answers; `window.require` returns undefined for an unknown module
+ * rather than throwing, so `?.` is the whole feature detection. Do not try to
+ * derive it instead - no combination of info/obscurity/hasSynced is equivalent.
  *
- * `change:displayInfo` cannot fire where the attribute is gone, so the
- * subscription is the three WA's own loading screen listens to, plus
- * `change:mode` for the branch below.
+ * `change:displayInfo` cannot fire where the attribute is gone, hence the three
+ * events WA's own loading screen uses, plus `change:mode`.
  */
 exports.InstallConnectionScreenWatcher = function () {
-    const {
-        Stream,
-        StreamMode: M,
-        StreamInfo: I,
-    } = window.require('WAWebStreamModel');
+    const { Stream, StreamMode, StreamInfo } =
+        window.require('WAWebStreamModel');
 
     const displayInfo = () =>
         window.require('WAWebStreamGetters')?.getDisplayInfo?.(Stream) ??
         Stream.displayInfo;
 
-    const resolveScreen = () => {
+    const screenNow = () => {
         switch (Stream.mode) {
-            case M.MAIN:
-                return displayInfo() === I.NORMAL ? 'CONNECTED' : 'LOADING';
-            case M.QR:
+            case StreamMode.MAIN:
+                return displayInfo() === StreamInfo.NORMAL
+                    ? 'CONNECTED'
+                    : 'LOADING';
+            case StreamMode.QR:
                 return 'QR';
-            case M.OFFLINE:
+            case StreamMode.OFFLINE:
                 return 'DISCONNECTED';
-            case M.SYNCING:
+            case StreamMode.SYNCING:
                 return 'LOADING';
             default:
                 return 'ERROR';
         }
     };
 
-    let lastScreen = null;
+    let reported = null;
     const notify = () => {
         try {
-            const screen = resolveScreen();
-            if (screen === lastScreen) return;
+            const screen = screenNow();
+            if (screen === reported) return;
             window.onConnectionStateEvent(
                 screen,
                 window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
                     0,
             );
-            // Latched only once the report is out, so a binding that is not
-            // there yet cannot suppress that screen for the life of the page.
-            lastScreen = screen;
+            reported = screen; // only once it is out, so a late binding recovers
         } catch (e) {
-            // Throwing here would abort the rest of WhatsApp's own dispatch for
-            // the event, so it is reported instead.
+            // Throwing would abort the rest of WhatsApp's dispatch for the event.
             window.__diag?.safeDiagLog?.('info', 'CONNECTION_SCREEN_FAILED', {
                 error: String((e && e.message) || e),
             });
