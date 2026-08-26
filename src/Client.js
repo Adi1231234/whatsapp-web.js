@@ -19,9 +19,6 @@ const {
     shouldSkipMsg: _shouldSkipDiagMsg,
 } = require('./util/Injected/DiagCommon');
 const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
-const {
-    InstallConnectionScreenWatcher,
-} = require('./util/Injected/ConnectionScreen');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -828,15 +825,60 @@ class Client extends EventEmitter {
                                 { ts: Date.now() },
                             );
 
-                            // Connection lifecycle: subscribe to WA's own
-                            // Stream here, after ClientInfo exists, and fire
-                            // once for the current state. Backbone only fires on
-                            // real changes, so there is no race and no manual
-                            // de-dup. See ./util/Injected/ConnectionScreen.js
-                            // for why displayInfo is resolved the way it is.
-                            await this.pupPage.evaluate(
-                                InstallConnectionScreenWatcher,
-                            );
+                            // Connection lifecycle: subscribe to WA's own Stream
+                            // (change:mode/displayInfo) here, after ClientInfo
+                            // exists, and fire once for the current state.
+                            // Backbone only fires on real changes, so there is no
+                            // race, no backstop and no manual de-dup.
+                            await this.pupPage.evaluate(() => {
+                                const {
+                                    Stream,
+                                    StreamMode: M,
+                                    StreamInfo: I,
+                                } = window.require('WAWebStreamModel');
+                                // WA >= 2.3000.1046055909 moved displayInfo into
+                                // WAWebStreamGetters. Whichever a build has
+                                // answers; deriving it does not work, no
+                                // combination of the inputs is equivalent.
+                                const displayInfo = () =>
+                                    window
+                                        .require('WAWebStreamGetters')
+                                        ?.getDisplayInfo?.(Stream) ??
+                                    Stream.displayInfo;
+                                const resolveScreen = () => {
+                                    switch (Stream.mode) {
+                                        case M.MAIN:
+                                            return displayInfo() === I.NORMAL
+                                                ? 'CONNECTED'
+                                                : 'LOADING';
+                                        case M.QR:
+                                            return 'QR';
+                                        case M.OFFLINE:
+                                            return 'DISCONNECTED';
+                                        case M.SYNCING:
+                                            return 'LOADING';
+                                        default:
+                                            return 'ERROR';
+                                    }
+                                };
+                                let lastScreen = null;
+                                const notify = () => {
+                                    const screen = resolveScreen();
+                                    if (screen === lastScreen) return;
+                                    lastScreen = screen;
+                                    window.onConnectionStateEvent(
+                                        screen,
+                                        window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.() ??
+                                            0,
+                                    );
+                                };
+                                // The generic event: change:displayInfo cannot
+                                // fire where the attribute is gone, and naming
+                                // the inputs would break the next time WA moves
+                                // them.
+                                Stream.on('change', notify);
+                                notify();
+                            });
                         }
                         this.authStrategy.afterAuthReady();
                     } catch (err) {
@@ -857,15 +899,7 @@ class Client extends EventEmitter {
                 'onConnectionStateEvent',
                 (screen, percent) => {
                     const args = EMIT_BY_SCREEN[screen]?.(percent);
-                    // QR has its own path, but ERROR (Stream.mode CONFLICT /
-                    // PROXYBLOCK / TOS_BLOCK) has none, so it would otherwise be
-                    // invisible: no event, no log, consumer still waiting.
                     if (args) this.emit(...args);
-                    else
-                        console.log('[wwjs-diag] CONNECTION_SCREEN_UNMAPPED', {
-                            screen,
-                            percent,
-                        });
                 },
             );
             await exposeFunctionIfAbsent(
