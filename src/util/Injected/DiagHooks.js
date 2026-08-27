@@ -2485,6 +2485,23 @@ exports.InjectDiagHooks = () => {
             return String(v);
         };
 
+        // Decode a whole attrs bag. WAXmlNode.attrsToString (what toString
+        // uses) calls .toString() on each value, so a byte-valued attribute
+        // renders as "100,101,118,...". Decoding here keeps every field the
+        // server sent readable, not just the one the parser happens to read.
+        var _attrsToText = function (attrs) {
+            if (!attrs || typeof attrs !== 'object') return null;
+            var decoded = {};
+            try {
+                var keys = Object.keys(attrs);
+                for (var ai = 0; ai < keys.length; ai++)
+                    decoded[keys[ai]] = _asText(attrs[keys[ai]]);
+            } catch (e) {
+                return null;
+            }
+            return decoded;
+        };
+
         var _logRawStreamError = function (node, result) {
             var info = {};
             // What WhatsApp concluded, i.e. what every downstream branch acts on.
@@ -2504,60 +2521,57 @@ exports.InjectDiagHooks = () => {
             } catch (e) {
                 info.parsedErr = String(e);
             }
-            // What the SERVER actually said, read off the stanza.
+            // What the SERVER actually said, read off the raw stanza.
             //
-            // parse(node) is handed the RAW wap node ({tag, attrs, content});
-            // the hasChild/attrString API belongs to WhatsApp's
-            // ParsableWapNode, which parse() builds internally and hands to the
-            // parse function. Build the same wrapper here rather than reading
-            // node.attrs directly, because attribute values can be byte arrays
-            // and attrString decodes them (attrString -> decodeAsString).
+            // EVERY attribute is captured, not just `type`. WhatsApp's parser
+            // reads `type` and nothing else, but the stanza can carry more:
+            // WapNode.toString serialises tag + all attrs + children
+            // recursively, so anything the server adds is present on the node
+            // and simply thrown away by the parser. Those discarded fields are
+            // exactly what would say WHY the session was cut, so they are the
+            // point of this hook.
+            //
+            // Read from the raw node rather than through ParsableWapNode.
+            // parse() is handed the RAW node ({tag, attrs, content}) and builds
+            // the wrapper itself, and the wrapper is no safer here: its
+            // attrString() routes through WAWap.decodeAsString, which returns a
+            // Uint8Array UNCHANGED (verified live), so it needs the same
+            // decoding _asText already does, and it throws where this does not.
             try {
                 info.tag = node && node.tag ? String(node.tag) : null;
-                var _PWN = window.require('WAParsableWapNode');
-                var view =
-                    _PWN && _PWN.ParsableWapNode
-                        ? new _PWN.ParsableWapNode('p2dStreamErrDiag', node)
-                        : null;
-                if (view && view.hasChild('conflict')) {
-                    info.hasConflict = true;
-                    var conflict = view.child('conflict');
-                    info.conflictType = conflict.hasAttr('type')
-                        ? _asText(conflict.attrString('type'))
-                        : null;
-                } else if (view) {
-                    info.hasConflict = false;
-                }
-            } catch (e) {
-                info.conflictErr = String(e);
-            }
-            // Fallback if the wrapper was unavailable or threw: read the raw
-            // node. Never leave hasConflict undefined, because the volume guard
-            // below would then treat a terminal conflict as a routine stream
-            // error and cap it away.
-            try {
-                if (info.hasConflict === undefined) {
-                    info.conflictFromRawNode = true;
-                    info.hasConflict = false;
-                    var content = node && node.content;
-                    if (Array.isArray(content)) {
-                        for (var ci = 0; ci < content.length; ci++) {
-                            var ch = content[ci];
-                            if (ch && ch.tag === 'conflict') {
-                                info.hasConflict = true;
-                                info.conflictType = _asText(
-                                    ch.attrs && ch.attrs.type,
-                                );
-                                break;
-                            }
-                        }
+                info.streamErrorAttrs = _attrsToText(node && node.attrs);
+                info.hasConflict = false;
+                var content = node && node.content;
+                var kids = Array.isArray(content)
+                    ? content
+                    : content && content.tag
+                      ? [content]
+                      : [];
+                for (var ci = 0; ci < kids.length; ci++) {
+                    var ch = kids[ci];
+                    if (ch && ch.tag === 'conflict') {
+                        info.hasConflict = true;
+                        info.conflictAttrs = _attrsToText(ch.attrs);
+                        info.conflictType =
+                            info.conflictAttrs &&
+                            info.conflictAttrs.type !== undefined
+                                ? info.conflictAttrs.type
+                                : null;
+                        break;
                     }
                 }
+                // Name the other children too. A stanza WA ignores entirely
+                // still tells us which shape of stream error this was.
+                info.childTags = kids
+                    .map(function (k) {
+                        return k && k.tag ? String(k.tag) : null;
+                    })
+                    .filter(Boolean)
+                    .slice(0, 10);
             } catch (e) {
-                info.rawFallbackErr = String(e);
+                info.conflictErr = String(e);
+                if (info.hasConflict === undefined) info.hasConflict = false;
             }
-            // THE signal: WhatsApp said device_removed but the server said
-            // something else, which means we have been mislabelling the event.
             info.collapsedByDefaultBranch =
                 info.hasConflict === true &&
                 info.parsedType === 'device_removed' &&
