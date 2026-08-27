@@ -2434,6 +2434,235 @@ exports.InjectDiagHooks = () => {
             },
         );
 
+        // 1c) The RAW <stream:error> stanza, captured at parse time.
+        //     WhatsApp's streamErrorParser collapses the <conflict> element
+        //     through a `default` branch:
+        //         case "replaced":        -> replaced
+        //         case "device_removed":
+        //         default:                -> device_removed
+        //     so EVERY conflict type WA Web does not recognise is reported as
+        //     `device_removed`, and so is the WALogger line "stream error due
+        //     to device removed, logging out". The parser then discards the
+        //     stanza, so by the time hook 1b runs the server's actual reason
+        //     does not exist anywhere in the page any more.
+        //
+        //     This is also why a server-side kill reaches hook 1b as
+        //     `reasonRaw: null` / `ABSENT_NOT_VIA_SocketLogout`: the
+        //     device_removed branch calls clearCredentialsAndStoredData() with
+        //     NO argument. The reason was never a function argument at all, it
+        //     is an XML attribute, and parse() is the last point at which it
+        //     still exists.
+        //
+        //     Hooked on the parser and not on WAWebHandleStreamError because
+        //     window.require('WAWebHandleStreamError') returns the handler
+        //     FUNCTION itself rather than a module object, so there is no
+        //     property for injectToFunction to replace. Patched directly and
+        //     not through injectToFunction because telling which parser
+        //     instance this is needs `this`, which that helper does not
+        //     forward to its callback.
+        var _rawStreamErrLogged = 0;
+        var _RAW_STREAM_ERR_CAP = 20;
+
+        // attrString() is a misnomer: it routes through WAWap.decodeAsString,
+        // which returns a Uint8Array UNCHANGED. Verified live: a byte-valued
+        // attribute comes back as Uint8Array, a string comes back as a string.
+        // Without this the one field the hook exists to report would be logged
+        // as {"0":97,"1":99,...}.
+        var _asText = function (v) {
+            if (v == null) return null;
+            if (typeof v === 'string') return v;
+            try {
+                if (typeof TextDecoder !== 'undefined' && ArrayBuffer.isView(v))
+                    return new TextDecoder().decode(v);
+                if (typeof v.length === 'number')
+                    return String.fromCharCode.apply(
+                        null,
+                        Array.prototype.slice.call(v),
+                    );
+            } catch (e) {
+                // fall through to String()
+            }
+            return String(v);
+        };
+
+        // Decode a whole attrs bag. WAXmlNode.attrsToString (what toString
+        // uses) calls .toString() on each value, so a byte-valued attribute
+        // renders as "100,101,118,...". Decoding here keeps every field the
+        // server sent readable, not just the one the parser happens to read.
+        var _attrsToText = function (attrs) {
+            if (!attrs || typeof attrs !== 'object') return null;
+            var decoded = {};
+            try {
+                var keys = Object.keys(attrs);
+                for (var ai = 0; ai < keys.length; ai++)
+                    decoded[keys[ai]] = _asText(attrs[keys[ai]]);
+            } catch (e) {
+                return null;
+            }
+            return decoded;
+        };
+
+        var _logRawStreamError = function (node, result) {
+            var info = {};
+            // What WhatsApp concluded, i.e. what every downstream branch acts on.
+            try {
+                info.parsedType =
+                    result && result.success ? result.success.type : null;
+                if (
+                    result &&
+                    result.success &&
+                    result.success.code !== undefined
+                ) {
+                    info.parsedCode = result.success.code;
+                }
+                if (result && result.error) {
+                    info.parseError = String(result.error);
+                }
+            } catch (e) {
+                info.parsedErr = String(e);
+            }
+            // What the SERVER actually said, read off the raw stanza.
+            //
+            // EVERY attribute is captured, not just `type`. WhatsApp's parser
+            // reads `type` and nothing else, but the stanza can carry more:
+            // WapNode.toString serialises tag + all attrs + children
+            // recursively, so anything the server adds is present on the node
+            // and simply thrown away by the parser. Those discarded fields are
+            // exactly what would say WHY the session was cut, so they are the
+            // point of this hook.
+            //
+            // Read from the raw node rather than through ParsableWapNode.
+            // parse() is handed the RAW node ({tag, attrs, content}) and builds
+            // the wrapper itself, and the wrapper is no safer here: its
+            // attrString() routes through WAWap.decodeAsString, which returns a
+            // Uint8Array UNCHANGED (verified live), so it needs the same
+            // decoding _asText already does, and it throws where this does not.
+            try {
+                info.tag = node && node.tag ? String(node.tag) : null;
+                info.streamErrorAttrs = _attrsToText(node && node.attrs);
+                info.hasConflict = false;
+                var content = node && node.content;
+                var kids = Array.isArray(content)
+                    ? content
+                    : content && content.tag
+                      ? [content]
+                      : [];
+                for (var ci = 0; ci < kids.length; ci++) {
+                    var ch = kids[ci];
+                    if (ch && ch.tag === 'conflict') {
+                        info.hasConflict = true;
+                        info.conflictAttrs = _attrsToText(ch.attrs);
+                        info.conflictType =
+                            info.conflictAttrs &&
+                            info.conflictAttrs.type !== undefined
+                                ? info.conflictAttrs.type
+                                : null;
+                        break;
+                    }
+                }
+                // Name the other children too. A stanza WA ignores entirely
+                // still tells us which shape of stream error this was.
+                info.childTags = kids
+                    .map(function (k) {
+                        return k && k.tag ? String(k.tag) : null;
+                    })
+                    .filter(Boolean)
+                    .slice(0, 10);
+            } catch (e) {
+                info.conflictErr = String(e);
+                if (info.hasConflict === undefined) info.hasConflict = false;
+            }
+            info.collapsedByDefaultBranch =
+                info.hasConflict === true &&
+                info.parsedType === 'device_removed' &&
+                info.conflictType !== 'device_removed';
+            try {
+                info.raw = String(node).slice(0, 2000);
+            } catch (e) {
+                info.rawErr = String(e);
+            }
+            // Volume guard. A <conflict> is terminal and rare (9 fleet-wide in
+            // 30 days), so it is always reported. A 5xx/ack/xml stream error can
+            // repeat while a network flaps, so those are capped per page load
+            // instead of being left unbounded at info.
+            if (info.hasConflict !== true) {
+                if (_rawStreamErrLogged >= _RAW_STREAM_ERR_CAP) return;
+                _rawStreamErrLogged++;
+                if (_rawStreamErrLogged === _RAW_STREAM_ERR_CAP) {
+                    info.capReached = true;
+                }
+            }
+            try {
+                var ctx = _logoutCtx();
+                for (var k in info) ctx[k] = info[k];
+                safeDiagLog('info', 'STREAM_ERROR_RAW', ctx);
+            } catch (e) {
+                try {
+                    safeDiagLog('info', 'STREAM_ERROR_RAW', info);
+                } catch (e2) {
+                    // best-effort diagnostic: never let it break the caller
+                }
+            }
+        };
+
+        try {
+            var _WapParser = window.require('WADeprecatedWapParser');
+            if (
+                _WapParser &&
+                _WapParser.prototype &&
+                typeof _WapParser.prototype.parse === 'function'
+            ) {
+                var _origWapParse = _WapParser.prototype.parse;
+                _WapParser.prototype.parse = function (node) {
+                    var result = _origWapParse.apply(this, arguments);
+                    try {
+                        // Identify the stream-error parser once per instance.
+                        // WhatsApp keeps the parser name in a MINIFIED field
+                        // ($1 in the current build), so match on the VALUE
+                        // rather than naming the field. That rename is a
+                        // routine WA build change and has broken us before.
+                        if (this.__p2dIsStreamErrParser === undefined) {
+                            var isStreamErr = false;
+                            var own = Object.getOwnPropertyNames(this);
+                            for (var i = 0; i < own.length; i++) {
+                                if (this[own[i]] === 'streamErrorParser') {
+                                    isStreamErr = true;
+                                    break;
+                                }
+                            }
+                            try {
+                                Object.defineProperty(
+                                    this,
+                                    '__p2dIsStreamErrParser',
+                                    {
+                                        value: isStreamErr,
+                                        writable: true,
+                                        enumerable: false,
+                                        configurable: true,
+                                    },
+                                );
+                            } catch (e) {
+                                this.__p2dIsStreamErrParser = isStreamErr;
+                            }
+                        }
+                        if (this.__p2dIsStreamErrParser) {
+                            _logRawStreamError(node, result);
+                        }
+                    } catch (e) {
+                        // never let a diagnostic break WhatsApp's parse
+                    }
+                    return result;
+                };
+            } else {
+                safeDiagLog('warn', 'HOOK_FAIL', {
+                    hook: 'WADeprecatedWapParser.prototype.parse',
+                    reason: 'parser prototype not available',
+                });
+            }
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
+
         // 2) Bridge socketLogout({reason}) — reason delivered by the service-worker socket.
         window.injectToFunction(
             {
