@@ -1754,7 +1754,13 @@ exports.LoadUtils = (mediaFailReason) => {
      * @returns {Promise<{blob: Blob|null, reason: string|null, detail: object|null, mimetype: string, filename: string, filesize: number}>}
      */
     window.WWebJS.resolveMediaBlob = async (msgId) => {
-        const fail = (reason, detail) => ({ blob: null, reason, detail });
+        // Every failure reports the same way: it logs under its existing GCP
+        // tag and returns its reason. Keeping both in one place is what stops
+        // a branch from reporting one and forgetting the other.
+        const fail = (level, tag, reason, detail) => {
+            window.onDiagLog?.(level, tag, JSON.stringify(detail));
+            return { blob: null, reason, detail };
+        };
 
         const { Msg } = window.require('WAWebCollections');
         let msg = null;
@@ -1769,12 +1775,17 @@ exports.LoadUtils = (mediaFailReason) => {
             // Letting that escape would break the one promise this function
             // makes, and the consumer would file a decrypt failure as
             // "unclassified" and retry it fifteen times.
-            return fail(mediaFailReason.MESSAGE_GONE, {
-                id: msgId ? String(msgId) : null,
-                lookupError: String(
-                    (lookupError && lookupError.message) || lookupError,
-                ),
-            });
+            return fail(
+                'warn',
+                'resolveMediaBlob: lookup threw',
+                mediaFailReason.MESSAGE_GONE,
+                {
+                    id: msgId ? String(msgId) : null,
+                    lookupError: String(
+                        (lookupError && lookupError.message) || lookupError,
+                    ),
+                },
+            );
         }
 
         if (
@@ -1783,31 +1794,24 @@ exports.LoadUtils = (mediaFailReason) => {
             msg.mediaData.mediaStage === 'REUPLOADING'
         ) {
             const revoked = window.__revokedMsgIds?.get(msgId);
-            const reason =
+            // The tag still says "returning null" because GCP queries key on it.
+            return fail(
+                'warn',
+                'resolveMediaBlob: returning null',
                 msg && msg.mediaData
                     ? mediaFailReason.REUPLOADING
-                    : mediaFailReason.MESSAGE_GONE;
-            const detail = {
-                id: msgId,
-                // The tag below still says "returning null" because GCP
-                // queries key on it; the reason is what is actually returned.
-                reason,
-                hasMsg: !!msg,
-                hasMediaData: !!msg?.mediaData,
-                mediaStage: msg?.mediaData?.mediaStage,
-                // Deterministic cause: the message is gone because a
-                // revoke-for-everyone removed it before this download.
-                wasRevoked: !!revoked,
-                revokeTs: revoked?.revokeTs ?? null,
-            };
-            if (window.onDiagLog) {
-                window.onDiagLog(
-                    'warn',
-                    'resolveMediaBlob: returning null',
-                    JSON.stringify(detail),
-                );
-            }
-            return fail(reason, detail);
+                    : mediaFailReason.MESSAGE_GONE,
+                {
+                    id: msgId,
+                    hasMsg: !!msg,
+                    hasMediaData: !!msg?.mediaData,
+                    mediaStage: msg?.mediaData?.mediaStage,
+                    // Deterministic cause: the message is gone because a
+                    // revoke-for-everyone removed it before this download.
+                    wasRevoked: !!revoked,
+                    revokeTs: revoked?.revokeTs ?? null,
+                },
+            );
         }
 
         // Always call internal downloadMedia - never skip based on
@@ -1859,18 +1863,16 @@ exports.LoadUtils = (mediaFailReason) => {
             msg.mediaData.mediaStage === 'NEED_POKE' ||
             msg.mediaData.mediaStage === 'REUPLOADING'
         ) {
-            const detail = {
-                id: msgId,
-                stageAfter: msg.mediaData.mediaStage,
-                resolveError,
-            };
-            if (window.onDiagLog)
-                window.onDiagLog(
-                    'error',
-                    'resolveMediaBlob: failed',
-                    JSON.stringify(detail),
-                );
-            return fail(mediaFailReason.MEDIA_UNAVAILABLE, detail);
+            return fail(
+                'error',
+                'resolveMediaBlob: failed',
+                mediaFailReason.MEDIA_UNAVAILABLE,
+                {
+                    id: msgId,
+                    stageAfter: msg.mediaData.mediaStage,
+                    resolveError,
+                },
+            );
         }
 
         const cached = window
@@ -1885,23 +1887,21 @@ exports.LoadUtils = (mediaFailReason) => {
         }
 
         if (!blob) {
-            const detail = {
-                id: msgId,
-                mediaStage: msg.mediaData.mediaStage,
-                hasFilehash: !!msg.mediaObject?.filehash,
-                hasMediaBlob: !!msg.mediaObject?.mediaBlob,
-                // The reason the download itself gave up. It used to be
-                // captured here and then dropped, so the only surviving trace
-                // of a decryption failure was a separate diag hook.
-                resolveError,
-            };
-            if (window.onDiagLog)
-                window.onDiagLog(
-                    'error',
-                    'resolveMediaBlob: no blob found',
-                    JSON.stringify(detail),
-                );
-            return fail(mediaFailReason.NO_BLOB, detail);
+            return fail(
+                'error',
+                'resolveMediaBlob: no blob found',
+                mediaFailReason.NO_BLOB,
+                {
+                    id: msgId,
+                    mediaStage: msg.mediaData.mediaStage,
+                    hasFilehash: !!msg.mediaObject?.filehash,
+                    hasMediaBlob: !!msg.mediaObject?.mediaBlob,
+                    // The reason the download itself gave up. It used to be
+                    // captured here and then dropped, so the only surviving
+                    // trace of a decryption failure was a separate diag hook.
+                    resolveError,
+                },
+            );
         }
 
         if (window.onDiagLog)
