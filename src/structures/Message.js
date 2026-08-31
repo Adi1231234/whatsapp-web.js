@@ -11,7 +11,10 @@ const Contact = require('./Contact');
 const ScheduledEvent = require('./ScheduledEvent'); // eslint-disable-line no-unused-vars
 const { MessageTypes } = require('../util/Constants');
 const { MediaFetchError } = require('../util/MediaFetchError');
-const { MediaFailReason } = require('../util/MediaFailReasons');
+const {
+    MediaFailReason,
+    isMediaFailReason,
+} = require('../util/MediaFailReasons');
 
 /**
  * Represents a Message on WhatsApp
@@ -638,8 +641,13 @@ class Message extends Base {
         }
         if (!metadata.hasBlob) {
             await resultHandle.dispose().catch(() => {});
+            // The code comes back from the page, so it is validated rather than
+            // trusted: a consumer switching exhaustively on it must never be
+            // handed something the page invented.
             throw new MediaFetchError(
-                metadata.reason || MediaFailReason.NO_BLOB,
+                isMediaFailReason(metadata.reason)
+                    ? metadata.reason
+                    : MediaFailReason.NO_BLOB,
                 metadata.detail,
             );
         }

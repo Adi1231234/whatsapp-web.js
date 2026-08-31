@@ -1,6 +1,11 @@
 'use strict';
 
-exports.LoadUtils = () => {
+/**
+ * @param {object} mediaFailReason the MediaFailReason map from
+ * `src/util/MediaFailReasons.js`, passed in rather than restated here so the
+ * codes that cross the page boundary have exactly one definition.
+ */
+exports.LoadUtils = (mediaFailReason) => {
     window.WWebJS = {};
 
     /**
@@ -1749,12 +1754,7 @@ exports.LoadUtils = () => {
      * @returns {Promise<{blob: Blob|null, reason: string|null, detail: object, mimetype: string, filename: string, filesize: number}>}
      */
     window.WWebJS.resolveMediaBlob = async (msgId) => {
-        const REASON = {
-            MESSAGE_GONE: 'MESSAGE_GONE',
-            REUPLOADING: 'REUPLOADING',
-            MEDIA_UNAVAILABLE: 'MEDIA_UNAVAILABLE',
-            NO_BLOB: 'NO_BLOB',
-        };
+        const REASON = mediaFailReason;
         const fail = (reason, detail) => ({ blob: null, reason, detail });
 
         const { Msg } = window.require('WAWebCollections');

@@ -49,31 +49,8 @@ const RECOVERABLE_MESSAGE_FRAGMENT = 'hmac mismatch';
  */
 const CANDIDATE_MEDIA_TYPES = ['image', 'video', 'audio', 'document'];
 
-/**
- * @param {string} declaredType the type WhatsApp says the message is
- * @returns {string[]} the types to try, excluding the one that already failed
- */
-function candidateTypesFor(declaredType) {
-    return CANDIDATE_MEDIA_TYPES.filter((type) => type !== declaredType);
-}
-
-/**
- * @param {string|null|undefined} errorName
- * @param {string|null|undefined} errorMessage
- * @returns {boolean} whether this failure is a key-type mismatch worth retrying
- */
-function isKeyTypeMismatch(errorName, errorMessage) {
-    return (
-        errorName === RECOVERABLE_ERROR_NAME &&
-        typeof errorMessage === 'string' &&
-        errorMessage.includes(RECOVERABLE_MESSAGE_FRAGMENT)
-    );
-}
-
 module.exports = {
     RECOVERABLE_ERROR_NAME,
     RECOVERABLE_MESSAGE_FRAGMENT,
     CANDIDATE_MEDIA_TYPES,
-    candidateTypesFor,
-    isKeyTypeMismatch,
 };

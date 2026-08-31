@@ -19,6 +19,7 @@ const {
     shouldSkipMsg: _shouldSkipDiagMsg,
 } = require('./util/Injected/DiagCommon');
 const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
+const { MediaFailReason } = require('./util/MediaFailReasons');
 const { InjectMediaKeyRecovery } = require('./util/Injected/MediaKeyRecovery');
 const {
     RECOVERABLE_ERROR_NAME,
@@ -793,7 +794,10 @@ class Client extends EventEmitter {
                             await this.pupPage.evaluate(InjectDiagCommon);
 
                             //Load util functions (serializers, helper functions)
-                            await this.pupPage.evaluate(LoadUtils);
+                            await this.pupPage.evaluate(
+                                LoadUtils,
+                                MediaFailReason,
+                            );
 
                             // Inject diagnostic hooks (media download, signal/crypto, receipts, etc.)
                             await this.pupPage.evaluate(InjectDiagHooks);

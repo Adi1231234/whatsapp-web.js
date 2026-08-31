@@ -29,8 +29,6 @@ const MediaFailReason = {
     NO_BLOB: 'NO_BLOB',
 };
 
-const ALL_MEDIA_FAIL_REASONS = Object.keys(MediaFailReason);
-
 /**
  * @param {unknown} value
  * @returns {boolean} whether `value` is one of the codes above
@@ -42,4 +40,4 @@ function isMediaFailReason(value) {
     );
 }
 
-module.exports = { MediaFailReason, ALL_MEDIA_FAIL_REASONS, isMediaFailReason };
+module.exports = { MediaFailReason, isMediaFailReason };
