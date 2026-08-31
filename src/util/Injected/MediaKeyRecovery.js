@@ -17,7 +17,10 @@ exports.InjectMediaKeyRecovery = () => {
 
     const { MediaDecryptionError, PLAINTEXT_HASH_MISMATCH_ERROR } =
         window.require('WAWebMediaFileErrors');
-    const { MEDIA_TYPES } = window.require('WAWebMmsMediaTypes');
+    const { MEDIA_TYPES, msgToMediaType } =
+        window.require('WAWebMmsMediaTypes');
+    const { getMediaTypeInfo } = window.require('WAWebCryptoMediaTypeInfo');
+    const { MSG_TYPE } = window.require('WAWebMsgType');
 
     // The MAC is checked before decryption, so wrong keys can only fail as
     // HMAC. A plaintext hash mismatch means the keys were right.
@@ -25,15 +28,24 @@ exports.InjectMediaKeyRecovery = () => {
         err instanceof MediaDecryptionError &&
         !String(err.message).includes(PLAINTEXT_HASH_MISMATCH_ERROR);
 
-    // One per distinct key derivation: WhatsApp's 42 media types yield 18 info
-    // strings, and chat media lands in these four. Image first, it is the only
-    // one ever observed, and each candidate costs a re-download.
-    const CANDIDATES = [
-        MEDIA_TYPES.IMAGE,
-        MEDIA_TYPES.VIDEO,
-        MEDIA_TYPES.AUDIO,
-        MEDIA_TYPES.DOCUMENT,
-    ];
+    // Derived from WhatsApp's own tables rather than listed here, so it cannot
+    // drift: every message type mapped through `msgToMediaType`, then reduced to
+    // one representative per distinct HKDF info string, since two types sharing
+    // an info string derive identical keys and a second attempt would be waste.
+    // Types WhatsApp refuses to key - profile pictures, newsletter media - throw
+    // in `getMediaTypeInfo` and drop out here.
+    const byInfo = new Map();
+    for (const msgType of Object.values(MSG_TYPE)) {
+        try {
+            const mediaType = msgToMediaType({ type: msgType });
+            const info = mediaType && getMediaTypeInfo(mediaType);
+            if (info && !byInfo.has(info)) byInfo.set(info, mediaType);
+        } catch {
+            // Not encryptable, so never a candidate.
+        }
+    }
+    // Image first: it is the common case, and each candidate costs a download.
+    const CANDIDATES = [...new Set([MEDIA_TYPES.IMAGE, ...byInfo.values()])];
 
     const original = manager.downloadAndMaybeDecrypt;
     manager.downloadAndMaybeDecrypt = async function (opts) {
