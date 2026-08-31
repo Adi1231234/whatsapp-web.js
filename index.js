@@ -13,6 +13,7 @@ module.exports = {
     GroupChat: require('./src/structures/GroupChat'),
     Channel: require('./src/structures/Channel'),
     Message: require('./src/structures/Message'),
+    MediaFetchError: require('./src/util/MediaFetchError').MediaFetchError,
     MessageMedia: require('./src/structures/MessageMedia'),
     Contact: require('./src/structures/Contact'),
     PrivateContact: require('./src/structures/PrivateContact'),

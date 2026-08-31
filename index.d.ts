@@ -176,7 +176,7 @@ declare namespace WAWebJS {
          */
         watchMessageChanges(
             fields: string[],
-            callback: (message: Message) => void
+            callback: (message: Message) => void,
         ): void;
 
         /** Check if a given ID is registered in whatsapp */
@@ -757,8 +757,7 @@ declare namespace WAWebJS {
         browserName?: string;
         /** Object with proxy autentication requirements @default: undefined */
         proxyAuthentication?:
-            | { username: string; password: string }
-            | undefined;
+            { username: string; password: string } | undefined;
         /** Phone number pairing configuration. Refer the requestPairingCode function of Client.
          * @default
          * {
@@ -791,9 +790,7 @@ declare namespace WAWebJS {
     }
 
     export type WebCacheOptions =
-        | NoWebCacheOptions
-        | LocalWebCacheOptions
-        | RemoteWebCacheOptions;
+        NoWebCacheOptions | LocalWebCacheOptions | RemoteWebCacheOptions;
 
     /**
      * Base class which all authentication strategies extend
@@ -1319,10 +1316,14 @@ declare namespace WAWebJS {
         delete: (everyone?: boolean, clearMedia?: boolean) => Promise<void>;
         /** Downloads and returns the attached message media */
         downloadMedia: () => Promise<MessageMedia | undefined>;
-        /** Downloads the attached message media as a Node.js Readable stream */
+        /**
+         * Downloads the attached message media as a Node.js Readable stream.
+         * Rejects with {@link MediaFetchError} when no bytes could be produced;
+         * it never resolves empty.
+         */
         downloadMediaStream: (
             options?: MediaStreamOptions,
-        ) => Promise<MessageMediaStream | undefined>;
+        ) => Promise<MessageMediaStream>;
         /** Returns the Chat this message was sent in */
         getChat: () => Promise<Chat>;
         /** Returns the Contact this message was sent from */
@@ -2510,6 +2511,20 @@ declare namespace WAWebJS {
         hasReactionByMe: boolean;
         senders: Array<Reaction>;
     };
+
+    /**
+     * WhatsApp's `MediaDataStage` when the fetch gave up. Left open because
+     * WhatsApp owns the list. `null`: no message. `undefined`: never reached
+     * the page.
+     */
+    export type MediaStage = string | null;
+
+    /** A media fetch that produced no bytes, carrying its {@link MediaStage}. */
+    export class MediaFetchError extends Error {
+        constructor(stage?: MediaStage, options?: ErrorOptions);
+        name: 'MediaFetchError';
+        stage: MediaStage | undefined;
+    }
 }
 
 export = WAWebJS;

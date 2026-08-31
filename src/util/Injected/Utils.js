@@ -1737,14 +1737,34 @@ exports.LoadUtils = () => {
     /**
      * Resolves the media blob and metadata for a message.
      * Shared by downloadMedia and downloadMediaStream.
+     *
+     * Always returns an object: an in-page throw loses custom properties at the
+     * puppeteer boundary, so the stage travels as data.
+     *
      * @param {string} msgId
-     * @returns {Promise<{blob: Blob, mimetype: string, filename: string, filesize: number}|null>}
+     * @returns {Promise<{blob: Blob|null, stage: string|null, mimetype: string, filename: string, filesize: number}>}
      */
     window.WWebJS.resolveMediaBlob = async (msgId) => {
+        const fail = (stage) => ({ blob: null, stage });
+
         const { Msg } = window.require('WAWebCollections');
-        const msg =
-            Msg.get(msgId) ||
-            (await Msg.getMessagesById([msgId]))?.messages?.[0];
+        let msg;
+        try {
+            msg =
+                Msg.get(msgId) ||
+                (await Msg.getMessagesById([msgId]))?.messages?.[0];
+        } catch (lookupError) {
+            // An unserialized id reaches IndexedDB as `undefined` and rejects.
+            window.onDiagLog?.(
+                'warn',
+                'resolveMediaBlob: lookup threw',
+                JSON.stringify({
+                    id: String(msgId),
+                    lookupError: String(lookupError?.message || lookupError),
+                }),
+            );
+            return fail(null);
+        }
 
         if (
             !msg ||
@@ -1768,7 +1788,7 @@ exports.LoadUtils = () => {
                     }),
                 );
             }
-            return null;
+            return fail(msg?.mediaData?.mediaStage ?? null);
         }
 
         // Always call internal downloadMedia - never skip based on
@@ -1788,6 +1808,11 @@ exports.LoadUtils = () => {
             };
         }
 
+        // `notifyMsgsAsync()` is a debounce, so `mediaStage` reads stale right
+        // after the await - measured REUPLOADING where the truth was
+        // ERROR_MISSING. This is WhatsApp's own primitive for that wait.
+        await msg.mediaObject?.resolveWhenConsolidated();
+
         // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
         if (msg.mediaData.mediaStage === 'NEED_POKE') {
             var entry = msg.mediaObject?.entries?.getDownloadEntry?.(true);
@@ -1802,6 +1827,9 @@ exports.LoadUtils = () => {
                 } catch (re2) {
                     /* ignore */
                 }
+                // Same debounce again, or the stage reported below is the one
+                // from before this retry.
+                await msg.mediaObject?.resolveWhenConsolidated();
             }
         }
 
@@ -1821,11 +1849,7 @@ exports.LoadUtils = () => {
                         resolveError,
                     }),
                 );
-            throw new Error(
-                'resolveMediaBlob: media not available (stage: ' +
-                    msg.mediaData.mediaStage +
-                    ')',
-            );
+            return fail(msg.mediaData.mediaStage);
         }
 
         const cached = window
@@ -1839,7 +1863,8 @@ exports.LoadUtils = () => {
             blob = msg.mediaObject.mediaBlob.forceToBlob();
         }
 
-        if (!blob) {
+        // An empty blob is no bytes; it used to travel as a success.
+        if (!blob || !blob.size) {
             if (window.onDiagLog)
                 window.onDiagLog(
                     'error',
@@ -1849,9 +1874,13 @@ exports.LoadUtils = () => {
                         mediaStage: msg.mediaData.mediaStage,
                         hasFilehash: !!msg.mediaObject?.filehash,
                         hasMediaBlob: !!msg.mediaObject?.mediaBlob,
+                        // distinguishes "no blob" from "empty blob"
+                        blobSize: blob ? blob.size : null,
+                        // Why the download gave up; used to be dropped.
+                        resolveError,
                     }),
                 );
-            return null;
+            return fail(msg.mediaData.mediaStage);
         }
 
         if (window.onDiagLog)

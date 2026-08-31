@@ -19,6 +19,7 @@ const {
     shouldSkipMsg: _shouldSkipDiagMsg,
 } = require('./util/Injected/DiagCommon');
 const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
+const { InjectMediaKeyRecovery } = require('./util/Injected/MediaKeyRecovery');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -791,6 +792,10 @@ class Client extends EventEmitter {
 
                             // Inject diagnostic hooks (media download, signal/crypto, receipts, etc.)
                             await this.pupPage.evaluate(InjectDiagHooks);
+
+                            // Recover media whose keys WhatsApp Web derived
+                            // under the wrong media type.
+                            await this.pupPage.evaluate(InjectMediaKeyRecovery);
                             console.log(
                                 '[wwjs-diag] onAppStateHasSyncedEvent Store ready',
                             );
