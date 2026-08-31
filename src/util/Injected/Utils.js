@@ -1817,13 +1817,13 @@ exports.LoadUtils = () => {
             };
         }
 
-        // WhatsApp propagates the post-download stage through
-        // `mediaObject.notifyMsgsAsync()`, which is `$1.debounce(0)` - a timer,
-        // not a synchronous write. Reading `mediaStage` straight after the await
-        // saw the STALE value: measured `DECRYPTING` in 80 of 80 production
-        // failures, so the NEED_POKE branch below never ran on the attempt that
-        // mattered. One macrotask lets the debounce fire first.
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        // The post-download stage arrives through `notifyMsgsAsync()`, which is
+        // `debounce(0)` - a timer, not a synchronous write - so reading
+        // `mediaStage` straight after the await sees the STALE value. Measured
+        // on a real failure: REUPLOADING immediately, ERROR_MISSING once the
+        // consolidate lands. This is WhatsApp's own primitive for that wait; it
+        // resolves on the pending consolidate, or at once when none is due.
+        await msg.mediaObject?.resolveWhenConsolidated();
 
         // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
         if (msg.mediaData.mediaStage === 'NEED_POKE') {
