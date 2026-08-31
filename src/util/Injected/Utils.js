@@ -1757,9 +1757,25 @@ exports.LoadUtils = (mediaFailReason) => {
         const fail = (reason, detail) => ({ blob: null, reason, detail });
 
         const { Msg } = window.require('WAWebCollections');
-        const msg =
-            Msg.get(msgId) ||
-            (await Msg.getMessagesById([msgId]))?.messages?.[0];
+        let msg = null;
+        try {
+            msg = Msg.get(msgId);
+            if (!msg) {
+                msg = (await Msg.getMessagesById([msgId]))?.messages?.[0];
+            }
+        } catch (lookupError) {
+            // The lookup itself can throw - an id that never got serialized
+            // reaches IndexedDB as `undefined` and it rejects with a DataError.
+            // Letting that escape would break the one promise this function
+            // makes, and the consumer would file a decrypt failure as
+            // "unclassified" and retry it fifteen times.
+            return fail(mediaFailReason.MESSAGE_GONE, {
+                id: msgId ? String(msgId) : null,
+                lookupError: String(
+                    (lookupError && lookupError.message) || lookupError,
+                ),
+            });
+        }
 
         if (
             !msg ||
