@@ -1754,7 +1754,6 @@ exports.LoadUtils = (mediaFailReason) => {
      * @returns {Promise<{blob: Blob|null, reason: string|null, detail: object, mimetype: string, filename: string, filesize: number}>}
      */
     window.WWebJS.resolveMediaBlob = async (msgId) => {
-        const REASON = mediaFailReason;
         const fail = (reason, detail) => ({ blob: null, reason, detail });
 
         const { Msg } = window.require('WAWebCollections');
@@ -1786,7 +1785,9 @@ exports.LoadUtils = (mediaFailReason) => {
                 );
             }
             return fail(
-                msg && msg.mediaData ? REASON.REUPLOADING : REASON.MESSAGE_GONE,
+                msg && msg.mediaData
+                    ? mediaFailReason.REUPLOADING
+                    : mediaFailReason.MESSAGE_GONE,
                 detail,
             );
         }
@@ -1851,7 +1852,7 @@ exports.LoadUtils = (mediaFailReason) => {
                     'resolveMediaBlob: failed',
                     JSON.stringify(detail),
                 );
-            return fail(REASON.MEDIA_UNAVAILABLE, detail);
+            return fail(mediaFailReason.MEDIA_UNAVAILABLE, detail);
         }
 
         const cached = window
@@ -1882,7 +1883,7 @@ exports.LoadUtils = (mediaFailReason) => {
                     'resolveMediaBlob: no blob found',
                     JSON.stringify(detail),
                 );
-            return fail(REASON.NO_BLOB, detail);
+            return fail(mediaFailReason.NO_BLOB, detail);
         }
 
         if (window.onDiagLog)

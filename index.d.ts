@@ -2519,6 +2519,7 @@ declare namespace WAWebJS {
         readonly NOT_SYNCED: 'NOT_SYNCED';
         readonly MEDIA_UNAVAILABLE: 'MEDIA_UNAVAILABLE';
         readonly NO_BLOB: 'NO_BLOB';
+        readonly UNKNOWN: 'UNKNOWN';
     };
 
     export type MediaFailReasonCode =

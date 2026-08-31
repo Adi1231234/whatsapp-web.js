@@ -27,6 +27,14 @@ const MediaFailReason = {
     MEDIA_UNAVAILABLE: 'MEDIA_UNAVAILABLE',
     /** Download and decrypt finished without leaving a blob behind. */
     NO_BLOB: 'NO_BLOB',
+    /**
+     * The fetch failed for a reason nothing here could classify.
+     *
+     * Part of this vocabulary rather than the consumer's, so a caller never has
+     * to widen the type just to say "and something else". Without it every
+     * layer grew its own `| "UNKNOWN"`.
+     */
+    UNKNOWN: 'UNKNOWN',
 };
 
 /**
