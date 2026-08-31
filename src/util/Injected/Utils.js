@@ -1828,6 +1828,9 @@ exports.LoadUtils = () => {
                 } catch (re2) {
                     /* ignore */
                 }
+                // Same debounce again, or the stage reported below is the one
+                // from before this retry.
+                await msg.mediaObject?.resolveWhenConsolidated();
             }
         }
 
