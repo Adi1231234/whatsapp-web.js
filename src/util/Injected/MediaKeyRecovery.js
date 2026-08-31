@@ -10,8 +10,8 @@
  *
  * The remedy is to stop treating the declared type as authoritative and ask
  * WhatsApp to download again under each other type. Guessing is safe because a
- * candidate must pass both the HMAC and the message's own `expectedPlaintextHash`
- * inside `decryptMedia` before its bytes are returned.
+ * candidate must pass both the HMAC and the message's own plaintext hash inside
+ * `decryptMedia` before its bytes are returned.
  */
 exports.InjectMediaKeyRecovery = () => {
     const manager = window.require('WAWebDownloadManager').downloadManager;
@@ -20,19 +20,21 @@ exports.InjectMediaKeyRecovery = () => {
     if (!manager || manager.__p2dKeyRecoveryInstalled) return;
     manager.__p2dKeyRecoveryInstalled = true;
 
+    // WhatsApp's own error class and type names, so neither is restated here.
+    const { MediaDecryptionError } = window.require('WAWebMediaFileErrors');
+    const T = window.require('WAWebMmsMediaTypes').MEDIA_TYPES;
+    // Image first: every observed occurrence was image ciphertext referenced as
+    // a document. Thumbnail and newsletter types are excluded on purpose - a
+    // thumbnail is a different object, newsletter media is not encrypted.
+    const CANDIDATES = [T.IMAGE, T.VIDEO, T.AUDIO, T.DOCUMENT];
+
     const original = manager.downloadAndMaybeDecrypt;
     manager.downloadAndMaybeDecrypt = async function (opts) {
         try {
             return await original.call(this, opts);
         } catch (err) {
-            if (
-                err?.name !== 'MediaDecryptionError' ||
-                !String(err.message).includes('hmac mismatch')
-            )
-                throw err;
-            // Image first: every observed occurrence was image ciphertext
-            // referenced as a document.
-            for (const type of ['image', 'video', 'audio', 'document']) {
+            if (!(err instanceof MediaDecryptionError)) throw err;
+            for (const type of CANDIDATES) {
                 if (type === opts.type) continue;
                 try {
                     const bytes = await original.call(this, { ...opts, type });
@@ -50,9 +52,11 @@ exports.InjectMediaKeyRecovery = () => {
                     // Wrong type as well; try the next one.
                 }
             }
-            window.__metrics?.safeDiagLog?.('warn', 'MEDIA_KEY_TYPE_UNRECOVERED', {
-                declaredType: opts.type,
-            });
+            window.__metrics?.safeDiagLog?.(
+                'warn',
+                'MEDIA_KEY_TYPE_UNRECOVERED',
+                { declaredType: opts.type },
+            );
             throw err;
         }
     };

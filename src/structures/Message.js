@@ -11,10 +11,6 @@ const Contact = require('./Contact');
 const ScheduledEvent = require('./ScheduledEvent'); // eslint-disable-line no-unused-vars
 const { MessageTypes } = require('../util/Constants');
 const { MediaFetchError } = require('../util/MediaFetchError');
-const {
-    MediaFailReason,
-    isMediaFailReason,
-} = require('../util/MediaFailReasons');
 
 /**
  * Represents a Message on WhatsApp
@@ -612,7 +608,8 @@ class Message extends Base {
                 'downloadMediaStream: hasMedia=false',
                 JSON.stringify({ id: this.id?._serialized, type: this.type }),
             );
-            throw new MediaFetchError(MediaFailReason.NOT_SYNCED);
+            // INIT is WhatsApp's stage for media whose download never began.
+            throw new MediaFetchError('INIT');
         }
 
         const resultHandle = await this.client.pupPage.evaluateHandle(
@@ -641,11 +638,7 @@ class Message extends Base {
         // something the page invented.
         if (metadata.blobSize === undefined) {
             await resultHandle.dispose().catch(() => {});
-            throw new MediaFetchError(
-                isMediaFailReason(metadata.reason)
-                    ? metadata.reason
-                    : MediaFailReason.NO_BLOB,
-            );
+            throw new MediaFetchError(metadata.stage);
         }
 
         // From here the handle is the blob itself, so everything below reads

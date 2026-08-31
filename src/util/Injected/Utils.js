@@ -1,10 +1,6 @@
 'use strict';
 
-/**
- * @param {object} mediaFailReason the MediaFailReason map, passed in so the
- * codes that cross the page boundary have exactly one definition.
- */
-exports.LoadUtils = (mediaFailReason) => {
+exports.LoadUtils = () => {
     window.WWebJS = {};
 
     /**
@@ -1744,14 +1740,19 @@ exports.LoadUtils = (mediaFailReason) => {
      *
      * ALWAYS returns an object, never null and never a throw: puppeteer
      * rebuilds an in-page throw as `new Error(message)` and drops every custom
-     * property, so a reason can only reach Node as data. The details behind
-     * each reason stay in the diag log next to it rather than travelling too.
+     * property, so the reason can only reach Node as data.
+     *
+     * That reason is WhatsApp's OWN `MediaDataStage` rather than a vocabulary
+     * invented here - it already names every way media can be unavailable
+     * (REUPLOADING, NEED_POKE, ERROR_MISSING, ERROR_TOO_LARGE, ERROR_FORBIDDEN
+     * ...), and re-encoding it into fewer codes only threw information away.
+     * `null` means there is no message left to have a stage.
      *
      * @param {string} msgId
-     * @returns {Promise<{blob: Blob|null, reason: string|null, mimetype: string, filename: string, filesize: number}>}
+     * @returns {Promise<{blob: Blob|null, stage: string|null, mimetype: string, filename: string, filesize: number}>}
      */
     window.WWebJS.resolveMediaBlob = async (msgId) => {
-        const fail = (reason) => ({ blob: null, reason });
+        const fail = (stage) => ({ blob: null, stage });
 
         const { Msg } = window.require('WAWebCollections');
         let msg;
@@ -1771,7 +1772,7 @@ exports.LoadUtils = (mediaFailReason) => {
                     lookupError: String(lookupError?.message || lookupError),
                 }),
             );
-            return fail(mediaFailReason.MESSAGE_GONE);
+            return fail(null);
         }
 
         if (
@@ -1796,11 +1797,7 @@ exports.LoadUtils = (mediaFailReason) => {
                     }),
                 );
             }
-            return fail(
-                msg?.mediaData
-                    ? mediaFailReason.REUPLOADING
-                    : mediaFailReason.MESSAGE_GONE,
-            );
+            return fail(msg?.mediaData?.mediaStage ?? null);
         }
 
         // Always call internal downloadMedia - never skip based on
@@ -1861,7 +1858,7 @@ exports.LoadUtils = (mediaFailReason) => {
                         resolveError,
                     }),
                 );
-            return fail(mediaFailReason.MEDIA_UNAVAILABLE);
+            return fail(msg.mediaData.mediaStage);
         }
 
         const cached = window
@@ -1890,7 +1887,7 @@ exports.LoadUtils = (mediaFailReason) => {
                         resolveError,
                     }),
                 );
-            return fail(mediaFailReason.NO_BLOB);
+            return fail(msg.mediaData.mediaStage);
         }
 
         if (window.onDiagLog)

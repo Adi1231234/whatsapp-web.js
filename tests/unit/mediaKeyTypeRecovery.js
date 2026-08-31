@@ -3,11 +3,10 @@ const {
     InjectMediaKeyRecovery,
 } = require('../../src/util/Injected/MediaKeyRecovery');
 
-const hmacMismatch = () => {
-    const err = new Error('decryptMedia: hmac mismatch');
-    err.name = 'MediaDecryptionError';
-    return err;
-};
+// WhatsApp's own error class, as the page exposes it.
+class MediaDecryptionError extends Error {}
+const hmacMismatch = () =>
+    new MediaDecryptionError('decryptMedia: hmac mismatch');
 
 /**
  * A stand-in for the WhatsApp page.
@@ -35,7 +34,18 @@ function fakeWindow({ decryptsAs = null, failWith = null } = {}) {
         manager,
         window: {
             require: (name) =>
-                name === 'WAWebDownloadManager' ? { downloadManager: manager } : null,
+                name === 'WAWebDownloadManager'
+                    ? { downloadManager: manager }
+                    : name === 'WAWebMediaFileErrors'
+                      ? { MediaDecryptionError }
+                      : {
+                            MEDIA_TYPES: {
+                                IMAGE: 'image',
+                                VIDEO: 'video',
+                                AUDIO: 'audio',
+                                DOCUMENT: 'document',
+                            },
+                        },
             __metrics: {
                 safeDiagLog: (level, event, data) =>
                     calls.logs.push({ level, event, data }),
@@ -58,7 +68,10 @@ const download = async (fake, type) => {
     const previous = global.window;
     global.window = fake.window;
     try {
-        return await fake.manager.downloadAndMaybeDecrypt({ type, mediaKey: 'k' });
+        return await fake.manager.downloadAndMaybeDecrypt({
+            type,
+            mediaKey: 'k',
+        });
     } finally {
         global.window = previous;
     }
@@ -99,7 +112,7 @@ describe('media key type recovery', function () {
 
         const err = await download(fake, 'document').catch((e) => e);
 
-        expect(err.name).to.equal('MediaDecryptionError');
+        expect(err).to.be.instanceOf(MediaDecryptionError);
         expect(fake.calls.types).to.deep.equal([
             'document',
             'image',

@@ -2512,28 +2512,21 @@ declare namespace WAWebJS {
         senders: Array<Reaction>;
     };
 
-    /** Why a media fetch produced no bytes. */
-    export const MediaFailReason: {
-        readonly MESSAGE_GONE: 'MESSAGE_GONE';
-        readonly REUPLOADING: 'REUPLOADING';
-        readonly NOT_SYNCED: 'NOT_SYNCED';
-        readonly MEDIA_UNAVAILABLE: 'MEDIA_UNAVAILABLE';
-        readonly NO_BLOB: 'NO_BLOB';
-        readonly UNKNOWN: 'UNKNOWN';
-    };
-
-    export type MediaFailReasonCode =
-        (typeof MediaFailReason)[keyof typeof MediaFailReason];
-
     /**
-     * A media fetch that produced no bytes, with the reason still attached.
-     * Built on the Node side: an error thrown inside the WhatsApp page loses
-     * every custom property at the puppeteer boundary.
+     * WhatsApp's own `WAWebMediaTypes.MediaDataStage` for the media, as it stood
+     * when the fetch gave up: REUPLOADING, FETCHING, NEED_POKE, ERROR_MISSING,
+     * ERROR_TOO_LARGE, ERROR_UNSUPPORTED, ERROR_FORBIDDEN, INIT, RESOLVED and
+     * so on. Left open rather than enumerated because WhatsApp owns the list and
+     * adds to it. `null` means the message itself was gone; `undefined` means
+     * the failure never reached the page, so no stage was ever read.
      */
+    export type MediaStage = string | null;
+
+    /** A media fetch that produced no bytes, carrying its {@link MediaStage}. */
     export class MediaFetchError extends Error {
-        constructor(reason: MediaFailReasonCode, options?: ErrorOptions);
+        constructor(stage?: MediaStage, options?: ErrorOptions);
         name: 'MediaFetchError';
-        reason: MediaFailReasonCode;
+        stage: MediaStage | undefined;
     }
 }
 

@@ -14,7 +14,6 @@ module.exports = {
     Channel: require('./src/structures/Channel'),
     Message: require('./src/structures/Message'),
     MediaFetchError: require('./src/util/MediaFetchError').MediaFetchError,
-    MediaFailReason: require('./src/util/MediaFailReasons').MediaFailReason,
     MessageMedia: require('./src/structures/MessageMedia'),
     Contact: require('./src/structures/Contact'),
     PrivateContact: require('./src/structures/PrivateContact'),
