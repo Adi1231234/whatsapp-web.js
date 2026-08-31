@@ -37,7 +37,11 @@ function fakeWindow({ decryptsAs = null, failWith = null } = {}) {
                 if (name === 'WAWebDownloadManager')
                     return { downloadManager: manager };
                 if (name === 'WAWebMediaFileErrors')
-                    return { MediaDecryptionError };
+                    return {
+                        MediaDecryptionError,
+                        PLAINTEXT_HASH_MISMATCH_ERROR:
+                            'plaintext hash mismatch',
+                    };
                 if (name === 'WAWebMmsMediaTypes')
                     return {
                         MEDIA_TYPES: {
@@ -126,6 +130,24 @@ describe('media key type recovery', function () {
             level: 'warn',
             event: 'MEDIA_KEY_TYPE_UNRECOVERED',
         });
+    });
+
+    it('does not retry a plaintext hash mismatch', async function () {
+        // The MAC is verified before decryption, so wrong keys can only ever
+        // surface as an HMAC failure. This one means the keys were right and
+        // the bytes were wrong, and every candidate would be wasted work.
+        const fake = fakeWindow({
+            failWith: new MediaDecryptionError(
+                'decryptMedia: plaintext hash mismatch',
+            ),
+        });
+        install(fake);
+
+        const err = await download(fake, 'document').catch((e) => e);
+
+        expect(err).to.be.instanceOf(MediaDecryptionError);
+        expect(fake.calls.types).to.deep.equal(['document']);
+        expect(fake.calls.logs).to.be.empty;
     });
 
     it('leaves any other failure untouched, with no retry', async function () {

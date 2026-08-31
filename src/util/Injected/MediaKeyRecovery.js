@@ -22,8 +22,18 @@ exports.InjectMediaKeyRecovery = () => {
     if (!manager || manager.__p2dKeyRecoveryInstalled) return;
     manager.__p2dKeyRecoveryInstalled = true;
 
-    const { MediaDecryptionError } = window.require('WAWebMediaFileErrors');
+    const { MediaDecryptionError, PLAINTEXT_HASH_MISMATCH_ERROR } =
+        window.require('WAWebMediaFileErrors');
     const { MEDIA_TYPES } = window.require('WAWebMmsMediaTypes');
+
+    // Wrong keys always surface as an HMAC failure, because `decryptMedia`
+    // verifies the MAC before it decrypts anything. A plaintext hash mismatch
+    // is the opposite: the keys were right and the bytes were wrong, so trying
+    // other types is guaranteed waste. WhatsApp separates the two the same way,
+    // with the same exported constant.
+    const isWrongKeys = (err) =>
+        err instanceof MediaDecryptionError &&
+        !String(err.message).includes(PLAINTEXT_HASH_MISMATCH_ERROR);
 
     // One entry per distinct key derivation, not per media type. Checked
     // against WhatsApp's own tables rather than assumed: mapping all 42
@@ -45,7 +55,7 @@ exports.InjectMediaKeyRecovery = () => {
         try {
             return await original.call(this, opts);
         } catch (err) {
-            if (!(err instanceof MediaDecryptionError)) throw err;
+            if (!isWrongKeys(err)) throw err;
             for (const type of CANDIDATES) {
                 if (type === opts.type) continue;
                 try {
