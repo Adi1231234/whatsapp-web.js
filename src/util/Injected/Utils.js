@@ -1103,17 +1103,25 @@ exports.LoadUtils = () => {
      * @returns {Promise<{blob: Blob, mimetype: string, filename: string, filesize: number}|null>}
      */
     window.WWebJS.resolveMediaBlob = async (msgId) => {
+        const fail = (stage) => ({ blob: null, stage });
+
         const { Msg } = window.require('WAWebCollections');
-        const msg =
-            Msg.get(msgId) ||
-            (await Msg.getMessagesById([msgId]))?.messages?.[0];
+        let msg;
+        try {
+            msg =
+                Msg.get(msgId) ||
+                (await Msg.getMessagesById([msgId]))?.messages?.[0];
+        } catch {
+            // An unserialized id reaches IndexedDB as `undefined` and rejects.
+            return fail(null);
+        }
 
         if (
             !msg ||
             !msg.mediaData ||
             msg.mediaData.mediaStage === 'REUPLOADING'
         ) {
-            return null;
+            return fail(msg?.mediaData?.mediaStage ?? null);
         }
 
         // Always call internal downloadMedia - never skip based on
@@ -1125,11 +1133,15 @@ exports.LoadUtils = () => {
             isUserInitiated: true,
         });
 
+        // `notifyMsgsAsync()` is a debounce, so `mediaStage` reads stale right
+        // after the await. This is WhatsApp's own primitive for that wait.
+        await msg.mediaObject?.resolveWhenConsolidated();
+
         if (
             msg.mediaData.mediaStage.includes('ERROR') ||
             msg.mediaData.mediaStage === 'FETCHING'
         ) {
-            return null;
+            return fail(msg.mediaData.mediaStage);
         }
 
         const cached = window
@@ -1143,7 +1155,8 @@ exports.LoadUtils = () => {
             blob = msg.mediaObject.mediaBlob.forceToBlob();
         }
 
-        if (!blob) return null;
+        // An empty blob is no bytes; it used to travel as a success.
+        if (!blob || !blob.size) return fail(msg.mediaData.mediaStage);
 
         return {
             blob,

@@ -10,6 +10,7 @@ const Reaction = require('./Reaction');
 const Contact = require('./Contact');
 const ScheduledEvent = require('./ScheduledEvent'); // eslint-disable-line no-unused-vars
 const { MessageTypes } = require('../util/Constants');
+const { MediaFetchError } = require('../util/MediaFetchError');
 
 /**
  * Represents a Message on WhatsApp
@@ -558,39 +559,42 @@ class Message extends Base {
      * Like downloadMedia(), but returns a Readable stream instead of loading the entire file into memory.
      * @param {Object} [options]
      * @param {number} [options.chunkSize=10485760] Size in bytes of each chunk read from the browser (default 10MB)
-     * @returns {Promise<MessageMediaStream|undefined>} undefined if media is unavailable
+     * @returns {Promise<MessageMediaStream>} the stream and its metadata
+     * @throws {MediaFetchError} carrying the stage. Never resolves empty.
      */
     async downloadMediaStream({ chunkSize = 10 * 1024 * 1024 } = {}) {
-        if (!this.hasMedia) return undefined;
+        // INIT is WhatsApp's stage for media whose download never began.
+        if (!this.hasMedia) throw new MediaFetchError('INIT');
 
-        const blobHandle = await this.client.pupPage.evaluateHandle(
-            async (msgId) => {
-                const result = await window.WWebJS.resolveMediaBlob(msgId);
-                return result?.blob ?? null;
-            },
+        const resultHandle = await this.client.pupPage.evaluateHandle(
+            async (msgId) => await window.WWebJS.resolveMediaBlob(msgId),
             this.id._serialized,
         );
 
         let metadata;
         try {
-            metadata = await blobHandle.evaluate((blob, msgId) => {
-                if (!blob) return null;
+            metadata = await resultHandle.evaluate((result, msgId) => {
+                if (!result.blob) return result;
                 const msg = window.require('WAWebCollections').Msg.get(msgId);
                 return {
-                    blobSize: blob.size,
+                    blobSize: result.blob.size,
                     mimetype: msg?.mimetype,
                     filename: msg?.filename,
                     filesize: msg?.size,
                 };
             }, this.id._serialized);
         } catch (err) {
-            await blobHandle.dispose().catch(() => {});
+            await resultHandle.dispose().catch(() => {});
             throw err;
         }
-        if (!metadata) {
-            await blobHandle.dispose().catch(() => {});
-            return undefined;
+        if (metadata.blobSize === undefined) {
+            await resultHandle.dispose().catch(() => {});
+            throw new MediaFetchError(metadata.stage);
         }
+
+        // From here the handle is the blob itself.
+        const blobHandle = await resultHandle.getProperty('blob');
+        await resultHandle.dispose().catch(() => {});
 
         const { blobSize, ...rest } = metadata;
 
