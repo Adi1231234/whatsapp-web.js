@@ -595,7 +595,7 @@ class Message extends Base {
      * @param {number} [options.chunkSize=10485760] Size in bytes of each chunk read from the browser (default 10MB)
      * @returns {Promise<MessageMediaStream>} the stream and its metadata
      * @throws {MediaFetchError} carrying the stage. Never resolves empty: the
-     * silent `undefined` it replaces is what lost pictures without a trace.
+     * silent `undefined` it replaces discarded media without a trace.
      */
     async downloadMediaStream({ chunkSize = 10 * 1024 * 1024 } = {}) {
         if (!this.hasMedia) {

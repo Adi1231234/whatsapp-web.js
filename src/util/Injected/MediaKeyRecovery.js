@@ -12,8 +12,8 @@
 exports.InjectMediaKeyRecovery = () => {
     const manager = window.require('WAWebDownloadManager').downloadManager;
     // Re-injected on every re-sync; a second wrapper would retry per layer.
-    if (!manager || manager.__p2dKeyRecoveryInstalled) return;
-    manager.__p2dKeyRecoveryInstalled = true;
+    if (!manager || manager.__mediaKeyTypeRecoveryInstalled) return;
+    manager.__mediaKeyTypeRecoveryInstalled = true;
 
     const { MediaDecryptionError, PLAINTEXT_HASH_MISMATCH_ERROR } =
         window.require('WAWebMediaFileErrors');
