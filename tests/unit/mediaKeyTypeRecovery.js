@@ -33,19 +33,22 @@ function fakeWindow({ decryptsAs = null, failWith = null } = {}) {
         calls,
         manager,
         window: {
-            require: (name) =>
-                name === 'WAWebDownloadManager'
-                    ? { downloadManager: manager }
-                    : name === 'WAWebMediaFileErrors'
-                      ? { MediaDecryptionError }
-                      : {
-                            MEDIA_TYPES: {
-                                IMAGE: 'image',
-                                VIDEO: 'video',
-                                AUDIO: 'audio',
-                                DOCUMENT: 'document',
-                            },
+            require: (name) => {
+                if (name === 'WAWebDownloadManager')
+                    return { downloadManager: manager };
+                if (name === 'WAWebMediaFileErrors')
+                    return { MediaDecryptionError };
+                if (name === 'WAWebMmsMediaTypes')
+                    return {
+                        MEDIA_TYPES: {
+                            IMAGE: 'image',
+                            VIDEO: 'video',
+                            AUDIO: 'audio',
+                            DOCUMENT: 'document',
                         },
+                    };
+                return null;
+            },
             __metrics: {
                 safeDiagLog: (level, event, data) =>
                     calls.logs.push({ level, event, data }),
