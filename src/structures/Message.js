@@ -606,14 +606,13 @@ class Message extends Base {
      */
     async downloadMediaStream({ chunkSize = 10 * 1024 * 1024 } = {}) {
         if (!this.hasMedia) {
-            const detail = { id: this.id?._serialized, type: this.type };
             this.client?.emit?.(
                 'diag',
                 'warn',
                 'downloadMediaStream: hasMedia=false',
-                JSON.stringify(detail),
+                JSON.stringify({ id: this.id?._serialized, type: this.type }),
             );
-            throw new MediaFetchError(MediaFailReason.NOT_SYNCED, detail);
+            throw new MediaFetchError(MediaFailReason.NOT_SYNCED);
         }
 
         const resultHandle = await this.client.pupPage.evaluateHandle(
@@ -646,7 +645,6 @@ class Message extends Base {
                 isMediaFailReason(metadata.reason)
                     ? metadata.reason
                     : MediaFailReason.NO_BLOB,
-                metadata.detail,
             );
         }
 

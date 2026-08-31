@@ -2531,14 +2531,9 @@ declare namespace WAWebJS {
      * every custom property at the puppeteer boundary.
      */
     export class MediaFetchError extends Error {
-        constructor(
-            reason: MediaFailReasonCode,
-            detail: object | null,
-            options?: ErrorOptions,
-        );
+        constructor(reason: MediaFailReasonCode, options?: ErrorOptions);
         name: 'MediaFetchError';
         reason: MediaFailReasonCode;
-        detail: object | null;
     }
 }
 
