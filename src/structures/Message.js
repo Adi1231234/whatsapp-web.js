@@ -101,6 +101,8 @@ class Message extends Base {
                 ? data.author._serialized || data.author.$1
                 : data.author;
 
+        this.senderId = data.senderId ?? null;
+
         /**
          * String that represents from which device type the message was sent
          * @type {string}
@@ -396,7 +398,9 @@ class Message extends Base {
      * @returns {Promise<Contact>}
      */
     getContact() {
-        return this.client.getContactById(this.author || this.from);
+        return this.client.getContactById(
+            this.senderId || this.author || this.from,
+        );
     }
 
     /**
