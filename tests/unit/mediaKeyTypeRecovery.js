@@ -191,6 +191,9 @@ describe('InjectMediaKeyRecovery', function () {
 
         expect(thrown).to.equal(original);
         expect(calls.derived).to.deep.equal([]);
+        // The network failure is reported rather than swallowed behind a
+        // rethrown key error.
+        expect(calls.logs[0].tag).to.equal('MEDIA_KEY_REFETCH_FAILED');
     });
 
     it('never wraps twice, because the injection re-runs on every re-sync', function () {

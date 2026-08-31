@@ -11,10 +11,12 @@
 class MediaFetchError extends Error {
     /**
      * @param {string} reason one of MediaFailReason
-     * @param {object} detail structured context for logs; never parsed
+     * @param {object|null} detail structured context for logs; never parsed
+     * @param {ErrorOptions} [options] `cause` when this wraps a lower error,
+     * so the chain stays intact instead of being flattened into `detail`
      */
-    constructor(reason, detail) {
-        super(`media fetch failed: ${reason}`);
+    constructor(reason, detail, options) {
+        super(`media fetch failed: ${reason}`, options);
         this.name = 'MediaFetchError';
         this.reason = reason;
         this.detail = detail;

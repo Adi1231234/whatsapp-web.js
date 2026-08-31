@@ -2,19 +2,13 @@
 
 /**
  * Installs the key-type recovery around WhatsApp's own media download.
+ * `src/util/MediaKeyTypeRecovery.js` holds the why and the policy.
  *
- * See `src/util/MediaKeyTypeRecovery.js` for why this is needed and why trying
- * another info string cannot accept wrong bytes. The policy lives there and is
- * passed in, so the candidate order and the predicate have exactly one home.
- *
- * Wrapping point: `downloadManager.downloadAndMaybeDecrypt`. Measured on a live
- * page - it is an own, writable property with 14 call sites across the bundles,
- * so every consumer is covered, including WhatsApp's own UI. The two functions
- * one level deeper (`WAWebCryptoDecryptMedia`, `WAWebCryptoCreateMediaKeys`)
- * are FUNCTION modules, so `injectToFunction` cannot reach them.
- *
- * It returns an ArrayBuffer, not a Blob. Measured, and easy to get wrong by
- * reading the minified source, where the Blob is built one level up.
+ * Wrapping point measured on a live page: `downloadAndMaybeDecrypt` is an own,
+ * writable property with 14 call sites, so every consumer is covered including
+ * WhatsApp's own UI, and the two functions one level deeper are FUNCTION
+ * modules that `injectToFunction` cannot reach. It returns an ArrayBuffer, not
+ * a Blob - the Blob is built one level up, which the minified source hides.
  *
  * @param {object} policy
  * @param {string} policy.recoverableErrorName
@@ -69,10 +63,27 @@ exports.InjectMediaKeyRecovery = (policy) => {
             try {
                 ciphertext = new Uint8Array(await fetchCiphertext(opts));
             } catch (downloadErr) {
+                // Say why. Rethrowing the decrypt error while dropping this one
+                // would report a key problem for what was actually a network
+                // one, and nothing else records this fetch.
+                window.__metrics?.safeDiagLog?.(
+                    'warn',
+                    'MEDIA_KEY_REFETCH_FAILED',
+                    {
+                        declaredType: opts.type,
+                        error: String(
+                            (downloadErr && downloadErr.message) || downloadErr,
+                        ),
+                    },
+                );
                 throw err;
             }
 
-            const attempted = [];
+            // The candidates that did NOT work. Named for what it holds: on a
+            // first-try success it is empty, which would read as "nothing was
+            // attempted" under any other name.
+            const rejected = [];
+            let recovered = null;
             for (const candidate of policy.candidateMediaTypes) {
                 if (candidate === opts.type) continue;
                 try {
@@ -89,40 +100,48 @@ exports.InjectMediaKeyRecovery = (policy) => {
                         expectedPlaintextHash: opts.filehash,
                         mediaKeys: keys,
                     });
-                    const bytes =
-                        plaintext instanceof Uint8Array
-                            ? plaintext
-                            : new Uint8Array(plaintext);
-                    window.__metrics?.safeDiagLog?.(
-                        'info',
-                        'MEDIA_KEY_TYPE_RECOVERED',
-                        {
-                            declaredType: opts.type,
-                            recoveredAs: candidate,
-                            attempted,
-                            byteLength: bytes.byteLength,
-                            elapsed: Date.now() - started,
-                        },
-                    );
-                    return bytes.buffer.slice(
-                        bytes.byteOffset,
-                        bytes.byteOffset + bytes.byteLength,
-                    );
-                } catch (candidateErr) {
-                    attempted.push(candidate);
+                    recovered = { candidate, plaintext };
+                    break;
+                } catch {
+                    // The try covers only the two calls meant to fail here;
+                    // reporting and returning stay outside it, so neither can
+                    // be mistaken for a rejected candidate.
+                    rejected.push(candidate);
                 }
             }
 
+            if (!recovered) {
+                window.__metrics?.safeDiagLog?.(
+                    'warn',
+                    'MEDIA_KEY_TYPE_UNRECOVERED',
+                    {
+                        declaredType: opts.type,
+                        rejected,
+                        elapsed: Date.now() - started,
+                    },
+                );
+                throw err;
+            }
+
+            const bytes =
+                recovered.plaintext instanceof Uint8Array
+                    ? recovered.plaintext
+                    : new Uint8Array(recovered.plaintext);
             window.__metrics?.safeDiagLog?.(
-                'warn',
-                'MEDIA_KEY_TYPE_UNRECOVERED',
+                'info',
+                'MEDIA_KEY_TYPE_RECOVERED',
                 {
                     declaredType: opts.type,
-                    attempted,
+                    recoveredAs: recovered.candidate,
+                    rejected,
+                    byteLength: bytes.byteLength,
                     elapsed: Date.now() - started,
                 },
             );
-            throw err;
+            return bytes.buffer.slice(
+                bytes.byteOffset,
+                bytes.byteOffset + bytes.byteLength,
+            );
         }
     };
 };
