@@ -2513,10 +2513,9 @@ declare namespace WAWebJS {
     };
 
     /**
-     * WhatsApp's own `MediaDataStage` when the fetch gave up - REUPLOADING,
-     * NEED_POKE, ERROR_MISSING, ERROR_TOO_LARGE, INIT and so on. Left open
-     * because WhatsApp owns the list. `null`: the message was gone.
-     * `undefined`: the failure never reached the page.
+     * WhatsApp's `MediaDataStage` when the fetch gave up. Left open because
+     * WhatsApp owns the list. `null`: no message. `undefined`: never reached
+     * the page.
      */
     export type MediaStage = string | null;
 

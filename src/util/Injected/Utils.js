@@ -1739,8 +1739,7 @@ exports.LoadUtils = () => {
      * Shared by downloadMedia and downloadMediaStream.
      *
      * Always returns an object: an in-page throw loses custom properties at the
-     * puppeteer boundary, so the reason travels as data. It is WhatsApp's own
-     * `MediaDataStage`, or `null` when no message is left to have one.
+     * puppeteer boundary, so the stage travels as data.
      *
      * @param {string} msgId
      * @returns {Promise<{blob: Blob|null, stage: string|null, mimetype: string, filename: string, filesize: number}>}
@@ -1864,9 +1863,7 @@ exports.LoadUtils = () => {
             blob = msg.mediaObject.mediaBlob.forceToBlob();
         }
 
-        // An empty blob is no bytes, and it used to travel as a success: the
-        // reader yields zero chunks and a 0-byte file is written and recorded
-        // as saved.
+        // An empty blob is no bytes; it used to travel as a success.
         if (!blob || !blob.size) {
             if (window.onDiagLog)
                 window.onDiagLog(

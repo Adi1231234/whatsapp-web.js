@@ -635,8 +635,7 @@ class Message extends Base {
             throw new MediaFetchError(metadata.stage);
         }
 
-        // From here the handle is the blob itself, so the reader below is
-        // unchanged.
+        // From here the handle is the blob itself.
         const blobHandle = await resultHandle.getProperty('blob');
         await resultHandle.dispose().catch(() => {});
 

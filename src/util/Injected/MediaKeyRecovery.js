@@ -1,13 +1,11 @@
 'use strict';
 
 /**
- * Recovers media whose keys WhatsApp derived under the wrong media type.
+ * Recovers media whose keys were derived under the wrong media type.
  *
- * Keys are `HKDF(mediaKey, getMediaTypeInfo(type))`, so encryption is
- * type-bound while the sender's upload cache is not - `EncryptedMediaEntry`
- * stores no type - and a documentMessage can point at image ciphertext. The
- * declared type is therefore a hint; the HMAC and plaintext hash inside
- * `decryptMedia` are the authority, so trying another type is safe.
+ * Keys are `HKDF(mediaKey, getMediaTypeInfo(type))`, so they are type-bound
+ * while the upload cache is not, and a documentMessage can point at image
+ * ciphertext. The HMAC and plaintext hash make trying another type safe.
  */
 exports.InjectMediaKeyRecovery = () => {
     const manager = window.require('WAWebDownloadManager').downloadManager;
@@ -28,12 +26,8 @@ exports.InjectMediaKeyRecovery = () => {
         err instanceof MediaDecryptionError &&
         !String(err.message).includes(PLAINTEXT_HASH_MISMATCH_ERROR);
 
-    // Derived from WhatsApp's own tables rather than listed here, so it cannot
-    // drift: every message type mapped through `msgToMediaType`, then reduced to
-    // one representative per distinct HKDF info string, since two types sharing
-    // an info string derive identical keys and a second attempt would be waste.
-    // Types WhatsApp refuses to key - profile pictures, newsletter media - throw
-    // in `getMediaTypeInfo` and drop out here.
+    // One representative per distinct HKDF info string, derived from the tables
+    // so it cannot drift. Types that cannot be keyed throw and drop out.
     const byInfo = new Map();
     for (const msgType of Object.values(MSG_TYPE)) {
         try {
@@ -44,7 +38,7 @@ exports.InjectMediaKeyRecovery = () => {
             // Not encryptable, so never a candidate.
         }
     }
-    // Image first: it is the common case, and each candidate costs a download.
+    // Image first: the common case, and each candidate costs a download.
     const CANDIDATES = [...new Set([MEDIA_TYPES.IMAGE, ...byInfo.values()])];
 
     const original = manager.downloadAndMaybeDecrypt;
