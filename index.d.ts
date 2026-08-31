@@ -2513,12 +2513,10 @@ declare namespace WAWebJS {
     };
 
     /**
-     * WhatsApp's own `WAWebMediaTypes.MediaDataStage` for the media, as it stood
-     * when the fetch gave up: REUPLOADING, FETCHING, NEED_POKE, ERROR_MISSING,
-     * ERROR_TOO_LARGE, ERROR_UNSUPPORTED, ERROR_FORBIDDEN, INIT, RESOLVED and
-     * so on. Left open rather than enumerated because WhatsApp owns the list and
-     * adds to it. `null` means the message itself was gone; `undefined` means
-     * the failure never reached the page, so no stage was ever read.
+     * WhatsApp's own `MediaDataStage` when the fetch gave up - REUPLOADING,
+     * NEED_POKE, ERROR_MISSING, ERROR_TOO_LARGE, INIT and so on. Left open
+     * because WhatsApp owns the list. `null`: the message was gone.
+     * `undefined`: the failure never reached the page.
      */
     export type MediaStage = string | null;
 

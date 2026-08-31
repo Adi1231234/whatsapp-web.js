@@ -1738,15 +1738,9 @@ exports.LoadUtils = () => {
      * Resolves the media blob and metadata for a message.
      * Shared by downloadMedia and downloadMediaStream.
      *
-     * ALWAYS returns an object, never null and never a throw: puppeteer
-     * rebuilds an in-page throw as `new Error(message)` and drops every custom
-     * property, so the reason can only reach Node as data.
-     *
-     * That reason is WhatsApp's OWN `MediaDataStage` rather than a vocabulary
-     * invented here - it already names every way media can be unavailable
-     * (REUPLOADING, NEED_POKE, ERROR_MISSING, ERROR_TOO_LARGE, ERROR_FORBIDDEN
-     * ...), and re-encoding it into fewer codes only threw information away.
-     * `null` means there is no message left to have a stage.
+     * Always returns an object: an in-page throw loses custom properties at the
+     * puppeteer boundary, so the reason travels as data. It is WhatsApp's own
+     * `MediaDataStage`, or `null` when no message is left to have one.
      *
      * @param {string} msgId
      * @returns {Promise<{blob: Blob|null, stage: string|null, mimetype: string, filename: string, filesize: number}>}
@@ -1761,9 +1755,7 @@ exports.LoadUtils = () => {
                 Msg.get(msgId) ||
                 (await Msg.getMessagesById([msgId]))?.messages?.[0];
         } catch (lookupError) {
-            // An id that never got serialized reaches IndexedDB as `undefined`
-            // and it rejects with a DataError. Letting that escape would break
-            // the one promise this function makes.
+            // An unserialized id reaches IndexedDB as `undefined` and rejects.
             window.onDiagLog?.(
                 'warn',
                 'resolveMediaBlob: lookup threw',
@@ -1817,12 +1809,9 @@ exports.LoadUtils = () => {
             };
         }
 
-        // The post-download stage arrives through `notifyMsgsAsync()`, which is
-        // `debounce(0)` - a timer, not a synchronous write - so reading
-        // `mediaStage` straight after the await sees the STALE value. Measured
-        // on a real failure: REUPLOADING immediately, ERROR_MISSING once the
-        // consolidate lands. This is WhatsApp's own primitive for that wait; it
-        // resolves on the pending consolidate, or at once when none is due.
+        // `notifyMsgsAsync()` is a debounce, so `mediaStage` reads stale right
+        // after the await - measured REUPLOADING where the truth was
+        // ERROR_MISSING. This is WhatsApp's own primitive for that wait.
         await msg.mediaObject?.resolveWhenConsolidated();
 
         // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
@@ -1882,8 +1871,7 @@ exports.LoadUtils = () => {
                         mediaStage: msg.mediaData.mediaStage,
                         hasFilehash: !!msg.mediaObject?.filehash,
                         hasMediaBlob: !!msg.mediaObject?.mediaBlob,
-                        // Why the download itself gave up. It used to be
-                        // captured and then dropped.
+                        // Why the download gave up; used to be dropped.
                         resolveError,
                     }),
                 );

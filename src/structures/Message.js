@@ -594,11 +594,8 @@ class Message extends Base {
      * @param {Object} [options]
      * @param {number} [options.chunkSize=10485760] Size in bytes of each chunk read from the browser (default 10MB)
      * @returns {Promise<MessageMediaStream>} the stream and its metadata
-     * @throws {MediaFetchError} when no bytes could be produced, carrying the
-     * reason as a `reason` code rather than as prose. It never resolves empty:
-     * a silent `undefined` is what let a failed download reach the caller
-     * looking like an ordinary "nothing here", so the caller could neither
-     * retry it correctly nor report it.
+     * @throws {MediaFetchError} carrying the stage. Never resolves empty: the
+     * silent `undefined` it replaces is what lost pictures without a trace.
      */
     async downloadMediaStream({ chunkSize = 10 * 1024 * 1024 } = {}) {
         if (!this.hasMedia) {
@@ -633,16 +630,13 @@ class Message extends Base {
             await resultHandle.dispose().catch(() => {});
             throw err;
         }
-        // The code comes back from the page, so it is validated rather than
-        // trusted: a consumer switching exhaustively on it must never be handed
-        // something the page invented.
         if (metadata.blobSize === undefined) {
             await resultHandle.dispose().catch(() => {});
             throw new MediaFetchError(metadata.stage);
         }
 
-        // From here the handle is the blob itself, so everything below reads
-        // exactly as it did before the reason was introduced.
+        // From here the handle is the blob itself, so the reader below is
+        // unchanged.
         const blobHandle = await resultHandle.getProperty('blob');
         await resultHandle.dispose().catch(() => {});
 

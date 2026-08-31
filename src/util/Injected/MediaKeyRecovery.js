@@ -1,24 +1,17 @@
 'use strict';
 
 /**
- * Recovers media whose keys WhatsApp Web derived under the wrong media type.
+ * Recovers media whose keys WhatsApp derived under the wrong media type.
  *
- * Keys come from `HKDF(mediaKey, getMediaTypeInfo(type), 112)`, so encryption is
- * type-bound - while the sender's upload cache is not. `EncryptedMediaEntry`
- * exposes exactly `canReuseMediaKey`, `getMediaKey`, `getMediaKeyTimestamp`,
- * `getEncfilehash` and `url`: no type anywhere. That is the whole bug, and the
- * reason the type cannot simply be looked up - a documentMessage can point at a
- * blob encrypted as an image, and every recipient then fails the HMAC.
- *
- * So the declared type stops being authoritative and WhatsApp is asked to
- * download again under each other type. Guessing is safe because a candidate
- * must pass both the HMAC and the message's own plaintext hash inside
- * `decryptMedia` before its bytes are returned.
+ * Keys are `HKDF(mediaKey, getMediaTypeInfo(type))`, so encryption is
+ * type-bound while the sender's upload cache is not - `EncryptedMediaEntry`
+ * stores no type - and a documentMessage can point at image ciphertext. The
+ * declared type is therefore a hint; the HMAC and plaintext hash inside
+ * `decryptMedia` are the authority, so trying another type is safe.
  */
 exports.InjectMediaKeyRecovery = () => {
     const manager = window.require('WAWebDownloadManager').downloadManager;
-    // InjectDiagHooks re-runs on every re-sync; wrapping twice would retry the
-    // candidate list once per layer.
+    // Re-injected on every re-sync; a second wrapper would retry per layer.
     if (!manager || manager.__p2dKeyRecoveryInstalled) return;
     manager.__p2dKeyRecoveryInstalled = true;
 
@@ -26,23 +19,15 @@ exports.InjectMediaKeyRecovery = () => {
         window.require('WAWebMediaFileErrors');
     const { MEDIA_TYPES } = window.require('WAWebMmsMediaTypes');
 
-    // Wrong keys always surface as an HMAC failure, because `decryptMedia`
-    // verifies the MAC before it decrypts anything. A plaintext hash mismatch
-    // is the opposite: the keys were right and the bytes were wrong, so trying
-    // other types is guaranteed waste. WhatsApp separates the two the same way,
-    // with the same exported constant.
+    // The MAC is checked before decryption, so wrong keys can only fail as
+    // HMAC. A plaintext hash mismatch means the keys were right.
     const isWrongKeys = (err) =>
         err instanceof MediaDecryptionError &&
         !String(err.message).includes(PLAINTEXT_HASH_MISMATCH_ERROR);
 
-    // One entry per distinct key derivation, not per media type. Checked
-    // against WhatsApp's own tables rather than assumed: mapping all 42
-    // `MEDIA_TYPE_VALUES` through `WAWebCryptoMediaTypeInfo.getMediaTypeInfo`
-    // yields 18 info strings, and every type a chat media message can be -
-    // sticker and product fold into Image, ptt into Audio, gif and ptv into
-    // Video - lands in exactly these four. Image first: every observed
-    // occurrence was image ciphertext referenced as a document, and each
-    // candidate costs one re-download.
+    // One per distinct key derivation: WhatsApp's 42 media types yield 18 info
+    // strings, and chat media lands in these four. Image first, it is the only
+    // one ever observed, and each candidate costs a re-download.
     const CANDIDATES = [
         MEDIA_TYPES.IMAGE,
         MEDIA_TYPES.VIDEO,
@@ -71,7 +56,7 @@ exports.InjectMediaKeyRecovery = () => {
                     );
                     return bytes;
                 } catch {
-                    // Wrong type as well; try the next one.
+                    // Wrong type too.
                 }
             }
             window.__metrics?.safeDiagLog?.(
