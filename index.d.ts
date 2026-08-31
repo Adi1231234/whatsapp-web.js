@@ -1190,6 +1190,7 @@ declare namespace WAWebJS {
         ack: MessageAck;
         /** If the message was sent to a group, this field will contain the user that sent the message. */
         author?: string;
+        senderId?: string | null;
         /** String that represents from which device type the message was sent */
         deviceType: string;
         /** Message content */
