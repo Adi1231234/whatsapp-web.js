@@ -1,19 +1,7 @@
 const { expect } = require('chai');
 const {
-    RECOVERABLE_ERROR_NAME,
-    RECOVERABLE_MESSAGE_FRAGMENT,
-    CANDIDATE_MEDIA_TYPES,
-} = require('../../src/util/MediaKeyTypeRecovery');
-const {
     InjectMediaKeyRecovery,
 } = require('../../src/util/Injected/MediaKeyRecovery');
-const { MediaFailReason } = require('../../src/util/MediaFailReasons');
-
-const POLICY = {
-    recoverableErrorName: RECOVERABLE_ERROR_NAME,
-    recoverableMessageFragment: RECOVERABLE_MESSAGE_FRAGMENT,
-    candidateMediaTypes: CANDIDATE_MEDIA_TYPES,
-};
 
 const hmacMismatch = () => {
     const err = new Error('decryptMedia: hmac mismatch');
@@ -30,186 +18,129 @@ const hmacMismatch = () => {
  *
  * @param {object} opts
  * @param {string|null} opts.decryptsAs the media type whose keys work, if any
- * @param {Error} opts.downloadError thrown by the ciphertext re-fetch
+ * @param {Error|null} opts.failWith thrown instead of an HMAC failure
  */
-function fakeWindow({ decryptsAs = null, downloadError = null } = {}) {
-    const calls = { derived: [], downloads: 0, logs: [] };
-    const modules = {
-        WAWebDownloadManager: { downloadManager: {} },
-        WAWebCryptoCreateMediaKeys: async (type) => {
-            calls.derived.push(type);
-            return { type };
+function fakeWindow({ decryptsAs = null, failWith = null } = {}) {
+    const calls = { types: [], logs: [] };
+    const manager = {
+        downloadAndMaybeDecrypt: async (opts) => {
+            calls.types.push(opts.type);
+            if (failWith) throw failWith;
+            if (opts.type !== decryptsAs) throw hmacMismatch();
+            return new Uint8Array([1, 2, 3]).buffer;
         },
-        WAWebCryptoDecryptMedia: async ({ mediaKeys }) => {
-            if (mediaKeys.type !== decryptsAs) throw hmacMismatch();
-            return new Uint8Array([1, 2, 3]);
-        },
-        WAWebMmsClient: {
-            download: async () => {
-                calls.downloads++;
-                if (downloadError) throw downloadError;
-                return new ArrayBuffer(8);
+    };
+    return {
+        calls,
+        manager,
+        window: {
+            require: (name) =>
+                name === 'WAWebDownloadManager' ? { downloadManager: manager } : null,
+            __metrics: {
+                safeDiagLog: (level, event, data) =>
+                    calls.logs.push({ level, event, data }),
             },
         },
     };
-    const win = {
-        require: (name) => modules[name],
-        __metrics: {
-            safeDiagLog: (level, tag, data) =>
-                calls.logs.push({ level, tag, data }),
-        },
-        AbortController,
-        Uint8Array,
-    };
-    return {
-        win,
-        calls,
-        manager: modules.WAWebDownloadManager.downloadManager,
-    };
 }
 
-/** Installs the recovery with `window` bound, the way page.evaluate runs it. */
-function install(win) {
+const install = (fake) => {
     const previous = global.window;
-    global.window = win;
+    global.window = fake.window;
     try {
-        InjectMediaKeyRecovery(POLICY);
+        InjectMediaKeyRecovery();
     } finally {
         global.window = previous;
     }
-}
-
-/** Runs the wrapped download with `window` bound, as a real call would be. */
-async function run(win, manager, opts) {
-    const previous = global.window;
-    global.window = win;
-    try {
-        return await manager.downloadAndMaybeDecrypt(opts);
-    } finally {
-        global.window = previous;
-    }
-}
-
-const OPTS = {
-    type: 'document',
-    mediaKey: 'a-media-key',
-    encFilehash: 'enc',
-    filehash: 'plain',
-    directPath: '/o1/x',
 };
 
-describe('InjectMediaKeyRecovery', function () {
-    it('recovers a document that was encrypted as an image', async function () {
-        const { win, calls, manager } = fakeWindow({ decryptsAs: 'image' });
-        manager.downloadAndMaybeDecrypt = async () => {
-            throw hmacMismatch();
-        };
-        install(win);
+const download = async (fake, type) => {
+    const previous = global.window;
+    global.window = fake.window;
+    try {
+        return await fake.manager.downloadAndMaybeDecrypt({ type, mediaKey: 'k' });
+    } finally {
+        global.window = previous;
+    }
+};
 
-        const out = await run(win, manager, OPTS);
+describe('media key type recovery', function () {
+    it('re-downloads under another type when the HMAC fails', async function () {
+        const fake = fakeWindow({ decryptsAs: 'image' });
+        install(fake);
 
-        expect(out).to.be.an('ArrayBuffer');
-        expect(out.byteLength).to.equal(3);
-        expect(calls.downloads).to.equal(1);
-        // Image first, and the declared type is never re-tried.
-        expect(calls.derived).to.deep.equal(['image']);
-        expect(calls.logs[0].tag).to.equal('MEDIA_KEY_TYPE_RECOVERED');
-        expect(calls.logs[0].data.recoveredAs).to.equal('image');
-    });
+        const bytes = await download(fake, 'document');
 
-    it('rethrows the original error when no candidate works', async function () {
-        const { win, calls, manager } = fakeWindow({ decryptsAs: null });
-        const original = hmacMismatch();
-        manager.downloadAndMaybeDecrypt = async () => {
-            throw original;
-        };
-        install(win);
-
-        let thrown;
-        try {
-            await run(win, manager, OPTS);
-        } catch (err) {
-            thrown = err;
-        }
-
-        expect(thrown).to.equal(original);
-        // Every candidate except the declared one, and nothing accepted.
-        expect(calls.derived).to.deep.equal(['image', 'video', 'audio']);
-        expect(calls.logs[0].tag).to.equal('MEDIA_KEY_TYPE_UNRECOVERED');
-    });
-
-    it('leaves a successful download completely alone', async function () {
-        const { win, calls, manager } = fakeWindow({ decryptsAs: 'image' });
-        const payload = new ArrayBuffer(4);
-        manager.downloadAndMaybeDecrypt = async () => payload;
-        install(win);
-
-        expect(await run(win, manager, OPTS)).to.equal(payload);
-        expect(calls.downloads).to.equal(0);
-        expect(calls.logs).to.have.length(0);
-    });
-
-    it('does not touch a failure that is not a key-type mismatch', async function () {
-        const { win, calls, manager } = fakeWindow({ decryptsAs: 'image' });
-        const notFound = new Error('mmsDownload: 404');
-        notFound.name = 'MediaNotFoundError';
-        manager.downloadAndMaybeDecrypt = async () => {
-            throw notFound;
-        };
-        install(win);
-
-        let thrown;
-        try {
-            await run(win, manager, OPTS);
-        } catch (err) {
-            thrown = err;
-        }
-
-        // 404s are 92% of decrypt failures fleet-wide; recovery must be inert.
-        expect(thrown).to.equal(notFound);
-        expect(calls.downloads).to.equal(0);
-        expect(calls.derived).to.deep.equal([]);
-    });
-
-    it('gives up quietly when the ciphertext cannot be re-fetched', async function () {
-        const original = hmacMismatch();
-        const { win, calls, manager } = fakeWindow({
-            decryptsAs: 'image',
-            downloadError: new Error('offline'),
+        expect(new Uint8Array(bytes)).to.deep.equal(new Uint8Array([1, 2, 3]));
+        // declared type first, then the candidate that worked
+        expect(fake.calls.types).to.deep.equal(['document', 'image']);
+        expect(fake.calls.logs[0]).to.deep.include({
+            level: 'info',
+            event: 'MEDIA_KEY_TYPE_RECOVERED',
         });
-        manager.downloadAndMaybeDecrypt = async () => {
-            throw original;
-        };
-        install(win);
-
-        let thrown;
-        try {
-            await run(win, manager, OPTS);
-        } catch (err) {
-            thrown = err;
-        }
-
-        expect(thrown).to.equal(original);
-        expect(calls.derived).to.deep.equal([]);
-        // The network failure is reported rather than swallowed behind a
-        // rethrown key error.
-        expect(calls.logs[0].tag).to.equal('MEDIA_KEY_REFETCH_FAILED');
+        expect(fake.calls.logs[0].data).to.include({
+            declaredType: 'document',
+            recoveredAs: 'image',
+        });
     });
 
-    it('never wraps twice, because the injection re-runs on every re-sync', function () {
-        const { win, manager } = fakeWindow({});
-        manager.downloadAndMaybeDecrypt = async () => null;
-        install(win);
-        const wrappedOnce = manager.downloadAndMaybeDecrypt;
-        install(win);
-        expect(manager.downloadAndMaybeDecrypt).to.equal(wrappedOnce);
-    });
-});
+    it('never retries the declared type', async function () {
+        const fake = fakeWindow({ decryptsAs: 'audio' });
+        install(fake);
 
-describe('MediaFailReason', function () {
-    it('is its own key, so a code never drifts from its name', function () {
-        for (const key of Object.keys(MediaFailReason)) {
-            expect(MediaFailReason[key]).to.equal(key);
-        }
+        await download(fake, 'image');
+
+        expect(fake.calls.types).to.deep.equal(['image', 'video', 'audio']);
+    });
+
+    it('rethrows the original error when no type works', async function () {
+        const fake = fakeWindow({ decryptsAs: null });
+        install(fake);
+
+        const err = await download(fake, 'document').catch((e) => e);
+
+        expect(err.name).to.equal('MediaDecryptionError');
+        expect(fake.calls.types).to.deep.equal([
+            'document',
+            'image',
+            'video',
+            'audio',
+        ]);
+        expect(fake.calls.logs.at(-1)).to.deep.include({
+            level: 'warn',
+            event: 'MEDIA_KEY_TYPE_UNRECOVERED',
+        });
+    });
+
+    it('leaves any other failure untouched, with no retry', async function () {
+        const fake = fakeWindow({ failWith: new Error('MediaNotFoundError') });
+        install(fake);
+
+        const err = await download(fake, 'document').catch((e) => e);
+
+        expect(err.message).to.equal('MediaNotFoundError');
+        expect(fake.calls.types).to.deep.equal(['document']);
+        expect(fake.calls.logs).to.be.empty;
+    });
+
+    it('leaves a successful download untouched', async function () {
+        const fake = fakeWindow({ decryptsAs: 'image' });
+        install(fake);
+
+        await download(fake, 'image');
+
+        expect(fake.calls.types).to.deep.equal(['image']);
+        expect(fake.calls.logs).to.be.empty;
+    });
+
+    it('does not wrap twice across re-syncs', async function () {
+        const fake = fakeWindow({ decryptsAs: 'image' });
+        install(fake);
+        install(fake);
+
+        await download(fake, 'document');
+
+        // one wrapper only: a second would retry the candidate list per layer
+        expect(fake.calls.types).to.deep.equal(['document', 'image']);
     });
 });
