@@ -99,6 +99,16 @@ class Message extends Base {
                 : data.author;
 
         /**
+         * The ID of the user who sent the message, as WhatsApp resolves it.
+         *
+         * Prefer this over `author || from`. `author` can be a device-scoped
+         * address (`<lid>:96@lid`) on a message synced from another of your own
+         * devices, and no contact resolves from one.
+         * @type {?string}
+         */
+        this.senderId = data.senderId ?? null;
+
+        /**
          * String that represents from which device type the message was sent
          * @type {string}
          */
@@ -393,7 +403,9 @@ class Message extends Base {
      * @returns {Promise<Contact>}
      */
     getContact() {
-        return this.client.getContactById(this.author || this.from);
+        return this.client.getContactById(
+            this.senderId || this.author || this.from,
+        );
     }
 
     /**

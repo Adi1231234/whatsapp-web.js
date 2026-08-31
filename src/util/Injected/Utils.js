@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 exports.LoadUtils = () => {
     window.WWebJS = {};
@@ -807,6 +807,18 @@ exports.LoadUtils = () => {
 
         msg.isEphemeral = message.isEphemeral;
         msg.isStatusV3 = message.isStatusV3;
+
+        // Who WhatsApp itself says sent this message.
+        //
+        // `author || from` is not that answer. On a message synced from another
+        // of your own devices, `author` is the device-scoped sender
+        // (`<lid>:96@lid`, stored by WhatsApp as `senderWithDevice` for
+        // attribution), and no contact resolves from it: the LID to phone
+        // mapping only accepts a user address. `getSender` returns the user.
+        msg.senderId =
+            window.require('WAWebMsgGetters').getSender(message)?._serialized ??
+            null;
+
         msg.links = findLinks(
             message.mediaObject ? message.caption : message.body,
         ).map((link) => ({

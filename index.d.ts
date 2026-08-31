@@ -1177,6 +1177,13 @@ declare namespace WAWebJS {
         ack: MessageAck;
         /** If the message was sent to a group, this field will contain the user that sent the message. */
         author?: string;
+        /**
+         * The ID of the user who sent the message, as WhatsApp resolves it.
+         * Prefer this over `author || from`: `author` can be a device-scoped
+         * address on a message synced from another of your own devices, and no
+         * contact resolves from one.
+         */
+        senderId?: string | null;
         /** String that represents from which device type the message was sent */
         deviceType: string;
         /** Message content */
