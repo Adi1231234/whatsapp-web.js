@@ -1737,10 +1737,26 @@ exports.LoadUtils = () => {
     /**
      * Resolves the media blob and metadata for a message.
      * Shared by downloadMedia and downloadMediaStream.
+     *
+     * ALWAYS returns an object. A failure carries a `reason` code from
+     * `src/util/MediaFailReasons.js` rather than throwing, because puppeteer
+     * rebuilds an in-page throw as `new Error(message)` and drops every custom
+     * property - so a thrown reason reaches Node only as prose, and the
+     * consumer is forced to parse it back out. Node re-raises the code as a
+     * `MediaFetchError`, where properties survive.
+     *
      * @param {string} msgId
-     * @returns {Promise<{blob: Blob, mimetype: string, filename: string, filesize: number}|null>}
+     * @returns {Promise<{blob: Blob|null, reason: string|null, detail: object, mimetype: string, filename: string, filesize: number}>}
      */
     window.WWebJS.resolveMediaBlob = async (msgId) => {
+        const REASON = {
+            MESSAGE_GONE: 'MESSAGE_GONE',
+            REUPLOADING: 'REUPLOADING',
+            MEDIA_UNAVAILABLE: 'MEDIA_UNAVAILABLE',
+            NO_BLOB: 'NO_BLOB',
+        };
+        const fail = (reason, detail) => ({ blob: null, reason, detail });
+
         const { Msg } = window.require('WAWebCollections');
         const msg =
             Msg.get(msgId) ||
@@ -1751,24 +1767,28 @@ exports.LoadUtils = () => {
             !msg.mediaData ||
             msg.mediaData.mediaStage === 'REUPLOADING'
         ) {
+            const revoked = window.__revokedMsgIds?.get(msgId);
+            const detail = {
+                id: msgId,
+                hasMsg: !!msg,
+                hasMediaData: !!msg?.mediaData,
+                mediaStage: msg?.mediaData?.mediaStage,
+                // Deterministic cause: the message is gone because a
+                // revoke-for-everyone removed it before this download.
+                wasRevoked: !!revoked,
+                revokeTs: revoked?.revokeTs ?? null,
+            };
             if (window.onDiagLog) {
-                const revoked = window.__revokedMsgIds?.get(msgId);
                 window.onDiagLog(
                     'warn',
                     'resolveMediaBlob: returning null',
-                    JSON.stringify({
-                        id: msgId,
-                        hasMsg: !!msg,
-                        hasMediaData: !!msg?.mediaData,
-                        mediaStage: msg?.mediaData?.mediaStage,
-                        // Deterministic cause: the message is gone because a
-                        // revoke-for-everyone removed it before this download.
-                        wasRevoked: !!revoked,
-                        revokeTs: revoked?.revokeTs ?? null,
-                    }),
+                    JSON.stringify(detail),
                 );
             }
-            return null;
+            return fail(
+                msg && msg.mediaData ? REASON.REUPLOADING : REASON.MESSAGE_GONE,
+                detail,
+            );
         }
 
         // Always call internal downloadMedia - never skip based on
@@ -1787,6 +1807,15 @@ exports.LoadUtils = () => {
                 name: re?.name,
             };
         }
+
+        // WhatsApp propagates the post-download stage through
+        // `mediaObject.notifyMsgsAsync()`, which is `$1.debounce(0)` - a timer,
+        // not a synchronous write. Reading `mediaStage` straight after the
+        // await therefore saw the STALE value: measured `DECRYPTING` in 80 of
+        // 80 production failures, which is why the NEED_POKE branch below has
+        // never once run on the attempt that matters. One macrotask lets the
+        // debounce fire first.
+        await new Promise((resolve) => setTimeout(resolve, 0));
 
         // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
         if (msg.mediaData.mediaStage === 'NEED_POKE') {
@@ -1811,21 +1840,18 @@ exports.LoadUtils = () => {
             msg.mediaData.mediaStage === 'NEED_POKE' ||
             msg.mediaData.mediaStage === 'REUPLOADING'
         ) {
+            const detail = {
+                id: msgId,
+                stageAfter: msg.mediaData.mediaStage,
+                resolveError,
+            };
             if (window.onDiagLog)
                 window.onDiagLog(
                     'error',
                     'resolveMediaBlob: failed',
-                    JSON.stringify({
-                        id: msgId,
-                        stageAfter: msg.mediaData.mediaStage,
-                        resolveError,
-                    }),
+                    JSON.stringify(detail),
                 );
-            throw new Error(
-                'resolveMediaBlob: media not available (stage: ' +
-                    msg.mediaData.mediaStage +
-                    ')',
-            );
+            return fail(REASON.MEDIA_UNAVAILABLE, detail);
         }
 
         const cached = window
@@ -1840,18 +1866,23 @@ exports.LoadUtils = () => {
         }
 
         if (!blob) {
+            const detail = {
+                id: msgId,
+                mediaStage: msg.mediaData.mediaStage,
+                hasFilehash: !!msg.mediaObject?.filehash,
+                hasMediaBlob: !!msg.mediaObject?.mediaBlob,
+                // The reason the download itself gave up. It used to be
+                // captured here and then dropped, so the only surviving trace
+                // of a decryption failure was a separate diag hook.
+                resolveError,
+            };
             if (window.onDiagLog)
                 window.onDiagLog(
                     'error',
                     'resolveMediaBlob: no blob found',
-                    JSON.stringify({
-                        id: msgId,
-                        mediaStage: msg.mediaData.mediaStage,
-                        hasFilehash: !!msg.mediaObject?.filehash,
-                        hasMediaBlob: !!msg.mediaObject?.mediaBlob,
-                    }),
+                    JSON.stringify(detail),
                 );
-            return null;
+            return fail(REASON.NO_BLOB, detail);
         }
 
         if (window.onDiagLog)
@@ -1868,6 +1899,8 @@ exports.LoadUtils = () => {
 
         return {
             blob,
+            reason: null,
+            detail: null,
             mimetype: msg.mimetype,
             filename: msg.filename,
             filesize: msg.size,

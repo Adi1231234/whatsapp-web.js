@@ -10,6 +10,8 @@ const Reaction = require('./Reaction');
 const Contact = require('./Contact');
 const ScheduledEvent = require('./ScheduledEvent'); // eslint-disable-line no-unused-vars
 const { MessageTypes } = require('../util/Constants');
+const { MediaFetchError } = require('../util/MediaFetchError');
+const { MediaFailReason } = require('../util/MediaFailReasons');
 
 /**
  * Represents a Message on WhatsApp
@@ -566,7 +568,7 @@ class Message extends Base {
 
         const result = await this.client.pupPage.evaluate(async (msgId) => {
             const resolved = await window.WWebJS.resolveMediaBlob(msgId);
-            if (!resolved) return null;
+            if (!resolved || !resolved.blob) return null;
 
             const data = await window.WWebJS.arrayBufferToBase64Async(
                 await resolved.blob.arrayBuffer(),
@@ -592,49 +594,62 @@ class Message extends Base {
      * Like downloadMedia(), but returns a Readable stream instead of loading the entire file into memory.
      * @param {Object} [options]
      * @param {number} [options.chunkSize=10485760] Size in bytes of each chunk read from the browser (default 10MB)
-     * @returns {Promise<MessageMediaStream|undefined>} undefined if media is unavailable
+     * @returns {Promise<MessageMediaStream>} the stream and its metadata
+     * @throws {MediaFetchError} when no bytes could be produced, carrying the
+     * reason as a `reason` code rather than as prose. It never resolves empty:
+     * a silent `undefined` is what let a failed download reach the caller
+     * looking like an ordinary "nothing here", so the caller could neither
+     * retry it correctly nor report it.
      */
     async downloadMediaStream({ chunkSize = 10 * 1024 * 1024 } = {}) {
         if (!this.hasMedia) {
+            const detail = { id: this.id?._serialized, type: this.type };
             this.client?.emit?.(
                 'diag',
                 'warn',
                 'downloadMediaStream: hasMedia=false',
-                JSON.stringify({ id: this.id?._serialized, type: this.type }),
+                JSON.stringify(detail),
             );
-            return undefined;
+            throw new MediaFetchError(MediaFailReason.NOT_SYNCED, detail);
         }
 
-        const blobHandle = await this.client.pupPage.evaluateHandle(
-            async (msgId) => {
-                const result = await window.WWebJS.resolveMediaBlob(msgId);
-                return result?.blob ?? null;
-            },
+        const resultHandle = await this.client.pupPage.evaluateHandle(
+            async (msgId) => await window.WWebJS.resolveMediaBlob(msgId),
             this.id._serialized,
         );
 
         let metadata;
         try {
-            metadata = await blobHandle.evaluate((blob, msgId) => {
-                if (!blob) return null;
+            metadata = await resultHandle.evaluate((result, msgId) => {
                 const msg = window.require('WAWebCollections').Msg.get(msgId);
                 return {
-                    blobSize: blob.size,
+                    reason: result?.reason ?? null,
+                    detail: result?.detail ?? null,
+                    hasBlob: !!result?.blob,
+                    blobSize: result?.blob ? result.blob.size : 0,
                     mimetype: msg?.mimetype,
                     filename: msg?.filename,
                     filesize: msg?.size,
                 };
             }, this.id._serialized);
         } catch (err) {
-            await blobHandle.dispose().catch(() => {});
+            await resultHandle.dispose().catch(() => {});
             throw err;
         }
-        if (!metadata) {
-            await blobHandle.dispose().catch(() => {});
-            return undefined;
+        if (!metadata.hasBlob) {
+            await resultHandle.dispose().catch(() => {});
+            throw new MediaFetchError(
+                metadata.reason || MediaFailReason.NO_BLOB,
+                metadata.detail,
+            );
         }
 
-        const { blobSize, ...rest } = metadata;
+        const blobSize = metadata.blobSize;
+        const rest = {
+            mimetype: metadata.mimetype,
+            filename: metadata.filename,
+            filesize: metadata.filesize,
+        };
 
         this.client?.emit?.(
             'diag',
@@ -653,10 +668,10 @@ class Message extends Base {
             let bytesRead = 0;
             try {
                 for (let offset = 0; offset < blobSize; offset += chunkSize) {
-                    const base64 = await blobHandle.evaluate(
-                        async (blob, s, e) =>
+                    const base64 = await resultHandle.evaluate(
+                        async (result, s, e) =>
                             window.WWebJS.arrayBufferToBase64Async(
-                                await blob.slice(s, e).arrayBuffer(),
+                                await result.blob.slice(s, e).arrayBuffer(),
                             ),
                         offset,
                         offset + chunkSize,
@@ -672,7 +687,7 @@ class Message extends Base {
                     JSON.stringify({ id: msgId, bytesRead }),
                 );
             } finally {
-                await blobHandle.dispose().catch(() => {});
+                await resultHandle.dispose().catch(() => {});
             }
         }
 
