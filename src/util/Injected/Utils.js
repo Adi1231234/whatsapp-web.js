@@ -1864,7 +1864,10 @@ exports.LoadUtils = () => {
             blob = msg.mediaObject.mediaBlob.forceToBlob();
         }
 
-        if (!blob) {
+        // An empty blob is no bytes, and it used to travel as a success: the
+        // reader yields zero chunks and a 0-byte file is written and recorded
+        // as saved.
+        if (!blob || !blob.size) {
             if (window.onDiagLog)
                 window.onDiagLog(
                     'error',
@@ -1874,6 +1877,8 @@ exports.LoadUtils = () => {
                         mediaStage: msg.mediaData.mediaStage,
                         hasFilehash: !!msg.mediaObject?.filehash,
                         hasMediaBlob: !!msg.mediaObject?.mediaBlob,
+                        // distinguishes "no blob" from "empty blob"
+                        blobSize: blob ? blob.size : null,
                         // Why the download gave up; used to be dropped.
                         resolveError,
                     }),
