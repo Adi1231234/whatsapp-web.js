@@ -624,12 +624,10 @@ class Message extends Base {
         let metadata;
         try {
             metadata = await resultHandle.evaluate((result, msgId) => {
+                if (!result.blob) return result;
                 const msg = window.require('WAWebCollections').Msg.get(msgId);
                 return {
-                    reason: result?.reason ?? null,
-                    detail: result?.detail ?? null,
-                    hasBlob: !!result?.blob,
-                    blobSize: result?.blob ? result.blob.size : 0,
+                    blobSize: result.blob.size,
                     mimetype: msg?.mimetype,
                     filename: msg?.filename,
                     filesize: msg?.size,
@@ -639,11 +637,11 @@ class Message extends Base {
             await resultHandle.dispose().catch(() => {});
             throw err;
         }
-        if (!metadata.hasBlob) {
+        // The code comes back from the page, so it is validated rather than
+        // trusted: a consumer switching exhaustively on it must never be handed
+        // something the page invented.
+        if (metadata.blobSize === undefined) {
             await resultHandle.dispose().catch(() => {});
-            // The code comes back from the page, so it is validated rather than
-            // trusted: a consumer switching exhaustively on it must never be
-            // handed something the page invented.
             throw new MediaFetchError(
                 isMediaFailReason(metadata.reason)
                     ? metadata.reason
@@ -652,12 +650,12 @@ class Message extends Base {
             );
         }
 
-        const blobSize = metadata.blobSize;
-        const rest = {
-            mimetype: metadata.mimetype,
-            filename: metadata.filename,
-            filesize: metadata.filesize,
-        };
+        // From here the handle is the blob itself, so everything below reads
+        // exactly as it did before the reason was introduced.
+        const blobHandle = await resultHandle.getProperty('blob');
+        await resultHandle.dispose().catch(() => {});
+
+        const { blobSize, ...rest } = metadata;
 
         this.client?.emit?.(
             'diag',
@@ -676,10 +674,10 @@ class Message extends Base {
             let bytesRead = 0;
             try {
                 for (let offset = 0; offset < blobSize; offset += chunkSize) {
-                    const base64 = await resultHandle.evaluate(
-                        async (result, s, e) =>
+                    const base64 = await blobHandle.evaluate(
+                        async (blob, s, e) =>
                             window.WWebJS.arrayBufferToBase64Async(
-                                await result.blob.slice(s, e).arrayBuffer(),
+                                await blob.slice(s, e).arrayBuffer(),
                             ),
                         offset,
                         offset + chunkSize,
@@ -695,7 +693,7 @@ class Message extends Base {
                     JSON.stringify({ id: msgId, bytesRead }),
                 );
             } finally {
-                await resultHandle.dispose().catch(() => {});
+                await blobHandle.dispose().catch(() => {});
             }
         }
 
