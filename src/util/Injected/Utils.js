@@ -1751,7 +1751,7 @@ exports.LoadUtils = (mediaFailReason) => {
      * `MediaFetchError`, where properties survive.
      *
      * @param {string} msgId
-     * @returns {Promise<{blob: Blob|null, reason: string|null, detail: object, mimetype: string, filename: string, filesize: number}>}
+     * @returns {Promise<{blob: Blob|null, reason: string|null, detail: object|null, mimetype: string, filename: string, filesize: number}>}
      */
     window.WWebJS.resolveMediaBlob = async (msgId) => {
         const fail = (reason, detail) => ({ blob: null, reason, detail });
@@ -1783,8 +1783,15 @@ exports.LoadUtils = (mediaFailReason) => {
             msg.mediaData.mediaStage === 'REUPLOADING'
         ) {
             const revoked = window.__revokedMsgIds?.get(msgId);
+            const reason =
+                msg && msg.mediaData
+                    ? mediaFailReason.REUPLOADING
+                    : mediaFailReason.MESSAGE_GONE;
             const detail = {
                 id: msgId,
+                // The tag below still says "returning null" because GCP
+                // queries key on it; the reason is what is actually returned.
+                reason,
                 hasMsg: !!msg,
                 hasMediaData: !!msg?.mediaData,
                 mediaStage: msg?.mediaData?.mediaStage,
@@ -1800,12 +1807,7 @@ exports.LoadUtils = (mediaFailReason) => {
                     JSON.stringify(detail),
                 );
             }
-            return fail(
-                msg && msg.mediaData
-                    ? mediaFailReason.REUPLOADING
-                    : mediaFailReason.MESSAGE_GONE,
-                detail,
-            );
+            return fail(reason, detail);
         }
 
         // Always call internal downloadMedia - never skip based on
