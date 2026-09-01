@@ -265,6 +265,7 @@ class Chat extends Base {
      * @param {Object} [options]
      * @param {number} [options.maxPages] Paging attempts before giving up.
      * @returns {Promise<{messages: Array<Message>, reachedBack: boolean}>}
+     * `messages` holds only the media of the period itself, oldest first.
      * `reachedBack` is true when a message older than `sinceTimestamp` was
      * seen, or the chat has no earlier messages at all - either way nothing in
      * the period can be missing.
@@ -353,13 +354,32 @@ class Chat extends Base {
                                 chat,
                                 msgCollection: chat.msgs,
                             });
-                        if (!pulled || !pulled.length) break;
+                        // Nothing came back for one of two opposite reasons.
+                        // `loadEarlierMsgs` sets `noEarlierMsgs` itself the
+                        // moment it establishes there is nothing older, and
+                        // returns `[]` in the same breath - so the flag, not
+                        // the empty array, is what says whether the period is
+                        // covered. Reading the array alone reported "could not
+                        // read back far enough" for every chat whose history
+                        // simply ends.
+                        if (!pulled || !pulled.length) {
+                            reachedBack = !!chat.msgs?.msgLoadState
+                                ?.noEarlierMsgs;
+                            break;
+                        }
                     }
                     cursor = oldest ? oldest.id : cursor;
                 }
 
                 const messages = [...collected.values()]
-                    .filter((m) => MEDIA_TYPES.includes(m.type))
+                    // Paging walks PAST `since` - it has to, because that is
+                    // how it learns it got there - so the collection holds
+                    // media from before the period as well. Only those are
+                    // dropped: `!(m.t < since)` keeps a message WhatsApp gave
+                    // no `t` for, which the caller can still place.
+                    .filter(
+                        (m) => MEDIA_TYPES.includes(m.type) && !(m.t < since),
+                    )
                     .sort((a, b) => a.t - b.t)
                     .map((m) => window.WWebJS.getMessageModel(m));
                 return { messages, reachedBack };
