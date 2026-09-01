@@ -809,6 +809,9 @@ exports.LoadUtils = () => {
 
         msg.isEphemeral = message.isEphemeral;
         msg.isStatusV3 = message.isStatusV3;
+        msg.senderId =
+            window.require('WAWebMsgGetters').getSender(message)?._serialized ??
+            null;
         msg.links = findLinks(
             message.mediaObject ? message.caption : message.body,
         ).map((link) => ({
