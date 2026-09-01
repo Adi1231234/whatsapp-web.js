@@ -1930,6 +1930,14 @@ declare namespace WAWebJS {
         fetchMessages: (
             searchOptions: MessageSearchOptions,
         ) => Promise<Message[]>;
+        /**
+         * Loads this chat's media messages back to a point in time.
+         * `reachedBack` reports whether the period is fully covered.
+         */
+        fetchMediaSince: (
+            sinceTimestamp: number,
+            options?: { maxPages?: number },
+        ) => Promise<{ messages: Message[]; reachedBack: boolean }>;
         /** Mutes this chat forever, unless a date is specified */
         mute: (
             unmuteDate?: Date,
