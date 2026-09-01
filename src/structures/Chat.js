@@ -363,8 +363,8 @@ class Chat extends Base {
                         // read back far enough" for every chat whose history
                         // simply ends.
                         if (!pulled || !pulled.length) {
-                            reachedBack = !!chat.msgs?.msgLoadState
-                                ?.noEarlierMsgs;
+                            reachedBack =
+                                !!chat.msgs?.msgLoadState?.noEarlierMsgs;
                             break;
                         }
                     }
