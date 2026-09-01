@@ -106,6 +106,15 @@ declare namespace WAWebJS {
         /** Get all current chat instances */
         getChats(): Promise<Chat[]>;
 
+        /**
+         * Get the chats active since a moment in time, in unix SECONDS.
+         *
+         * Filters on `chat.t` before the chats are serialized, which is where
+         * the saving is: a chat model costs a group metadata update and a
+         * serialized last message.
+         */
+        getChatsSince(timestamp: number): Promise<Chat[]>;
+
         /** Gets all cached {@link Channel} instances */
         getChannels(): Promise<Channel[]>;
 
