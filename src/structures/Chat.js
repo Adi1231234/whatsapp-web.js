@@ -301,6 +301,17 @@ class Chat extends Base {
                     return added;
                 };
 
+                // The question is whether the whole PERIOD is visible, not
+                // whether it happens to contain old media. A chat with three
+                // pictures, all recent, is fully covered: its loaded history
+                // reaches past `since` and there is nothing older to find.
+                // Answering on media alone called such a chat a gap - on a real
+                // account, 31 chats out of 54 for a seven-day window.
+                const historyReaches = () => {
+                    const loaded = chat.msgs?.getModelsArray?.() ?? [];
+                    return loaded.some((m) => m.t <= since);
+                };
+
                 for (let page = 0; page < maxPages; page++) {
                     let batch = [];
                     try {
@@ -323,7 +334,7 @@ class Chat extends Base {
                         (acc, m) => (acc === null || m.t < acc.t ? m : acc),
                         null,
                     );
-                    if (oldest && oldest.t <= since) {
+                    if ((oldest && oldest.t <= since) || historyReaches()) {
                         reachedBack = true;
                         break;
                     }
