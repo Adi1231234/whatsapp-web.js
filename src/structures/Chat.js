@@ -224,9 +224,16 @@ class Chat extends Base {
 
                 if (searchOptions && searchOptions.limit > 0) {
                     while (msgs.length < searchOptions.limit) {
+                        // `loadEarlierMsgs` takes ONE options object. Passing
+                        // positional arguments leaves its `chat` undefined and
+                        // throws on `waitForChatLoading`, so every paging call
+                        // here used to fail.
                         const loadedMessages = await window
                             .require('WAWebChatLoadMessages')
-                            .loadEarlierMsgs(chat, chat.msgs);
+                            .loadEarlierMsgs({
+                                chat,
+                                msgCollection: chat.msgs,
+                            });
                         if (!loadedMessages || !loadedMessages.length) break;
                         msgs = [...loadedMessages.filter(msgFilter), ...msgs];
                     }
@@ -244,6 +251,117 @@ class Chat extends Base {
         );
 
         return messages.map((m) => new Message(this.client, m));
+    }
+
+    /**
+     * Loads this chat's media messages back to a point in time.
+     *
+     * `fetchMessages` spends its budget on message COUNT, so in a chatty chat
+     * the limit is consumed by text long before it reaches a given moment, and
+     * the caller has no way to tell whether it got that far. This asks
+     * WhatsApp's own media query instead, and reports whether it reached back.
+     *
+     * @param {number} sinceTimestamp Unix seconds to reach back to.
+     * @param {Object} [options]
+     * @param {number} [options.maxPages] Paging attempts before giving up.
+     * @returns {Promise<{messages: Array<Message>, reachedBack: boolean}>}
+     * `reachedBack` is true when a message older than `sinceTimestamp` was
+     * seen, or the chat has no earlier messages at all - either way nothing in
+     * the period can be missing.
+     */
+    async fetchMediaSince(sinceTimestamp, options = {}) {
+        const result = await this.client.pupPage.evaluate(
+            async (chatId, since, maxPages) => {
+                const MEDIA_TYPES = [
+                    'image',
+                    'video',
+                    'document',
+                    'audio',
+                    'ptt',
+                    'sticker',
+                ];
+                const { MsgCollection } = window.require('WAWebMsgCollection');
+                const chat = await window.WWebJS.getChat(chatId, {
+                    getAsModel: false,
+                });
+                if (!chat) return { messages: [], reachedBack: false };
+
+                const collected = new Map();
+                let cursor = undefined;
+                let reachedBack = false;
+
+                const absorb = (msgs) => {
+                    let added = 0;
+                    for (const m of msgs || []) {
+                        const key = m.id?.id;
+                        if (!key || collected.has(key)) continue;
+                        collected.set(key, m);
+                        added++;
+                    }
+                    return added;
+                };
+
+                for (let page = 0; page < maxPages; page++) {
+                    let batch = [];
+                    try {
+                        const answer = await MsgCollection.queryMedia(
+                            chat.id,
+                            Infinity,
+                            'before',
+                            cursor,
+                        );
+                        batch = Array.isArray(answer)
+                            ? answer
+                            : answer?.messages || [];
+                    } catch (e) {
+                        break;
+                    }
+
+                    const added = absorb(batch);
+                    const all = [...collected.values()];
+                    const oldest = all.reduce(
+                        (acc, m) => (acc === null || m.t < acc.t ? m : acc),
+                        null,
+                    );
+                    if (oldest && oldest.t <= since) {
+                        reachedBack = true;
+                        break;
+                    }
+
+                    // Nothing new locally. Everything older lives on the phone,
+                    // so pull one more page from it before deciding.
+                    if (added === 0) {
+                        if (chat.msgs?.msgLoadState?.noEarlierMsgs) {
+                            // There is nothing older to find anywhere.
+                            reachedBack = true;
+                            break;
+                        }
+                        const pulled = await window
+                            .require('WAWebChatLoadMessages')
+                            .loadEarlierMsgs({
+                                chat,
+                                msgCollection: chat.msgs,
+                            });
+                        if (!pulled || !pulled.length) break;
+                    }
+                    cursor = oldest ? oldest.id : cursor;
+                }
+
+                const messages = [...collected.values()]
+                    .filter((m) => MEDIA_TYPES.includes(m.type))
+                    .sort((a, b) => a.t - b.t)
+                    .map((m) => window.WWebJS.getMessageModel(m));
+                return { messages, reachedBack };
+            },
+            this.id._serialized,
+            sinceTimestamp,
+            options.maxPages ?? 10,
+        );
+
+        return {
+            messages: result.messages.map((m) => new Message(this.client, m)),
+            reachedBack: result.reachedBack,
+        };
     }
 
     /**
