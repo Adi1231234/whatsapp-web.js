@@ -14,6 +14,7 @@ const {
 } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { LoadUtils } = require('./util/Injected/Utils');
+const { InjectMediaKeyRecovery } = require('./util/Injected/MediaKeyRecovery');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -344,6 +345,10 @@ class Client extends EventEmitter {
 
                         //Load util functions (serializers, helper functions)
                         await this.pupPage.evaluate(LoadUtils);
+
+                        // Recover media whose keys were derived under the
+                        // wrong media type.
+                        await this.pupPage.evaluate(InjectMediaKeyRecovery);
 
                         await this.pupPage
                             .waitForFunction(
