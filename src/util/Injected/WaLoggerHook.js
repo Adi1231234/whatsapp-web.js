@@ -17,12 +17,15 @@
  *   per-account file. Nothing is dropped and nothing leaves the machine.
  * - ERROR, WARN and EXPECTED_ERROR, plus any line the terminal set recognises
  *   at any level, ALSO go to `onSocketDiagEvent`. That is the signal that says
- *   go and read the file. Measured on a busy shop over 6.2 minutes: 0 ERROR,
- *   0 EXPECTED_ERROR, 32 WARN. It costs nothing.
+ *   go and read the file, and it is chosen by LEVEL so an unseen failure is
+ *   carried on its first occurrence without anyone having predicted its words.
+ *   Rate-limited per template, because the level rule alone would also carry
+ *   the routine ones.
  *
- * LOG is excluded from the second rule because it is the volume: 1,773 calls
- * in that same window. DEV_XMPP is excluded from BOTH, because it is the raw
- * XMPP wire and it carries message bodies.
+ * Measured on a busy shop over 6.2 minutes: 0 ERROR, 0 EXPECTED_ERROR, 32 WARN,
+ * 1,773 LOG, 202 DEV_XMPP. LOG is excluded from the second rule because it is
+ * the volume; DEV_XMPP is excluded from BOTH, because it is the raw XMPP wire
+ * and it carries message bodies.
  */
 
 // Terminal at ANY level, including LOG. Not a vocabulary guess: these are the
@@ -40,6 +43,22 @@ const WAL_SIGNAL_LEVELS = ['ERROR', 'WARN', 'EXPECTED_ERROR'];
 const WAL_BATCH_SIZE = 200;
 const WAL_FLUSH_MS = 2000;
 
+/**
+ * The GCP side is capped PER TEMPLATE, not by vocabulary.
+ *
+ * Choosing by level alone is what makes an unseen failure visible on its first
+ * occurrence, but it also carries the routine ones: measured, WARN is 5/min per
+ * machine and one template (`[devices] missing side contact hash`) is most of
+ * it, which would be ~148k rows/day across the fleet for a message that says
+ * nothing. Capping the first few of each distinct template keeps every novel
+ * line and drops the repetition, and the local file still has all of it.
+ *
+ * The window rather than a once-per-page cap so a rate that suddenly climbs is
+ * still visible, and the count of what was dropped rides on the next one out.
+ */
+const WAL_SIGNAL_PER_TEMPLATE = 3;
+const WAL_SIGNAL_WINDOW_MS = 600000;
+
 /** True when a line also deserves a GCP row. Pure, so testable. */
 const isWaLoggerSignal = (level, message) =>
     WAL_SIGNAL_LEVELS.indexOf(level) !== -1 || WAL_TERMINAL.test(message);
@@ -50,9 +69,19 @@ const InjectWaLoggerHook = (
     signalLevels,
     batchSize,
     flushMs,
+    perTemplate,
+    windowMs,
 ) => {
     const WAL = window.require('WALogger');
     if (!WAL) return;
+
+    // inject() runs more than once per document: initialize() and framenavigated
+    // race, and the logs show `inject:CANCELLING previous inject` on a single
+    // page. The per-function __p2dWrapped guard below stops the double-wrap but
+    // not the timer and the listener, which would accumulate one of each per
+    // inject and leave the later buffers orphaned.
+    if (window.__p2dWaLogInstalled) return;
+    window.__p2dWaLogInstalled = true;
 
     const terminal = new RegExp(terminalSource, 'i');
     const socketState = () => {
@@ -75,6 +104,37 @@ const InjectWaLoggerHook = (
         } catch (e) {
             return String(rest).slice(0, 400);
         }
+    };
+
+    // Per-template rate limit for the GCP side only. Returns how many were
+    // dropped since the last one went out, or null when this one is suppressed.
+    let seen = Object.create(null);
+    let seenCount = 0;
+    const throttle = (msg) => {
+        const now = Date.now();
+        const key = msg.slice(0, 120);
+        // Keys are TEMPLATES, so the set is naturally small - 4 distinct WARN
+        // templates in the whole measurement. But WALogger also accepts a plain
+        // string, and a caller building one per call would grow this without
+        // bound over a page that lives for days. Start over rather than leak.
+        if (seenCount > 500) {
+            seen = Object.create(null);
+            seenCount = 0;
+        }
+        const entry = seen[key];
+        if (!entry) seenCount++;
+        if (!entry || now - entry.since >= windowMs) {
+            seen[key] = { since: now, sent: 1, dropped: 0 };
+            return entry ? entry.dropped : 0;
+        }
+        if (entry.sent < perTemplate) {
+            entry.sent++;
+            const dropped = entry.dropped;
+            entry.dropped = 0;
+            return dropped;
+        }
+        entry.dropped++;
+        return null;
     };
 
     var buffer = [];
@@ -113,13 +173,19 @@ const InjectWaLoggerHook = (
                 if (buffer.length >= batchSize) flush();
 
                 if (signalLevels.indexOf(lvl) !== -1 || isTerminal) {
-                    window.onSocketDiagEvent({
-                        event: 'WA_INTERNAL_' + lvl,
-                        terminal: isTerminal,
-                        msg: msg.slice(0, 300),
-                        args: args,
-                        state: state,
-                    });
+                    // A terminal line is never suppressed: it is rare by
+                    // definition and it is the one we came for.
+                    const dropped = isTerminal ? 0 : throttle(msg);
+                    if (dropped !== null) {
+                        window.onSocketDiagEvent({
+                            event: 'WA_INTERNAL_' + lvl,
+                            terminal: isTerminal,
+                            msg: msg.slice(0, 300),
+                            args: args,
+                            state: state,
+                            suppressed: dropped || undefined,
+                        });
+                    }
                 }
             } catch (e) {
                 // best-effort diagnostic: never let it break the caller
@@ -134,6 +200,8 @@ const InjectWaLoggerHook = (
 module.exports = {
     InjectWaLoggerHook,
     WAL_TERMINAL,
+    WAL_SIGNAL_PER_TEMPLATE,
+    WAL_SIGNAL_WINDOW_MS,
     WAL_LEVELS,
     WAL_SIGNAL_LEVELS,
     WAL_BATCH_SIZE,

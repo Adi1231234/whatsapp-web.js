@@ -4,8 +4,11 @@ const {
     WAL_TERMINAL,
     WAL_LEVELS,
     WAL_SIGNAL_LEVELS,
+    WAL_SIGNAL_PER_TEMPLATE,
+    WAL_SIGNAL_WINDOW_MS,
     isWaLoggerSignal,
 } = require('../../src/util/Injected/WaLoggerHook');
+const { evaluateInPage } = require('./evaluateBoundary');
 
 // Verbatim from WhatsApp Web, on the path that ends in
 // `clearCredentialsAndStoredData(WebFailStorageInitialization)` and a
@@ -54,17 +57,31 @@ function fakePage() {
         WAWebSocketModel: { Socket: { state: 'UNLAUNCHED' } },
     };
     // The hook installs a flush timer. Stub it so a unit test cannot leave the
-    // runner hanging on a live handle.
-    global.setInterval = () => 0;
+    // runner hanging on a live handle, and count it so a leak is visible.
+    const timers = [];
+    global.setInterval = (fn) => {
+        timers.push(fn);
+        return timers.length;
+    };
+    const listenerCalls = [];
     global.window = {
         require: (name) => modules[name],
         onSocketDiagEvent: (info) => emitted.push(info),
         onWaLogBatch: (lines) => batches.push(lines),
         addEventListener: (name, fn) => {
+            listenerCalls.push(name);
             listeners[name] = fn;
         },
     };
-    return { emitted, batches, calls, listeners, WALogger };
+    return {
+        emitted,
+        batches,
+        calls,
+        listeners,
+        listenerCalls,
+        timers,
+        WALogger,
+    };
 }
 
 const allBatched = (page) => page.batches.reduce((acc, b) => acc.concat(b), []);
@@ -102,13 +119,19 @@ describe('WaLoggerHook', function () {
     });
 
     describe('InjectWaLoggerHook', function () {
+        // Through the same boundary puppeteer puts it through: the body is
+        // re-parsed in global scope, so any module constant read from inside
+        // would arrive as undefined.
         const install = (batchSize) =>
-            InjectWaLoggerHook(
+            evaluateInPage(
+                InjectWaLoggerHook,
                 WAL_TERMINAL.source,
                 WAL_LEVELS,
                 WAL_SIGNAL_LEVELS,
                 batchSize === undefined ? 200 : batchSize,
                 60000,
+                WAL_SIGNAL_PER_TEMPLATE,
+                WAL_SIGNAL_WINDOW_MS,
             );
 
         const emitAll = (page) =>
@@ -187,6 +210,99 @@ describe('WaLoggerHook', function () {
             page.WALogger.ERROR(tagged('Failed to initialize model storage'));
             page.WALogger.LOG(tagged('updated contact text status'));
             expect(page.calls).to.have.length(2);
+        });
+
+        it('caps a repeating template on the GCP side but never in the file', function () {
+            // The level rule carries every WARN, and one routine template is
+            // most of them - ~148k rows/day fleet-wide for a line that says
+            // nothing. The file still gets all 40.
+            const page = fakePage();
+            install(1);
+            for (let i = 0; i < 40; i++) {
+                page.WALogger.WARN(
+                    tagged(
+                        '[devices] missing side contact hash for {} updates',
+                    ),
+                );
+            }
+            expect(page.emitted).to.have.length(WAL_SIGNAL_PER_TEMPLATE);
+            expect(allBatched(page)).to.have.length(40);
+        });
+
+        it('counts what it dropped, so a climbing rate is still visible', function () {
+            const page = fakePage();
+            const realNow = Date.now;
+            try {
+                let now = 1000;
+                Date.now = () => now;
+                install(1);
+                for (let i = 0; i < 40; i++) {
+                    page.WALogger.WARN(tagged('a repeating warning'));
+                }
+                expect(page.emitted).to.have.length(WAL_SIGNAL_PER_TEMPLATE);
+                expect(
+                    page.emitted.every((e) => e.suppressed === undefined),
+                ).to.equal(true);
+
+                // Next window: the first one out carries what the last window
+                // swallowed, so the rate is recoverable from GCP alone.
+                now += WAL_SIGNAL_WINDOW_MS;
+                page.WALogger.WARN(tagged('a repeating warning'));
+                const last = page.emitted[page.emitted.length - 1];
+                expect(last.suppressed).to.equal(37);
+            } finally {
+                Date.now = realNow;
+            }
+        });
+
+        it('does not grow its throttle map without bound', function () {
+            // Keys are templates, so the set is small in practice - but
+            // WALogger also takes a plain string, and a caller building one per
+            // call would otherwise leak over a page that lives for days.
+            const page = fakePage();
+            install(1);
+            for (let i = 0; i < 2000; i++) {
+                page.WALogger.WARN(tagged('unique warning number ' + i));
+            }
+            expect(page.emitted).to.have.length(2000);
+        });
+
+        it('never suppresses a terminal line, however often it repeats', function () {
+            const page = fakePage();
+            install(1);
+            for (let i = 0; i < 20; i++) {
+                page.WALogger.LOG(
+                    tagged('storage initialization error, logging out'),
+                );
+            }
+            expect(page.emitted).to.have.length(20);
+            expect(page.emitted.every((e) => e.terminal === true)).to.equal(
+                true,
+            );
+        });
+
+        it('caps each template separately, so a novel line is never hidden', function () {
+            const page = fakePage();
+            install(1);
+            for (let i = 0; i < 20; i++) {
+                page.WALogger.WARN(tagged('the noisy one'));
+            }
+            page.WALogger.ERROR(tagged('a failure nobody has seen yet'));
+            const msgs = page.emitted.map((e) => e.msg);
+            expect(msgs).to.contain('a failure nobody has seen yet');
+        });
+
+        it('installs one timer and one listener, however often inject runs', function () {
+            // inject() runs more than once per document - initialize() and
+            // framenavigated race, and the logs show `inject:CANCELLING
+            // previous inject` on a single page. Every extra install would
+            // otherwise leave a live interval and a pagehide listener behind.
+            const page = fakePage();
+            install(1);
+            install(1);
+            install(1);
+            expect(page.timers).to.have.length(1);
+            expect(page.listenerCalls).to.deep.equal(['pagehide']);
         });
 
         it('does not double-wrap when injected twice', function () {

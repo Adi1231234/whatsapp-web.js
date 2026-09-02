@@ -27,11 +27,15 @@ const {
     WAL_SIGNAL_LEVELS,
     WAL_BATCH_SIZE,
     WAL_FLUSH_MS,
+    WAL_SIGNAL_PER_TEMPLATE,
+    WAL_SIGNAL_WINDOW_MS,
 } = require('./util/Injected/WaLoggerHook');
 const {
     InjectStorageDiag,
     STORAGE_INIT_ERROR,
     STORAGE_SCHEMA_SNAPSHOT,
+    SNAPSHOT_DB_TIMEOUT_MS,
+    STORAGE_UTILS_MODULES,
 } = require('./util/Injected/StorageDiag');
 
 // The storage events that get their own `diag` channel entry, and at what
@@ -416,8 +420,16 @@ class Client extends EventEmitter {
                 WAL_SIGNAL_LEVELS,
                 WAL_BATCH_SIZE,
                 WAL_FLUSH_MS,
+                WAL_SIGNAL_PER_TEMPLATE,
+                WAL_SIGNAL_WINDOW_MS,
             );
-            await this.pupPage.evaluate(InjectStorageDiag);
+            await this.pupPage.evaluate(
+                InjectStorageDiag,
+                STORAGE_INIT_ERROR,
+                STORAGE_SCHEMA_SNAPSHOT,
+                STORAGE_UTILS_MODULES,
+                SNAPSHOT_DB_TIMEOUT_MS,
+            );
 
             // Socket.state fires `change:state`, so wait on the event rather than
             // sampling. WAWebEventsWaitForBbEvent is WhatsApp's own helper: it

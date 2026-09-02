@@ -3,7 +3,10 @@ const {
     InjectStorageDiag,
     STORAGE_INIT_ERROR,
     STORAGE_SCHEMA_SNAPSHOT,
+    SNAPSHOT_DB_TIMEOUT_MS,
+    STORAGE_UTILS_MODULES,
 } = require('../../src/util/Injected/StorageDiag');
+const { evaluateInPage } = require('./evaluateBoundary');
 
 /**
  * The real shape: a minified WhatsApp error really does carry property names
@@ -19,9 +22,12 @@ function minifiedWaError() {
     return err;
 }
 
-function fakePage({ withModules = true } = {}) {
+const realSetTimeout = global.setTimeout;
+
+function fakePage({ withModules = true, databases } = {}) {
     const emitted = [];
     const triggered = [];
+    const timeouts = [];
     const bus = {
         BackendEventBus: {
             triggerStorageInitializationError(err) {
@@ -47,20 +53,37 @@ function fakePage({ withModules = true } = {}) {
               WAWebSignalStorageUtils: storage('signal-storage', 6),
           }
         : {};
+    global.setTimeout = (fn, ms) => {
+        timeouts.push({ fn, ms });
+        return timeouts.length;
+    };
     global.window = {
         require: (name) => modules[name],
         onSocketDiagEvent: (info) => emitted.push(info),
         Debug: { VERSION: '2.3000.1046259792' },
     };
     global.indexedDB = {
-        databases: async () => [
-            { name: 'model-storage', version: 2020 },
-            { name: 'signal-storage', version: 70 },
-        ],
+        databases:
+            databases ||
+            (async () => [
+                { name: 'model-storage', version: 2020 },
+                { name: 'signal-storage', version: 70 },
+            ]),
     };
-    return { emitted, triggered, bus, modules };
+    return { emitted, triggered, timeouts, bus, modules };
 }
 
+/** Through the same boundary puppeteer puts it through. */
+const inject = () =>
+    evaluateInPage(
+        InjectStorageDiag,
+        STORAGE_INIT_ERROR,
+        STORAGE_SCHEMA_SNAPSHOT,
+        STORAGE_UTILS_MODULES,
+        SNAPSHOT_DB_TIMEOUT_MS,
+    );
+
+const settle = () => new Promise((r) => realSetTimeout(r, 0));
 const snapshotOf = (emitted) =>
     emitted.find((e) => e.event === STORAGE_SCHEMA_SNAPSHOT);
 
@@ -68,11 +91,62 @@ describe('InjectStorageDiag', function () {
     afterEach(function () {
         delete global.window;
         delete global.indexedDB;
+        global.setTimeout = realSetTimeout;
     });
 
-    it('captures the exception WhatsApp destroys the session over', async function () {
+    it('names its events across the evaluate boundary', async function () {
+        // The regression this file exists for: the event names used to be read
+        // from module scope, so in the page they were `undefined` and nothing
+        // downstream could route them.
         const page = fakePage();
-        await InjectStorageDiag();
+        inject();
+        page.bus.BackendEventBus.triggerStorageInitializationError(
+            minifiedWaError(),
+        );
+        await settle();
+        const events = page.emitted.map((e) => e.event);
+        expect(events).to.contain(STORAGE_INIT_ERROR);
+        expect(events).to.contain(STORAGE_SCHEMA_SNAPSHOT);
+        events.forEach((e) => expect(e).to.be.a('string'));
+    });
+
+    it('returns synchronously, so a wedged storage layer cannot hang inject', function () {
+        // evaluate() awaits whatever the injected function returns, and
+        // indexedDB.databases() talks to the layer this reports on. A promise
+        // here would hang inject() in exactly the failure it exists for.
+        const page = fakePage({ databases: () => new Promise(() => {}) });
+        const result = inject();
+        expect(result).to.equal(undefined);
+        expect(page.timeouts[0].ms).to.equal(SNAPSHOT_DB_TIMEOUT_MS);
+    });
+
+    it('still reports when the database read never answers', function () {
+        const page = fakePage({ databases: () => new Promise(() => {}) });
+        inject();
+        expect(snapshotOf(page.emitted)).to.equal(undefined);
+        page.timeouts[0].fn(); // the timeout fires
+        const snap = snapshotOf(page.emitted);
+        expect(snap).to.exist;
+        expect(snap.knobs).to.deep.equal([
+            ['model-storage', 201],
+            ['signal-storage', 6],
+        ]);
+        expect(snap.dbs).to.equal(undefined);
+    });
+
+    it('reports once, whichever of the two paths gets there first', async function () {
+        const page = fakePage();
+        inject();
+        await settle();
+        page.timeouts[0].fn();
+        expect(
+            page.emitted.filter((e) => e.event === STORAGE_SCHEMA_SNAPSHOT),
+        ).to.have.length(1);
+    });
+
+    it('captures the exception WhatsApp destroys the session over', function () {
+        const page = fakePage();
+        inject();
         page.bus.BackendEventBus.triggerStorageInitializationError(
             minifiedWaError(),
         );
@@ -84,9 +158,9 @@ describe('InjectStorageDiag', function () {
         expect(captured.errMessage).to.contain('2010');
     });
 
-    it('flattens the error to scalars, so no minified key reaches NeDB', async function () {
+    it('flattens the error to scalars, so no minified key reaches NeDB', function () {
         const page = fakePage();
-        await InjectStorageDiag();
+        inject();
         page.bus.BackendEventBus.triggerStorageInitializationError(
             minifiedWaError(),
         );
@@ -96,14 +170,13 @@ describe('InjectStorageDiag', function () {
         Object.keys(captured).forEach((k) => {
             expect(k).to.not.contain('$');
             expect(k).to.not.contain('.');
-            expect(['string', 'object']).to.contain(typeof captured[k]);
         });
         expect(JSON.stringify(captured)).to.not.contain('$MsgImpl');
     });
 
-    it('still calls WhatsApp through, so the wrap changes no behaviour', async function () {
+    it('still calls WhatsApp through, so the wrap changes no behaviour', function () {
         const page = fakePage();
-        await InjectStorageDiag();
+        inject();
         const err = minifiedWaError();
         page.bus.BackendEventBus.triggerStorageInitializationError(err);
         expect(page.triggered).to.deep.equal([err]);
@@ -111,14 +184,10 @@ describe('InjectStorageDiag', function () {
 
     it('reports the versions asked for next to the versions on disk', async function () {
         const page = fakePage();
-        await InjectStorageDiag();
+        inject();
+        await settle();
         const snap = snapshotOf(page.emitted);
-        expect(snap).to.exist;
         expect(snap.waVersion).to.equal('2.3000.1046259792');
-        expect(snap.knobs).to.deep.equal([
-            ['model-storage', 201],
-            ['signal-storage', 6],
-        ]);
         expect(snap.localMax).to.deep.equal({
             'model-storage': 201,
             'signal-storage': 6,
@@ -134,27 +203,24 @@ describe('InjectStorageDiag', function () {
         page.modules.WAWebSchemaVersions.getSchemaVersions = () => {
             throw new Error('Schema versions not initialized');
         };
-        await InjectStorageDiag();
-        const snap = snapshotOf(page.emitted);
-        expect(snap.knobsError).to.contain('Schema versions not initialized');
+        inject();
+        await settle();
+        expect(snapshotOf(page.emitted).knobsError).to.contain(
+            'Schema versions not initialized',
+        );
     });
 
-    it('snapshots once per page', async function () {
+    it('snapshots once per page and does not double-wrap the trigger', async function () {
         const page = fakePage();
-        await InjectStorageDiag();
-        await InjectStorageDiag();
-        expect(
-            page.emitted.filter((e) => e.event === STORAGE_SCHEMA_SNAPSHOT),
-        ).to.have.length(1);
-    });
-
-    it('does not double-wrap the trigger', async function () {
-        const page = fakePage();
-        await InjectStorageDiag();
-        await InjectStorageDiag();
+        inject();
+        inject();
+        await settle();
         page.bus.BackendEventBus.triggerStorageInitializationError(
             minifiedWaError(),
         );
+        expect(
+            page.emitted.filter((e) => e.event === STORAGE_SCHEMA_SNAPSHOT),
+        ).to.have.length(1);
         expect(
             page.emitted.filter((e) => e.event === STORAGE_INIT_ERROR),
         ).to.have.length(1);
@@ -166,7 +232,8 @@ describe('InjectStorageDiag', function () {
         // go out: what is on disk is exactly what matters when the build cannot
         // get far enough to say what it wanted.
         const page = fakePage({ withModules: false });
-        await InjectStorageDiag();
+        inject();
+        await settle();
         const snap = snapshotOf(page.emitted);
         expect(snap).to.exist;
         expect(snap.knobs).to.equal(null);

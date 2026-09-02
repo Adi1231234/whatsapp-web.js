@@ -22,12 +22,39 @@
  * really do carry property names like `$1` and `getMessageModel(msg).id.$1`,
  * which NeDB rejects outright, so the error is flattened to three strings here
  * rather than passed through as an object.
+ *
+ * Every value the injected function needs is a PARAMETER. `pupPage.evaluate`
+ * serialises the function alone, so a closure over a module constant arrives in
+ * the page as `undefined` - and an event name that is `undefined` is an event
+ * nobody can route.
  */
 
 const STORAGE_INIT_ERROR = 'STORAGE_INIT_ERROR';
 const STORAGE_SCHEMA_SNAPSHOT = 'STORAGE_SCHEMA_SNAPSHOT';
 
-const InjectStorageDiag = async () => {
+/** How long the snapshot waits for `indexedDB.databases()` before reporting. */
+const SNAPSHOT_DB_TIMEOUT_MS = 10000;
+
+/** The storage modules that expose a schema ceiling worth reading. */
+const STORAGE_UTILS_MODULES = [
+    'WAWebModelStorageUtils',
+    'WAWebSignalStorageUtils',
+];
+
+/**
+ * NOT async, and it never awaits. `pupPage.evaluate` awaits whatever the
+ * injected function returns, and `indexedDB.databases()` talks to the very
+ * storage layer this exists to report on - so awaiting it would hang inject()
+ * exactly when storage is wedged, which is the one case that matters. The hook
+ * is installed synchronously; the snapshot is best-effort and reports whenever
+ * it can, or on the timeout, whichever comes first.
+ */
+const InjectStorageDiag = (
+    initErrorEvent,
+    snapshotEvent,
+    utilsModules,
+    dbTimeoutMs,
+) => {
     const emit = (payload) => {
         try {
             window.onSocketDiagEvent(payload);
@@ -47,7 +74,7 @@ const InjectStorageDiag = async () => {
                 b.triggerStorageInitializationError = function (err) {
                     try {
                         emit({
-                            event: STORAGE_INIT_ERROR,
+                            event: initErrorEvent,
                             errName: err && err.name ? String(err.name) : null,
                             errMessage:
                                 err && err.message
@@ -73,7 +100,7 @@ const InjectStorageDiag = async () => {
     if (window.__p2dStorageSnapDone) return;
     window.__p2dStorageSnapDone = true;
 
-    const snapshot = { event: STORAGE_SCHEMA_SNAPSHOT };
+    const snapshot = { event: snapshotEvent };
 
     try {
         const dbg = window.Debug;
@@ -97,7 +124,7 @@ const InjectStorageDiag = async () => {
     // in a healthy state; a build whose ceiling is lower than the version on
     // disk is the condition that purges.
     snapshot.localMax = {};
-    ['WAWebModelStorageUtils', 'WAWebSignalStorageUtils'].forEach((name) => {
+    utilsModules.forEach((name) => {
         try {
             const utils = window.require(name);
             if (!utils) return;
@@ -108,18 +135,32 @@ const InjectStorageDiag = async () => {
         }
     });
 
+    // Reported from the callback rather than awaited, so a storage layer that
+    // never answers costs this one field and nothing else.
+    let sent = false;
+    const send = () => {
+        if (sent) return;
+        sent = true;
+        emit(snapshot);
+    };
     try {
-        const dbs = await indexedDB.databases();
-        snapshot.dbs = dbs.map((d) => ({ name: d.name, version: d.version }));
+        indexedDB.databases().then(function (dbs) {
+            snapshot.dbs = dbs.map((d) => ({
+                name: d.name,
+                version: d.version,
+            }));
+            send();
+        }, send);
     } catch (e) {
-        // best-effort diagnostic: never let it break the caller
+        send();
     }
-
-    emit(snapshot);
+    setTimeout(send, dbTimeoutMs);
 };
 
 module.exports = {
     InjectStorageDiag,
     STORAGE_INIT_ERROR,
     STORAGE_SCHEMA_SNAPSHOT,
+    SNAPSHOT_DB_TIMEOUT_MS,
+    STORAGE_UTILS_MODULES,
 };
