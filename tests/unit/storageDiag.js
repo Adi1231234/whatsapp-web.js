@@ -192,6 +192,51 @@ describe('InjectStorageDiag', function () {
         expect(snap.dbs).to.equal(undefined);
     });
 
+    // The two halves fail in OPPOSITE situations, so a rejection in one must
+    // not foreclose the other: sending on it also sets `sent`, and the half
+    // that would have arrived seconds later is then unreportable forever.
+    it('still reports the schema when the disk read is refused', async function () {
+        const page = fakePage({
+            databases: () => Promise.reject(new Error('storage wedged')),
+        });
+        inject();
+        await settle();
+        // Refused is not a reason to report before the schema lands.
+        expect(snapshotOf(page.emitted)).to.equal(undefined);
+        page.late.arrive();
+        await settle();
+        const snap = snapshotOf(page.emitted);
+        expect(snap).to.exist;
+        expect(snap.dbsError).to.contain('storage wedged');
+        expect(snap.knobs).to.deep.equal([
+            ['model-storage', 201],
+            ['signal-storage', 6],
+        ]);
+    });
+
+    it('still reports the disk when the schema never lands', async function () {
+        // The on-disk versions are the only evidence a purge ever happened,
+        // and the purge is what erases them.
+        const schema = lateSchema();
+        let reject;
+        schema.module.waitUntilSchemaVersionsReady = () =>
+            new Promise((_, r) => {
+                reject = r;
+            });
+        const page = fakePage({ schema });
+        inject();
+        await settle();
+        reject(new Error('rollout never arrived'));
+        await settle();
+        const snap = snapshotOf(page.emitted);
+        expect(snap).to.exist;
+        expect(snap.schemaWaitError).to.contain('rollout never arrived');
+        expect(snap.dbs).to.deep.equal([
+            { name: 'model-storage', version: 2020 },
+            { name: 'signal-storage', version: 70 },
+        ]);
+    });
+
     it('reports once, whichever of the two paths gets there first', async function () {
         const page = fakePage();
         inject();

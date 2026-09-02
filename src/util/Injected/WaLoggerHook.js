@@ -44,6 +44,28 @@ const WAL_BATCH_SIZE = 200;
 const WAL_FLUSH_MS = 2000;
 
 /**
+ * How many lines to hold when the host binding is not there to take them.
+ *
+ * `exposeFunction` resolving is NOT proof that the binding reached the main
+ * world: the OOPIF bug this repo already carries a puppeteer patch for makes it
+ * resolve while `window.<name>` stays undefined, measured at a 31% failure rate
+ * on the attach path. Emptying the buffer before the call therefore destroyed
+ * every line in exactly that case - proven on the live page, 0 of 5 lines
+ * survived a binding that was missing for one flush and then restored.
+ *
+ * So a failed flush keeps its lines and the next one retries. The cap is what
+ * stops a binding that never arrives from growing the page's heap without
+ * bound: about 5 megabytes at the 500-character ceiling per line, and ~17
+ * minutes of a busy shop's volume, which is far longer than the re-inject that
+ * would deliver the binding.
+ *
+ * When it does overflow the NEWEST lines are dropped, not the oldest. This
+ * buffer only ever fills from the page's first moments, and the failure it
+ * exists to explain destroys the session during exactly those moments.
+ */
+const WAL_MAX_BUFFERED = 5000;
+
+/**
  * The GCP side is capped PER TEMPLATE, not by vocabulary.
  *
  * Choosing by level alone is what makes an unseen failure visible on its first
@@ -71,6 +93,7 @@ const InjectWaLoggerHook = (
     flushMs,
     perTemplate,
     windowMs,
+    maxBuffered,
 ) => {
     const WAL = window.require('WALogger');
     if (!WAL) return;
@@ -138,14 +161,28 @@ const InjectWaLoggerHook = (
     };
 
     var buffer = [];
+    var droppedWhileUnbound = 0;
+    // Keep the lines when the host cannot take them. Emptying first is what
+    // made a missing binding a silent, permanent loss.
     const flush = () => {
         if (buffer.length === 0) return;
+        if (typeof window.onWaLogBatch !== 'function') return;
         const batch = buffer;
         buffer = [];
+        if (droppedWhileUnbound) {
+            // Ride the gap out on the first line that gets through, so the
+            // file says the history is incomplete instead of just being short.
+            batch[0] = Object.assign({}, batch[0], {
+                droppedWhileUnbound: droppedWhileUnbound,
+            });
+            droppedWhileUnbound = 0;
+        }
         try {
             window.onWaLogBatch(batch);
         } catch (e) {
-            // best-effort diagnostic: never let it break the caller
+            // The binding exists but did not dispatch, so nothing was
+            // delivered. Put them back in front of whatever arrived since.
+            buffer = batch.concat(buffer);
         }
     };
     setInterval(flush, flushMs);
@@ -163,20 +200,29 @@ const InjectWaLoggerHook = (
                 const args = renderArgs(arguments);
                 const state = socketState();
 
-                buffer.push({
-                    level: lvl,
-                    msg: msg.slice(0, 500),
-                    args: args,
-                    state: state,
-                    ts: Date.now(),
-                });
+                if (buffer.length >= maxBuffered) {
+                    // Only reachable while the host binding is missing, since
+                    // a working flush drains at batchSize. Keep the oldest.
+                    droppedWhileUnbound++;
+                } else {
+                    buffer.push({
+                        level: lvl,
+                        msg: msg.slice(0, 500),
+                        args: args,
+                        state: state,
+                        ts: Date.now(),
+                    });
+                }
                 if (buffer.length >= batchSize) flush();
 
                 if (signalLevels.indexOf(lvl) !== -1 || isTerminal) {
                     // A terminal line is never suppressed: it is rare by
                     // definition and it is the one we came for.
                     const dropped = isTerminal ? 0 : throttle(msg);
-                    if (dropped !== null) {
+                    if (
+                        dropped !== null &&
+                        typeof window.onSocketDiagEvent === 'function'
+                    ) {
                         window.onSocketDiagEvent({
                             event: 'WA_INTERNAL_' + lvl,
                             terminal: isTerminal,
@@ -206,5 +252,6 @@ module.exports = {
     WAL_SIGNAL_LEVELS,
     WAL_BATCH_SIZE,
     WAL_FLUSH_MS,
+    WAL_MAX_BUFFERED,
     isWaLoggerSignal,
 };

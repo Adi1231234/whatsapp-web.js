@@ -11,12 +11,21 @@
  * object that says WHY a session was destroyed is lost the moment it is thrown.
  * This captures it.
  *
+ * That capture is the load-bearing part, and not for want of a log line.
+ * WhatsApp DOES log the failure, and deliberately without its cause: the catch
+ * in `WAWebModelStorageInitialize` collapses the exception to one of three
+ * fixed strings, and since a Dexie `VersionError` is a `DexieError` the line it
+ * writes is exactly `Failed to initialize model storage: Unknown DexieError`.
+ * The version numbers survive only on the object it rethrows, which is the
+ * object this wrapper reads.
+ *
  * Alongside it, a one-shot snapshot of the schema state: the versions the
- * running build asks for, and the database versions actually on disk. WhatsApp
- * purges any database whose stored version its schema table does not cover
- * (`doesLocalSchemaIncludeVersion` is `existing <= versions.getMax()`), and the
- * two are normally equal - there is no margin - so the snapshot is what turns a
- * purge from an unexplained event into a diff.
+ * running build asks for, and the database versions actually on disk. Nothing
+ * purges on a mismatch - `Storage.initialize()` replays `0..getMax()` and calls
+ * Dexie's `indexedDB.open(name, verno * 10)`, and IndexedDB refuses to open a
+ * database at a version below the one on disk. The two are normally equal, so
+ * there is no margin, and the snapshot is what turns that refusal from an
+ * unexplained event into a diff.
  *
  * Only scalars are emitted. WhatsApp Web is minified and its error objects
  * really do carry property names like `$1` and `getMessageModel(msg).id.$1`,
@@ -174,6 +183,17 @@ const InjectStorageDiag = (
         if (dbsReady && schemaReady) send();
     };
 
+    // A half that FAILS is finished, not a reason to report early. Sending on
+    // the rejection would also set `sent`, so the other half could never join -
+    // and the two halves fail in opposite situations. A wedged storage layer is
+    // exactly when `databases()` rejects, and the schema ceiling is then the
+    // only thing left worth having; a rollout that never lands is exactly when
+    // the on-disk versions are the only evidence, and the purge erases them.
+    const half = (mark) => (e) => {
+        snapshot[mark] = String((e && e.message) || e).slice(0, 200);
+        return e;
+    };
+
     try {
         indexedDB.databases().then(function (dbs) {
             snapshot.dbs = dbs.map((d) => ({
@@ -182,9 +202,14 @@ const InjectStorageDiag = (
             }));
             dbsReady = true;
             sendWhenBothReady();
-        }, send);
+        }, function (e) {
+            half('dbsError')(e);
+            dbsReady = true;
+            sendWhenBothReady();
+        });
     } catch (e) {
-        send();
+        half('dbsError')(e);
+        dbsReady = true;
     }
 
     // WhatsApp's own primitive for "the schema table is populated", so this
@@ -195,7 +220,11 @@ const InjectStorageDiag = (
             sv.waitUntilSchemaVersionsReady().then(function () {
                 schemaReady = true;
                 sendWhenBothReady();
-            }, send);
+            }, function (e) {
+                half('schemaWaitError')(e);
+                schemaReady = true;
+                sendWhenBothReady();
+            });
         } else {
             schemaReady = true;
         }

@@ -6,6 +6,7 @@ const {
     WAL_SIGNAL_LEVELS,
     WAL_SIGNAL_PER_TEMPLATE,
     WAL_SIGNAL_WINDOW_MS,
+    WAL_MAX_BUFFERED,
     isWaLoggerSignal,
 } = require('../../src/util/Injected/WaLoggerHook');
 const { evaluateInPage } = require('./evaluateBoundary');
@@ -122,7 +123,7 @@ describe('WaLoggerHook', function () {
         // Through the same boundary puppeteer puts it through: the body is
         // re-parsed in global scope, so any module constant read from inside
         // would arrive as undefined.
-        const install = (batchSize) =>
+        const install = (batchSize, maxBuffered) =>
             evaluateInPage(
                 InjectWaLoggerHook,
                 WAL_TERMINAL.source,
@@ -132,6 +133,7 @@ describe('WaLoggerHook', function () {
                 60000,
                 WAL_SIGNAL_PER_TEMPLATE,
                 WAL_SIGNAL_WINDOW_MS,
+                maxBuffered === undefined ? WAL_MAX_BUFFERED : maxBuffered,
             );
 
         const emitAll = (page) =>
@@ -337,6 +339,79 @@ describe('WaLoggerHook', function () {
                 );
             }).to.not.throw();
             expect(page.calls).to.have.length(1);
+        });
+
+        // The failure this whole file exists for arrives in the page's first
+        // seconds, and `exposeFunction` resolving is not proof the binding
+        // reached the main world - the OOPIF bug this repo patches puppeteer
+        // for makes it resolve while `window.<name>` stays undefined. Measured
+        // on the live page before this was fixed: 0 of 5 lines survived.
+        describe('when the host binding is not there', function () {
+            it('keeps the lines instead of destroying them', function () {
+                const page = fakePage();
+                install(1);
+                delete global.window.onWaLogBatch;
+                page.WALogger.ERROR(tagged('[storage] purge, logging out'));
+                page.WALogger.ERROR(tagged('Failed to initialize model storage'));
+                expect(allBatched(page)).to.have.length(0);
+
+                global.window.onWaLogBatch = (lines) => page.batches.push(lines);
+                page.timers[0]();
+                expect(allBatched(page).map((l) => l.msg)).to.deep.equal([
+                    '[storage] purge, logging out',
+                    'Failed to initialize model storage',
+                ]);
+            });
+
+            it('puts a batch back when the binding throws mid-dispatch', function () {
+                const page = fakePage();
+                install(1);
+                global.window.onWaLogBatch = () => {
+                    throw new Error('did not dispatch');
+                };
+                page.WALogger.ERROR(tagged('first'));
+                global.window.onWaLogBatch = (lines) => page.batches.push(lines);
+                page.WALogger.ERROR(tagged('second'));
+                // Order survives: the retained batch goes in front.
+                expect(allBatched(page).map((l) => l.msg)).to.deep.equal([
+                    'first',
+                    'second',
+                ]);
+            });
+
+            it('caps the backlog and says how much it dropped', function () {
+                const page = fakePage();
+                install(1, 3);
+                delete global.window.onWaLogBatch;
+                for (let i = 0; i < 6; i++) page.WALogger.LOG(tagged('l' + i));
+
+                global.window.onWaLogBatch = (lines) => page.batches.push(lines);
+                page.timers[0]();
+                const got = allBatched(page);
+                // The OLDEST are kept: a storage failure happens at boot, so
+                // the head of this buffer is the part that explains it.
+                expect(got.map((l) => l.msg)).to.deep.equal(['l0', 'l1', 'l2']);
+                expect(got[0].droppedWhileUnbound).to.equal(3);
+            });
+
+            it('does not report a gap that did not happen', function () {
+                const page = fakePage();
+                install(1);
+                page.WALogger.LOG(tagged('fine'));
+                expect(allBatched(page)[0]).to.not.have.property(
+                    'droppedWhileUnbound',
+                );
+            });
+
+            it('still writes the local line when only the diag binding is gone', function () {
+                const page = fakePage();
+                install(1);
+                delete global.window.onSocketDiagEvent;
+                expect(function () {
+                    page.WALogger.ERROR(tagged('[storage] schema mismatch'));
+                }).to.not.throw();
+                expect(allBatched(page)).to.have.length(1);
+            });
         });
     });
 });
