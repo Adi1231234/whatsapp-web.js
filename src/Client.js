@@ -24,11 +24,22 @@ const {
     InjectWaLoggerHook,
     WAL_KEYWORDS,
     WAL_LOG_PREFIXES,
+    WAL_TERMINAL,
 } = require('./util/Injected/WaLoggerHook');
 const {
     InjectStorageDiag,
     STORAGE_INIT_ERROR,
+    STORAGE_SCHEMA_SNAPSHOT,
 } = require('./util/Injected/StorageDiag');
+
+// The storage events that get their own `diag` channel entry, and at what
+// level. SOCKET_DIAG is a console line nothing can subscribe to, and this
+// failure mode rejects initialize(), so the general diag bridge - exposed in
+// attachEventListeners - never registers.
+const STORAGE_DIAG_LEVELS = {
+    [STORAGE_INIT_ERROR]: 'error',
+    [STORAGE_SCHEMA_SNAPSHOT]: 'info',
+};
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -392,6 +403,7 @@ class Client extends EventEmitter {
                 InjectWaLoggerHook,
                 WAL_KEYWORDS.source,
                 WAL_LOG_PREFIXES,
+                WAL_TERMINAL.source,
             );
             await this.pupPage.evaluate(InjectStorageDiag);
 
@@ -1239,13 +1251,9 @@ class Client extends EventEmitter {
      */
     _onSocketDiagEvent(info) {
         console.log('[wwjs-diag] SOCKET_DIAG', info);
-        if (info && info.event === STORAGE_INIT_ERROR) {
-            this.emit(
-                'diag',
-                'error',
-                STORAGE_INIT_ERROR,
-                JSON.stringify(info),
-            );
+        const level = STORAGE_DIAG_LEVELS[info && info.event];
+        if (level) {
+            this.emit('diag', level, info.event, JSON.stringify(info));
         }
     }
 

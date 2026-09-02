@@ -3,6 +3,7 @@ const {
     InjectWaLoggerHook,
     WAL_KEYWORDS,
     WAL_LOG_PREFIXES,
+    WAL_TERMINAL,
     shouldForwardWaLoggerLine,
 } = require('../../src/util/Injected/WaLoggerHook');
 
@@ -16,8 +17,18 @@ const STORAGE_PATH = [
     ['LOG', '[storage] start load schema versions'],
     ['LOG', '[storage] set schema versions: {}. is worker? {}'],
     ['LOG', '[reload] reloadAfterLogout errorDuringStorageClear={}'],
-    // Not storage, but the same problem: LOG level, terminal, previously lost.
+];
+
+// DiagHooks' terminal set. This hook installs first and its __p2dWrapped guard
+// makes DiagHooks' copy a no-op, so anything the old post-sync hook carried and
+// this one does not is coverage silently LOST. These lock that in.
+const TERMINAL_PATH = [
     ['LOG', 'stream error due to device removed, logging out'],
+    ['ERROR', 'clearCredentials: dirty bit is still set'],
+    ['LOG', 'user was logged out'],
+    ['ERROR', 'primary identity changed'],
+    ['WARN', 'received failure stanza'],
+    ['ERROR', 'clearCredentials: native logout failed'],
 ];
 
 // Lines the pre-existing keyword set already carried; they must keep working.
@@ -74,6 +85,15 @@ describe('WaLoggerHook', function () {
             });
         });
 
+        it('carries every terminal line the post-sync hook used to', function () {
+            TERMINAL_PATH.forEach(([lvl, msg]) => {
+                expect(
+                    shouldForwardWaLoggerLine(lvl, msg),
+                    `${lvl}: ${msg}`,
+                ).to.equal(true);
+            });
+        });
+
         it('drops an unrelated LOG line, because LOG is high volume', function () {
             expect(
                 shouldForwardWaLoggerLine('LOG', '[app] window focused'),
@@ -99,7 +119,11 @@ describe('WaLoggerHook', function () {
 
     describe('InjectWaLoggerHook', function () {
         const install = () =>
-            InjectWaLoggerHook(WAL_KEYWORDS.source, WAL_LOG_PREFIXES);
+            InjectWaLoggerHook(
+                WAL_KEYWORDS.source,
+                WAL_LOG_PREFIXES,
+                WAL_TERMINAL.source,
+            );
 
         it('forwards a matching line with its substitutions', function () {
             const page = fakePage();

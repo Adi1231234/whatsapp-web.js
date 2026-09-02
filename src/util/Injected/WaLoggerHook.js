@@ -23,6 +23,13 @@
 const WAL_KEYWORDS =
     /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked|storage initialization|schema version|model storage|signal storage|worker storage|status storage|fts storage|jobs storage|offd storage|dexie|indexeddb|clearcredentials|clearalllocalstate/i;
 
+// Terminal at ANY level. This is DiagHooks' set, moved here because this hook
+// now installs first and its __p2dWrapped guard makes DiagHooks' copy a no-op -
+// leaving it there would have silently dropped the coverage it already gives us,
+// including the one line that names the storage decision.
+const WAL_TERMINAL =
+    /logging out|logged out|device removed|fatal error|failure stanza|dirty bit|identity changed|native logout failed|forced logout/i;
+
 // LOG is high-volume, so it is matched against exact prefixes rather than
 // keywords. Each of these fires at most a handful of times per page load, and
 // each one is either a terminal decision or the schema table that explains it.
@@ -31,22 +38,21 @@ const WAL_LOG_PREFIXES = [
     '[storage] start load schema versions',
     '[storage] set schema versions: ',
     '[reload] reloadAfterLogout errorDuringStorageClear=',
-    // The one line in which WhatsApp names an account-side unpair. It is LOG,
-    // so nothing carried it before; it fires twice a month across a fleet.
-    'stream error due to device removed, logging out',
 ];
 
 /** True when a WALogger line at `level` should be forwarded. Pure, so testable. */
 const shouldForwardWaLoggerLine = (level, message) =>
-    level === 'LOG'
+    WAL_TERMINAL.test(message) ||
+    (level === 'LOG'
         ? WAL_LOG_PREFIXES.some((prefix) => message.startsWith(prefix))
-        : WAL_KEYWORDS.test(message);
+        : WAL_KEYWORDS.test(message));
 
-const InjectWaLoggerHook = (keywordSource, logPrefixes) => {
+const InjectWaLoggerHook = (keywordSource, logPrefixes, terminalSource) => {
     const WAL = window.require('WALogger');
     if (!WAL) return;
 
     const keywords = new RegExp(keywordSource, 'i');
+    const terminal = new RegExp(terminalSource, 'i');
     const socketState = () => {
         const model = window.require('WAWebSocketModel');
         return model ? String(model.Socket.state) : undefined;
@@ -75,13 +81,16 @@ const InjectWaLoggerHook = (keywordSource, logPrefixes) => {
         const wrapped = function () {
             try {
                 const msg = render(arguments);
+                const isTerminal = terminal.test(msg);
                 const hit =
-                    lvl === 'LOG'
+                    isTerminal ||
+                    (lvl === 'LOG'
                         ? logPrefixes.some((p) => msg.startsWith(p))
-                        : keywords.test(msg);
+                        : keywords.test(msg));
                 if (hit) {
                     window.onSocketDiagEvent({
                         event: 'WA_INTERNAL_' + lvl,
+                        terminal: isTerminal,
                         msg: msg.slice(0, 300),
                         args: renderArgs(arguments),
                         state: socketState(),
@@ -100,6 +109,7 @@ const InjectWaLoggerHook = (keywordSource, logPrefixes) => {
 module.exports = {
     InjectWaLoggerHook,
     WAL_KEYWORDS,
+    WAL_TERMINAL,
     WAL_LOG_PREFIXES,
     shouldForwardWaLoggerLine,
 };
