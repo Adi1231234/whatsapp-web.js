@@ -651,8 +651,18 @@ declare namespace WAWebJS {
          *
          * Fires on every connect, with a backlog or without one, and only once
          * WhatsApp has drained its own offline queue into the local store.
+         *
+         * `messageCount` is how many messages the server announced for this
+         * delivery, so 0 means nothing is in flight and a consumer waiting for
+         * the burst has nothing to wait for. WhatsApp's counter starts at -1
+         * and is clamped to 0, so a count of 0 means EITHER the server said
+         * zero or it never announced anything - `previewReceived` is what tells
+         * those apart.
          */
-        on(event: 'offline_delivery_end', listener: () => void): this;
+        on(
+            event: 'offline_delivery_end',
+            listener: (info: OfflineDeliveryInfo) => void,
+        ): this;
 
         /** Emitted when loading screen is appearing */
         on(
@@ -1047,6 +1057,14 @@ declare namespace WAWebJS {
     }
 
     /** Events that can be emitted by the client */
+    /** What one offline delivery carried, reported as it ends. */
+    export interface OfflineDeliveryInfo {
+        /** Messages the server announced for this delivery. 0 = nothing in flight. */
+        messageCount: number;
+        /** Whether the server announced anything at all for this delivery. */
+        previewReceived: boolean;
+    }
+
     export enum Events {
         AUTHENTICATED = 'authenticated',
         AUTHENTICATION_FAILURE = 'auth_failure',

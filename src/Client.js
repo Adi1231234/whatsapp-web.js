@@ -1757,13 +1757,23 @@ class Client extends EventEmitter {
         await exposeFunctionIfAbsent(
             this.pupPage,
             'onOfflineDeliveryEndEvent',
-            () => {
+            (info) => {
                 /**
                  * Emitted when WhatsApp has finished delivering the messages it
                  * held while this client was disconnected.
                  * @event Client#offline_delivery_end
+                 * @param {Object} info
+                 * @param {number} info.messageCount How many messages the
+                 * server announced for this delivery. 0 means there is nothing
+                 * in flight, so a consumer has nothing to wait for.
+                 * @param {boolean} info.previewReceived Whether the server sent
+                 * an offline preview at all. Without it `messageCount` is 0
+                 * because nothing was ever announced, not because zero was.
                  */
-                this.emit(Events.OFFLINE_DELIVERY_END);
+                this.emit(
+                    Events.OFFLINE_DELIVERY_END,
+                    info ?? { messageCount: 0, previewReceived: false },
+                );
             },
         );
 
@@ -2944,11 +2954,40 @@ class Client extends EventEmitter {
                     'WAWebBackendEventBus',
                 )?.BackendEventBus;
                 if (bus) {
+                    // How much this delivery carried, read at the moment it
+                    // ends. The counter starts at -1 and `getOfflineMessageCount`
+                    // clamps that to 0, so a count of zero means EITHER the
+                    // server said zero or it never spoke at all -
+                    // `previewReceived` is the only thing that tells those
+                    // apart, and a consumer that treats them differently needs
+                    // both. Read here rather than exposed as a method, because
+                    // the answer is only meaningful at this instant: the count
+                    // is reset by the next delivery.
+                    const deliveryInfo = () => {
+                        try {
+                            const h = window.require('WAWebOfflineHandler')
+                                ?.OfflineMessageHandler;
+                            if (!h) return { messageCount: 0, previewReceived: false };
+                            return {
+                                messageCount:
+                                    typeof h.getOfflineMessageCount === 'function'
+                                        ? h.getOfflineMessageCount()
+                                        : 0,
+                                previewReceived:
+                                    typeof h.hasReceivedOfflinePreviewIb ===
+                                    'function'
+                                        ? !!h.hasReceivedOfflinePreviewIb()
+                                        : false,
+                            };
+                        } catch (e) {
+                            return { messageCount: 0, previewReceived: false };
+                        }
+                    };
                     bus.onOfflineDeliveryEnd(() => {
-                        window.onOfflineDeliveryEndEvent?.();
+                        window.onOfflineDeliveryEndEvent?.(deliveryInfo());
                     });
                     if (bus.isOfflineDeliveryEnd) {
-                        window.onOfflineDeliveryEndEvent?.();
+                        window.onOfflineDeliveryEndEvent?.(deliveryInfo());
                     }
                 }
             } catch (e) {
