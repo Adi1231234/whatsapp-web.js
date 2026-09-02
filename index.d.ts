@@ -557,6 +557,22 @@ declare namespace WAWebJS {
             ) => void,
         ): this;
 
+        /**
+         * Emitted for a media message that appeared in the store without
+         * WhatsApp announcing it as new.
+         *
+         * These carry `isNewMsg: false`, so the ordinary `message` event never
+         * fires for them. Only media-bearing ones are emitted: the rest is
+         * history the store loads by the hundred on every connect.
+         */
+        on(
+            event: 'message_backfilled',
+            listener: (
+                /** The message that was already in the store */
+                message: Message,
+            ) => void,
+        ): this;
+
         /** Emitted when a new message ciphertext is received  */
         on(
             event: 'message_ciphertext',
@@ -628,6 +644,15 @@ declare namespace WAWebJS {
                 prevState: boolean,
             ) => void,
         ): this;
+
+        /**
+         * Emitted when WhatsApp has finished delivering the messages it held
+         * while this client was disconnected.
+         *
+         * Fires on every connect, with a backlog or without one, and only once
+         * WhatsApp has drained its own offline queue into the local store.
+         */
+        on(event: 'offline_delivery_end', listener: () => void): this;
 
         /** Emitted when loading screen is appearing */
         on(
@@ -1029,6 +1054,7 @@ declare namespace WAWebJS {
         CHAT_REMOVED = 'chat_removed',
         CHAT_ARCHIVED = 'chat_archived',
         MESSAGE_RECEIVED = 'message',
+        MESSAGE_BACKFILLED = 'message_backfilled',
         MESSAGE_CIPHERTEXT = 'message_ciphertext',
         MESSAGE_CIPHERTEXT_FAILED = 'message_ciphertext_failed',
         MESSAGE_CREATE = 'message_create',
@@ -1048,6 +1074,7 @@ declare namespace WAWebJS {
         QR_RECEIVED = 'qr',
         CODE_RECEIVED = 'code',
         LOADING_SCREEN = 'loading_screen',
+        OFFLINE_DELIVERY_END = 'offline_delivery_end',
         CALL = 'call',
         DISCONNECTED = 'disconnected',
         STATE_CHANGED = 'change_state',

@@ -50,6 +50,8 @@ exports.Events = {
     CHAT_REMOVED: 'chat_removed',
     CHAT_ARCHIVED: 'chat_archived',
     MESSAGE_RECEIVED: 'message',
+    /** A message already in the store that never arrived as a new one. */
+    MESSAGE_BACKFILLED: 'message_backfilled',
     MESSAGE_CIPHERTEXT: 'message_ciphertext',
     MESSAGE_CIPHERTEXT_FAILED: 'message_ciphertext_failed',
     MESSAGE_CREATE: 'message_create',
@@ -69,6 +71,8 @@ exports.Events = {
     QR_RECEIVED: 'qr',
     CODE_RECEIVED: 'code',
     LOADING_SCREEN: 'loading_screen',
+    /** WhatsApp finished handing over what it held while we were away. */
+    OFFLINE_DELIVERY_END: 'offline_delivery_end',
     DISCONNECTED: 'disconnected',
     STATE_CHANGED: 'change_state',
     BATTERY_CHANGED: 'change_battery',

@@ -1746,6 +1746,48 @@ class Client extends EventEmitter {
             },
         );
 
+        // WhatsApp's own end-of-backlog signal, forwarded to Node.
+        //
+        // `BackendEventBus.OFFLINE_DELIVERY_END` fires on every connect, with a
+        // backlog or without one, and only after WhatsApp has awaited its own
+        // offline message queue and loaded the main screen - so the local store
+        // is filled by the time it arrives. A consumer that wants to know when
+        // the messages it missed have all landed has no other honest answer:
+        // the alternative is a timer guessing at it.
+        await exposeFunctionIfAbsent(
+            this.pupPage,
+            'onOfflineDeliveryEndEvent',
+            () => {
+                /**
+                 * Emitted when WhatsApp has finished delivering the messages it
+                 * held while this client was disconnected.
+                 * @event Client#offline_delivery_end
+                 */
+                this.emit(Events.OFFLINE_DELIVERY_END);
+            },
+        );
+
+        // A message that reached the store without ever being a new one.
+        //
+        // `Msg.on('add')` fires for these too, and the handler below drops them
+        // because `isNewMsg` is false - which is right for a normal arrival,
+        // and wrong for a caller whose job is not to miss anything. Only ones
+        // carrying media are forwarded: the rest are history the store loads by
+        // the hundred on every connect, and a consumer would discard them all.
+        await exposeFunctionIfAbsent(
+            this.pupPage,
+            'onBackfilledMessageEvent',
+            (msg) => {
+                /**
+                 * Emitted for a media message that appeared in the store
+                 * without WhatsApp announcing it as new.
+                 * @event Client#message_backfilled
+                 * @param {Message} message
+                 */
+                this.emit(Events.MESSAGE_BACKFILLED, new Message(this, msg));
+            },
+        );
+
         await exposeFunctionIfAbsent(
             this.pupPage,
             'onAddMessageEvent',
@@ -2883,6 +2925,26 @@ class Client extends EventEmitter {
                 }
             }
 
+            // WhatsApp's own end-of-backlog event. Read the latch first: the
+            // delivery can finish before this runs, and a subscription made
+            // after the fact never fires.
+            try {
+                const bus = window.require(
+                    'WAWebBackendEventBus',
+                )?.BackendEventBus;
+                if (bus) {
+                    if (bus.isOfflineDeliveryEnd) {
+                        window.onOfflineDeliveryEndEvent?.();
+                    } else {
+                        bus.onceOfflineDeliveryEnd(() => {
+                            window.onOfflineDeliveryEndEvent?.();
+                        });
+                    }
+                }
+            } catch (e) {
+                // A rename upstream must not take the message bridge with it.
+            }
+
             Msg.on('add', (msg) => {
                 if (msg.isNewMsg) {
                     const _id = msg.id?._serialized;
@@ -3011,6 +3073,19 @@ class Client extends EventEmitter {
                             window.WWebJS.getMessageModel(_msg),
                         );
                     });
+                } else if (msg.type !== 'ciphertext') {
+                    // Not announced as new, but it carries media - a picture
+                    // nobody was told about. Only media: the rest is history
+                    // the store loads by the hundred on every connect.
+                    if (!msg.directPath && !msg.mediaKey) return;
+                    try {
+                        window.onBackfilledMessageEvent?.(
+                            window.WWebJS.getMessageModel(msg),
+                        );
+                    } catch (e) {
+                        // A listener that throws aborts the rest of WhatsApp's
+                        // own add dispatch, so this one cannot.
+                    }
                 }
             });
 
