@@ -109,58 +109,101 @@ const InjectStorageDiag = (
 
     const snapshot = { event: snapshotEvent };
 
-    try {
-        const dbg = window.Debug;
-        snapshot.waVersion = dbg && dbg.VERSION ? String(dbg.VERSION) : null;
-    } catch (e) {
-        // best-effort diagnostic: never let it break the caller
-    }
-
-    // Server-driven, one entry per database. getSchemaVersions() throws when
-    // the rollout has not populated them, and that throw is itself the answer.
-    try {
-        const sv = window.require('WAWebSchemaVersions');
-        snapshot.knobs = sv
-            ? Array.from(sv.getSchemaVersions().entries())
-            : null;
-    } catch (e) {
-        snapshot.knobsError = String(e && e.message).slice(0, 200);
-    }
-
-    // The ceiling each storage's own schema table declares. Equal to the knob
-    // in a healthy state; a build whose ceiling is lower than the version on
-    // disk is the condition that purges.
-    snapshot.localMax = {};
-    utilsModules.forEach((name) => {
+    // Gathered at SEND time, never at inject time. Measured on a real client:
+    // at inject `getSchemaVersions()` throws `Schema versions not initialized`
+    // and `getStorage()` is not ready, so an inject-time read reports
+    // `localMax: {}` - and a drift check against an empty ceiling can never
+    // fire. WhatsApp populates them 1.77s later. Collecting late is the whole
+    // difference between a working detector and one whose silence reads as a
+    // clean bill of health.
+    const collect = () => {
         try {
-            const utils = window.require(name);
-            if (!utils) return;
-            const storage = utils.getStorage();
-            snapshot.localMax[utils.DATABASE_NAME] = storage.versions.getMax();
+            const dbg = window.Debug;
+            snapshot.waVersion =
+                dbg && dbg.VERSION ? String(dbg.VERSION) : null;
         } catch (e) {
             // best-effort diagnostic: never let it break the caller
         }
-    });
 
-    // Reported from the callback rather than awaited, so a storage layer that
-    // never answers costs this one field and nothing else.
+        // Server-driven, one entry per database. getSchemaVersions() throws
+        // while the rollout has not populated them, and that throw is itself
+        // the answer once we have stopped asking too early.
+        try {
+            const sv = window.require('WAWebSchemaVersions');
+            snapshot.knobs = sv
+                ? Array.from(sv.getSchemaVersions().entries())
+                : null;
+            delete snapshot.knobsError;
+        } catch (e) {
+            snapshot.knobsError = String(e && e.message).slice(0, 200);
+        }
+
+        // The ceiling each storage's own schema table declares. Equal to the
+        // knob in a healthy state; a build whose ceiling is lower than the
+        // version on disk is the condition that purges.
+        snapshot.localMax = {};
+        utilsModules.forEach((name) => {
+            try {
+                const utils = window.require(name);
+                if (!utils) return;
+                const storage = utils.getStorage();
+                snapshot.localMax[utils.DATABASE_NAME] =
+                    storage.versions.getMax();
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
+        });
+    };
+
+    // Reported from the callbacks rather than awaited, so neither a storage
+    // layer that never answers nor a rollout that never lands can hang inject.
     let sent = false;
     const send = () => {
         if (sent) return;
         sent = true;
+        collect();
         emit(snapshot);
     };
+
+    // Both halves, or the timeout, whichever completes the picture first. The
+    // disk read usually returns in milliseconds while the schema arrives
+    // seconds later, so waiting on only one of them reports half a snapshot.
+    let dbsReady = false;
+    let schemaReady = false;
+    const sendWhenBothReady = () => {
+        if (dbsReady && schemaReady) send();
+    };
+
     try {
         indexedDB.databases().then(function (dbs) {
             snapshot.dbs = dbs.map((d) => ({
                 name: d.name,
                 version: d.version,
             }));
-            send();
+            dbsReady = true;
+            sendWhenBothReady();
         }, send);
     } catch (e) {
         send();
     }
+
+    // WhatsApp's own primitive for "the schema table is populated", so this
+    // waits on the event rather than sampling for it.
+    try {
+        const sv = window.require('WAWebSchemaVersions');
+        if (sv && typeof sv.waitUntilSchemaVersionsReady === 'function') {
+            sv.waitUntilSchemaVersionsReady().then(function () {
+                schemaReady = true;
+                sendWhenBothReady();
+            }, send);
+        } else {
+            schemaReady = true;
+        }
+    } catch (e) {
+        schemaReady = true;
+    }
+    sendWhenBothReady();
+
     setTimeout(send, dbTimeoutMs);
 };
 

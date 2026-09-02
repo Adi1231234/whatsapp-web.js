@@ -24,10 +24,43 @@ function minifiedWaError() {
 
 const realSetTimeout = global.setTimeout;
 
-function fakePage({ withModules = true, databases } = {}) {
+/**
+ * Measured on a real client: at inject `getSchemaVersions()` throws and
+ * `getStorage()` is not ready; WhatsApp populates them 1.77s later and
+ * resolves `waitUntilSchemaVersionsReady`. A double that is ready immediately
+ * hides the bug this shape exists to catch.
+ */
+function lateSchema() {
+    let ready = false;
+    let resolveReady;
+    const promise = new Promise((r) => {
+        resolveReady = r;
+    });
+    return {
+        module: {
+            getSchemaVersions: () => {
+                if (!ready) throw new Error('Schema versions not initialized');
+                return new Map([
+                    ['model-storage', 201],
+                    ['signal-storage', 6],
+                ]);
+            },
+            waitUntilSchemaVersionsReady: () => promise,
+        },
+        arrive: () => {
+            ready = true;
+            resolveReady();
+        },
+        isReady: () => ready,
+    };
+}
+
+function fakePage({ withModules = true, databases, schema } = {}) {
     const emitted = [];
     const triggered = [];
     const timeouts = [];
+    const late = schema || lateSchema();
+    const schemaVersions = late.module;
     const bus = {
         BackendEventBus: {
             triggerStorageInitializationError(err) {
@@ -37,18 +70,15 @@ function fakePage({ withModules = true, databases } = {}) {
     };
     const storage = (name, max) => ({
         DATABASE_NAME: name,
-        getStorage: () => ({ versions: { getMax: () => max } }),
+        getStorage: () => {
+            if (!late.isReady()) throw new Error('not initialized');
+            return { versions: { getMax: () => max } };
+        },
     });
     const modules = withModules
         ? {
               WAWebBackendEventBus: bus,
-              WAWebSchemaVersions: {
-                  getSchemaVersions: () =>
-                      new Map([
-                          ['model-storage', 201],
-                          ['signal-storage', 6],
-                      ]),
-              },
+              WAWebSchemaVersions: schemaVersions,
               WAWebModelStorageUtils: storage('model-storage', 201),
               WAWebSignalStorageUtils: storage('signal-storage', 6),
           }
@@ -70,7 +100,7 @@ function fakePage({ withModules = true, databases } = {}) {
                 { name: 'signal-storage', version: 70 },
             ]),
     };
-    return { emitted, triggered, timeouts, bus, modules };
+    return { emitted, triggered, timeouts, bus, modules, late };
 }
 
 /** Through the same boundary puppeteer puts it through. */
@@ -103,11 +133,37 @@ describe('InjectStorageDiag', function () {
         page.bus.BackendEventBus.triggerStorageInitializationError(
             minifiedWaError(),
         );
+        page.late.arrive();
         await settle();
         const events = page.emitted.map((e) => e.event);
         expect(events).to.contain(STORAGE_INIT_ERROR);
         expect(events).to.contain(STORAGE_SCHEMA_SNAPSHOT);
         events.forEach((e) => expect(e).to.be.a('string'));
+    });
+
+    it('waits for the schema before reporting, or localMax is always empty', async function () {
+        // THE regression this timing exists for. On a real client the snapshot
+        // used to be collected at inject, where getSchemaVersions() throws and
+        // getStorage() is not ready - so it reported `localMax: {}` every time
+        // and findSchemaDrift could never fire. A detector whose silence reads
+        // as a clean bill of health is worse than no detector.
+        const page = fakePage();
+        inject();
+        await settle();
+        expect(
+            snapshotOf(page.emitted),
+            'must not report before WhatsApp has populated the schema',
+        ).to.equal(undefined);
+
+        page.late.arrive();
+        await settle();
+        const snap = snapshotOf(page.emitted);
+        expect(snap).to.exist;
+        expect(snap.localMax).to.deep.equal({
+            'model-storage': 201,
+            'signal-storage': 6,
+        });
+        expect(snap.knobsError).to.equal(undefined);
     });
 
     it('returns synchronously, so a wedged storage layer cannot hang inject', function () {
@@ -120,9 +176,11 @@ describe('InjectStorageDiag', function () {
         expect(page.timeouts[0].ms).to.equal(SNAPSHOT_DB_TIMEOUT_MS);
     });
 
-    it('still reports when the database read never answers', function () {
+    it('still reports when the database read never answers', async function () {
         const page = fakePage({ databases: () => new Promise(() => {}) });
         inject();
+        page.late.arrive();
+        await settle();
         expect(snapshotOf(page.emitted)).to.equal(undefined);
         page.timeouts[0].fn(); // the timeout fires
         const snap = snapshotOf(page.emitted);
@@ -137,6 +195,7 @@ describe('InjectStorageDiag', function () {
     it('reports once, whichever of the two paths gets there first', async function () {
         const page = fakePage();
         inject();
+        page.late.arrive();
         await settle();
         page.timeouts[0].fn();
         expect(
@@ -212,6 +271,7 @@ describe('InjectStorageDiag', function () {
     it('reports the versions asked for next to the versions on disk', async function () {
         const page = fakePage();
         inject();
+        page.late.arrive();
         await settle();
         const snap = snapshotOf(page.emitted);
         expect(snap.waVersion).to.equal('2.3000.1046259792');
@@ -226,12 +286,13 @@ describe('InjectStorageDiag', function () {
     });
 
     it('records the throw when the schema rollout never populated', async function () {
+        // The rollout never lands. The timeout is the backstop and the throw is
+        // reported, rather than the snapshot being lost entirely.
         const page = fakePage();
-        page.modules.WAWebSchemaVersions.getSchemaVersions = () => {
-            throw new Error('Schema versions not initialized');
-        };
         inject();
         await settle();
+        expect(snapshotOf(page.emitted)).to.equal(undefined);
+        page.timeouts[0].fn();
         expect(snapshotOf(page.emitted).knobsError).to.contain(
             'Schema versions not initialized',
         );
@@ -241,6 +302,7 @@ describe('InjectStorageDiag', function () {
         const page = fakePage();
         inject();
         inject();
+        page.late.arrive();
         await settle();
         page.bus.BackendEventBus.triggerStorageInitializationError(
             minifiedWaError(),
