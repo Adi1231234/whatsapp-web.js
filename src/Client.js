@@ -2925,20 +2925,30 @@ class Client extends EventEmitter {
                 }
             }
 
-            // WhatsApp's own end-of-backlog event. Read the latch first: the
-            // delivery can finish before this runs, and a subscription made
-            // after the fact never fires.
+            // WhatsApp's own end-of-backlog event.
+            //
+            // Subscribed with `on` and not `once`, because a page load can see
+            // more than one offline delivery. Reconnecting a tab that is still
+            // open runs the whole cycle again: `processOfflinePreview` logs
+            // `[resume-from-open-tab] reset offline delivery end to false` and
+            // calls `triggerOfflineDeliveryStateReset`, then the
+            // RESUME_WITH_OPEN_TAB branch ends with another
+            // `triggerOfflineDeliveryEnd`. A `once` here reports the first
+            // connect and stays silent for every reconnect after it.
+            //
+            // The latch is read as well as subscribed to, because the delivery
+            // can finish before this runs and a subscription made after the
+            // fact would never hear about that first one.
             try {
                 const bus = window.require(
                     'WAWebBackendEventBus',
                 )?.BackendEventBus;
                 if (bus) {
+                    bus.onOfflineDeliveryEnd(() => {
+                        window.onOfflineDeliveryEndEvent?.();
+                    });
                     if (bus.isOfflineDeliveryEnd) {
                         window.onOfflineDeliveryEndEvent?.();
-                    } else {
-                        bus.onceOfflineDeliveryEnd(() => {
-                            window.onOfflineDeliveryEndEvent?.();
-                        });
                     }
                 }
             } catch (e) {
