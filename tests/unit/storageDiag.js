@@ -158,6 +158,33 @@ describe('InjectStorageDiag', function () {
         expect(captured.errMessage).to.contain('2010');
     });
 
+    it('says the cause was missing rather than emitting the string undefined', function () {
+        // WhatsApp has two callers for this trigger and the bridge forwarder
+        // passes no argument at all, so this is an expected path, not a bug.
+        const page = fakePage();
+        inject();
+        page.bus.BackendEventBus.triggerStorageInitializationError();
+        const captured = page.emitted.find(
+            (e) => e.event === STORAGE_INIT_ERROR,
+        );
+        expect(captured).to.exist;
+        expect(captured.causeReported).to.equal(false);
+        expect(captured.errMessage).to.equal(null);
+        expect(JSON.stringify(captured)).to.not.contain('undefined');
+    });
+
+    it('marks a reported cause as reported', function () {
+        const page = fakePage();
+        inject();
+        page.bus.BackendEventBus.triggerStorageInitializationError(
+            minifiedWaError(),
+        );
+        expect(
+            page.emitted.find((e) => e.event === STORAGE_INIT_ERROR)
+                .causeReported,
+        ).to.equal(true);
+    });
+
     it('flattens the error to scalars, so no minified key reaches NeDB', function () {
         const page = fakePage();
         inject();

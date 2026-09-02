@@ -73,15 +73,22 @@ const InjectStorageDiag = (
             if (typeof orig === 'function') {
                 b.triggerStorageInitializationError = function (err) {
                     try {
+                        // WhatsApp has two callers. The launch chain passes the
+                        // exception; the bridge forwarder passes NOTHING. A
+                        // missing cause is therefore expected, and saying so
+                        // beats emitting the string "undefined", which reads
+                        // like a value somebody could go looking for.
+                        const hasCause = err !== null && err !== undefined;
                         emit({
                             event: initErrorEvent,
-                            errName: err && err.name ? String(err.name) : null,
-                            errMessage:
-                                err && err.message
-                                    ? String(err.message).slice(0, 300)
-                                    : String(err).slice(0, 300),
+                            causeReported: hasCause,
+                            errName:
+                                hasCause && err.name ? String(err.name) : null,
+                            errMessage: hasCause
+                                ? String(err.message || err).slice(0, 300)
+                                : null,
                             errStack:
-                                err && err.stack
+                                hasCause && err.stack
                                     ? String(err.stack).slice(0, 600)
                                     : null,
                         });
