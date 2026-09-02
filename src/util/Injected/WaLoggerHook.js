@@ -66,6 +66,26 @@ const WAL_FLUSH_MS = 2000;
 const WAL_MAX_BUFFERED = 5000;
 
 /**
+ * Where the pending lines are parked across a navigation, and how much of them.
+ *
+ * The whole reason to flush on `pagehide` is the lines WhatsApp writes just
+ * before it navigates ITSELF to `?post_logout=1`. Calling the host binding
+ * there does not deliver them: measured on the live page with a real
+ * `location.reload()`, the listener fires, `window.onWaLogBatch` is still a
+ * function, the call returns a thenable and throws nothing - and 0 of 4 lines
+ * reach the host. The call is made; the payload never leaves the renderer
+ * before the document is torn down. A synthetic `pagehide` Event cannot show
+ * this, because the page stays alive and the round trip completes.
+ *
+ * `localStorage` is synchronous and survives a same-origin navigation, so the
+ * tail is parked there and picked up by the next page's install. The budget is
+ * a small fraction of the origin's quota, so it cannot crowd out WhatsApp's own
+ * keys, and the entry is removed the moment it is read back.
+ */
+const WAL_CARRY_KEY = '__p2dWaLogCarry';
+const WAL_CARRY_MAX_BYTES = 131072;
+
+/**
  * The GCP side is capped PER TEMPLATE, not by vocabulary.
  *
  * Choosing by level alone is what makes an unseen failure visible on its first
@@ -94,6 +114,8 @@ const InjectWaLoggerHook = (
     perTemplate,
     windowMs,
     maxBuffered,
+    carryKey,
+    carryMaxBytes,
 ) => {
     const WAL = window.require('WALogger');
     if (!WAL) return;
@@ -185,10 +207,49 @@ const InjectWaLoggerHook = (
             buffer = batch.concat(buffer);
         }
     };
+    // Park the tail somewhere that survives the document, because the binding
+    // does not. Keeps the OLDEST within the budget, matching the overflow rule
+    // above: a buffer big enough to be trimmed is one that filled from boot.
+    const persist = () => {
+        if (buffer.length === 0) return;
+        try {
+            var batch = buffer;
+            var json = JSON.stringify(batch);
+            while (json.length > carryMaxBytes && batch.length > 1) {
+                batch = batch.slice(0, Math.floor(batch.length / 2));
+                json = JSON.stringify(batch);
+            }
+            window.localStorage.setItem(carryKey, json);
+            buffer = [];
+        } catch (e) {
+            // A full or unavailable localStorage loses the tail, which is no
+            // worse than not having tried. Never break the unload.
+        }
+    };
+
+    const restore = () => {
+        try {
+            const raw = window.localStorage.getItem(carryKey);
+            if (!raw) return;
+            // Removed before it is parsed, so a malformed entry cannot make
+            // every future page load fail on the same bytes.
+            window.localStorage.removeItem(carryKey);
+            const lines = JSON.parse(raw);
+            if (lines && lines.length) buffer = lines.concat(buffer);
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
+    };
+
+    // Anything the previous page could not deliver, delivered now.
+    restore();
+
     setInterval(flush, flushMs);
-    // The lines that matter most are the last ones before WhatsApp navigates
-    // itself to a logout, so do not let a navigation take the tail with it.
-    window.addEventListener('pagehide', flush);
+    window.addEventListener('pagehide', persist);
+    // A page that comes back from the bfcache was never unloaded, so take the
+    // tail back into the live buffer rather than leaving it for a load that
+    // may be hours away.
+    window.addEventListener('pageshow', restore);
 
     levels.forEach((lvl) => {
         const orig = WAL[lvl];
@@ -253,5 +314,7 @@ module.exports = {
     WAL_BATCH_SIZE,
     WAL_FLUSH_MS,
     WAL_MAX_BUFFERED,
+    WAL_CARRY_KEY,
+    WAL_CARRY_MAX_BYTES,
     isWaLoggerSignal,
 };

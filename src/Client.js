@@ -28,6 +28,8 @@ const {
     WAL_BATCH_SIZE,
     WAL_FLUSH_MS,
     WAL_MAX_BUFFERED,
+    WAL_CARRY_KEY,
+    WAL_CARRY_MAX_BYTES,
     WAL_SIGNAL_PER_TEMPLATE,
     WAL_SIGNAL_WINDOW_MS,
 } = require('./util/Injected/WaLoggerHook');
@@ -424,6 +426,8 @@ class Client extends EventEmitter {
                 WAL_SIGNAL_PER_TEMPLATE,
                 WAL_SIGNAL_WINDOW_MS,
                 WAL_MAX_BUFFERED,
+                WAL_CARRY_KEY,
+                WAL_CARRY_MAX_BYTES,
             );
             await this.pupPage.evaluate(
                 InjectStorageDiag,

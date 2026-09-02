@@ -7,6 +7,8 @@ const {
     WAL_SIGNAL_PER_TEMPLATE,
     WAL_SIGNAL_WINDOW_MS,
     WAL_MAX_BUFFERED,
+    WAL_CARRY_KEY,
+    WAL_CARRY_MAX_BYTES,
     isWaLoggerSignal,
 } = require('../../src/util/Injected/WaLoggerHook');
 const { evaluateInPage } = require('./evaluateBoundary');
@@ -41,7 +43,22 @@ const tagged = (text) => Object.assign([text], { raw: [text] });
 
 const realSetInterval = global.setInterval;
 
-function fakePage() {
+/**
+ * The one store that survives a navigation. Deliberately created OUTSIDE
+ * fakePage so a test can throw the window away and build a new one on top of
+ * the same store, which is exactly what a page load does.
+ */
+function fakeLocalStorage() {
+    const data = new Map();
+    return {
+        getItem: (k) => (data.has(k) ? data.get(k) : null),
+        setItem: (k, v) => data.set(k, String(v)),
+        removeItem: (k) => data.delete(k),
+        size: () => data.size,
+    };
+}
+
+function fakePage(localStorage) {
     const emitted = [];
     const batches = [];
     const calls = [];
@@ -73,6 +90,7 @@ function fakePage() {
             listenerCalls.push(name);
             listeners[name] = fn;
         },
+        localStorage: localStorage || fakeLocalStorage(),
     };
     return {
         emitted,
@@ -134,6 +152,8 @@ describe('WaLoggerHook', function () {
                 WAL_SIGNAL_PER_TEMPLATE,
                 WAL_SIGNAL_WINDOW_MS,
                 maxBuffered === undefined ? WAL_MAX_BUFFERED : maxBuffered,
+                WAL_CARRY_KEY,
+                WAL_CARRY_MAX_BYTES,
             );
 
         const emitAll = (page) =>
@@ -180,16 +200,89 @@ describe('WaLoggerHook', function () {
         });
 
         it('flushes on pagehide, so a logout navigation cannot take the tail', function () {
-            const page = fakePage();
+            // Measured on the live page against a real location.reload():
+            // pagehide fires, window.onWaLogBatch is still a function, the call
+            // returns a thenable and throws nothing, and 0 of 4 lines reach the
+            // host. So pagehide must PARK the tail somewhere that outlives the
+            // document, and the next page has to pick it up.
+            const store = fakeLocalStorage();
+            const page = fakePage(store);
             install(200);
             page.WALogger.LOG(tagged('the last thing before the logout'));
             expect(page.batches).to.have.length(0);
+
             page.listeners.pagehide();
+            // Not delivered here, on purpose: the binding cannot deliver during
+            // an unload, so trying would only look like it worked.
+            expect(allBatched(page)).to.have.length(0);
+            expect(store.getItem(WAL_CARRY_KEY)).to.be.a('string');
+
+            // The navigation. A brand new window over the SAME store, which is
+            // what a same-origin page load is.
+            const next = fakePage(store);
+            install(200);
+            next.timers[0]();
+            expect(
+                allBatched(next).map(function (l) {
+                    return l.msg;
+                }),
+            ).to.contain('the last thing before the logout');
+            // Read once and cleared, so it cannot be delivered twice.
+            expect(store.getItem(WAL_CARRY_KEY)).to.equal(null);
+        });
+
+        it('takes the tail back when the page was not unloaded after all', function () {
+            // A bfcache restore fires pageshow with the document intact. The
+            // parked copy has to come back into the live buffer, or it sits in
+            // localStorage until a page load that may be hours away.
+            const store = fakeLocalStorage();
+            const page = fakePage(store);
+            install(200);
+            page.WALogger.LOG(tagged('parked but the page came back'));
+            page.listeners.pagehide();
+            expect(store.getItem(WAL_CARRY_KEY)).to.be.a('string');
+
+            page.listeners.pageshow();
+            expect(store.getItem(WAL_CARRY_KEY)).to.equal(null);
+            page.timers[0]();
             expect(
                 allBatched(page).map(function (l) {
                     return l.msg;
                 }),
-            ).to.contain('the last thing before the logout');
+            ).to.contain('parked but the page came back');
+        });
+
+        it('bounds what it parks, so it cannot crowd out WA keys', function () {
+            const store = fakeLocalStorage();
+            const page = fakePage(store);
+            install(5000, 5000);
+            delete global.window.onWaLogBatch;
+            for (let i = 0; i < 2000; i++)
+                page.WALogger.LOG(tagged('x'.repeat(400) + i));
+            page.listeners.pagehide();
+            const parked = store.getItem(WAL_CARRY_KEY);
+            expect(parked.length).to.be.at.most(WAL_CARRY_MAX_BYTES);
+            // The oldest are kept, matching the overflow rule: a buffer this
+            // big filled from boot, and boot is what explains the failure.
+            expect(JSON.parse(parked)[0].msg).to.contain('x'.repeat(50) + '0');
+        });
+
+        it('survives a page with no usable localStorage', function () {
+            const page = fakePage();
+            global.window.localStorage = {
+                getItem: () => {
+                    throw new Error('denied');
+                },
+                setItem: () => {
+                    throw new Error('denied');
+                },
+                removeItem: () => {},
+            };
+            expect(() => install(200)).to.not.throw();
+            page.WALogger.LOG(tagged('still logged'));
+            expect(() => page.listeners.pagehide()).to.not.throw();
+            page.timers[0]();
+            expect(allBatched(page)).to.have.length(1);
         });
 
         it('carries the substitutions, which is why the schema line is worth keeping', function () {
@@ -304,7 +397,7 @@ describe('WaLoggerHook', function () {
             install(1);
             install(1);
             expect(page.timers).to.have.length(1);
-            expect(page.listenerCalls).to.deep.equal(['pagehide']);
+            expect(page.listenerCalls).to.deep.equal(['pagehide', 'pageshow']);
         });
 
         it('does not double-wrap when injected twice', function () {
