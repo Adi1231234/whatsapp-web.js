@@ -20,6 +20,35 @@ const {
 } = require('./util/Injected/DiagCommon');
 const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
 const { InjectMediaKeyRecovery } = require('./util/Injected/MediaKeyRecovery');
+const {
+    InjectWaLoggerHook,
+    WAL_TERMINAL,
+    WAL_LEVELS,
+    WAL_SIGNAL_LEVELS,
+    WAL_BATCH_SIZE,
+    WAL_FLUSH_MS,
+    WAL_MAX_BUFFERED,
+    WAL_CARRY_KEY,
+    WAL_CARRY_MAX_BYTES,
+    WAL_SIGNAL_PER_TEMPLATE,
+    WAL_SIGNAL_WINDOW_MS,
+} = require('./util/Injected/WaLoggerHook');
+const {
+    InjectStorageDiag,
+    STORAGE_INIT_ERROR,
+    STORAGE_SCHEMA_SNAPSHOT,
+    SNAPSHOT_DB_TIMEOUT_MS,
+    STORAGE_UTILS_MODULES,
+} = require('./util/Injected/StorageDiag');
+
+// The storage events that get their own `diag` channel entry, and at what
+// level. SOCKET_DIAG is a console line nothing can subscribe to, and this
+// failure mode rejects initialize(), so the general diag bridge - exposed in
+// attachEventListeners - never registers.
+const STORAGE_DIAG_LEVELS = {
+    [STORAGE_INIT_ERROR]: 'error',
+    [STORAGE_SCHEMA_SNAPSHOT]: 'info',
+};
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -230,9 +259,7 @@ class Client extends EventEmitter {
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onSocketDiagEvent',
-                async (info) => {
-                    console.log('[wwjs-diag] SOCKET_DIAG', info);
-                },
+                async (info) => this._onSocketDiagEvent(info),
             );
             await this.pupPage.evaluate(() => {
                 const _st = () => {
@@ -290,39 +317,6 @@ class Client extends EventEmitter {
                             '[wwjs-diag] socket bridge diag hooks installed (early)',
                         );
                     }
-                } catch (e) {
-                    // best-effort diagnostic: never let it break the caller
-                }
-                // WhatsApp's own logger (the plain-text socket-close reason).
-                try {
-                    const _WAL = window.require('WALogger');
-                    const _KW =
-                        /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked/i;
-                    ['ERROR', 'WARN'].forEach((lvl) => {
-                        const orig = _WAL[lvl];
-                        if (typeof orig !== 'function' || orig.__p2dWrapped)
-                            return;
-                        const wrapped = function () {
-                            try {
-                                const t0 = arguments[0];
-                                const msg = Array.isArray(t0)
-                                    ? t0.join('{}')
-                                    : String(t0);
-                                if (_KW.test(msg)) {
-                                    window.onSocketDiagEvent({
-                                        event: 'WA_INTERNAL_' + lvl,
-                                        msg: msg.slice(0, 300),
-                                        state: _st(),
-                                    });
-                                }
-                            } catch (e) {
-                                // best-effort diagnostic: never let it break the caller
-                            }
-                            return orig.apply(this, arguments);
-                        };
-                        wrapped.__p2dWrapped = true;
-                        _WAL[lvl] = wrapped;
-                    });
                 } catch (e) {
                     // best-effort diagnostic: never let it break the caller
                 }
@@ -408,6 +402,40 @@ class Client extends EventEmitter {
                     // best-effort diagnostic: never let it break the caller
                 }
             });
+
+            // WhatsApp's own logger, and the storage layer it reports on. Both
+            // installed here rather than after the auth wait below: that wait
+            // times out on a stuck socket, and a storage failure destroys the
+            // credentials before it ever returns, so anything installed after
+            // it is installed too late for the failures it exists to explain.
+            // Every WALogger line, batched, for the host to keep locally.
+            // Exposed before the hook that fills it, or the first batches land
+            // on a binding that does not exist yet.
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                'onWaLogBatch',
+                async (lines) => this.emit('walog', lines),
+            );
+            await this.pupPage.evaluate(
+                InjectWaLoggerHook,
+                WAL_TERMINAL.source,
+                WAL_LEVELS,
+                WAL_SIGNAL_LEVELS,
+                WAL_BATCH_SIZE,
+                WAL_FLUSH_MS,
+                WAL_SIGNAL_PER_TEMPLATE,
+                WAL_SIGNAL_WINDOW_MS,
+                WAL_MAX_BUFFERED,
+                WAL_CARRY_KEY,
+                WAL_CARRY_MAX_BYTES,
+            );
+            await this.pupPage.evaluate(
+                InjectStorageDiag,
+                STORAGE_INIT_ERROR,
+                STORAGE_SCHEMA_SNAPSHOT,
+                STORAGE_UTILS_MODULES,
+                SNAPSHOT_DB_TIMEOUT_MS,
+            );
 
             // Socket.state fires `change:state`, so wait on the event rather than
             // sampling. WAWebEventsWaitForBbEvent is WhatsApp's own helper: it
@@ -712,9 +740,7 @@ class Client extends EventEmitter {
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onSocketDiagEvent',
-                async (info) => {
-                    console.log('[wwjs-diag] SOCKET_DIAG', info);
-                },
+                async (info) => this._onSocketDiagEvent(info),
             );
 
             // Map the resolved connection screen onto the public events.
@@ -1004,48 +1030,6 @@ class Client extends EventEmitter {
                     );
                 }
 
-                // [diag] WhatsApp's OWN internal logger (WALogger), captured
-                // PRE-SYNC and forwarded to GCP via onSocketDiagEvent. This is
-                // the plain-text reason WA itself records when it cannot open
-                // the stream / finish pairing (e.g. "[open socket stream]
-                // failed to open stream"). The post-sync WA_INTERNAL hook in
-                // DiagHooks never runs when the app never syncs, AND it logs at
-                // 'debug' (dropped from GCP unless debugLogsEnabled). This one
-                // always reaches GCP. Shared __p2dWrapped guard so the post-sync
-                // DiagHooks wrapper won't double-wrap.
-                try {
-                    const _WAL = window.require('WALogger');
-                    const _WAL_KW =
-                        /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked/i;
-                    ['ERROR', 'WARN'].forEach((lvl) => {
-                        const orig = _WAL[lvl];
-                        if (typeof orig !== 'function' || orig.__p2dWrapped)
-                            return;
-                        const wrapped = function () {
-                            try {
-                                const t0 = arguments[0];
-                                const msg = Array.isArray(t0)
-                                    ? t0.join('{}')
-                                    : String(t0);
-                                if (_WAL_KW.test(msg)) {
-                                    window.onSocketDiagEvent({
-                                        event: 'WA_INTERNAL_' + lvl,
-                                        msg: msg.slice(0, 300),
-                                        state: String(Socket.state),
-                                    });
-                                }
-                            } catch (e) {
-                                // best-effort diagnostic: never let it break the caller
-                            }
-                            return orig.apply(this, arguments);
-                        };
-                        wrapped.__p2dWrapped = true;
-                        _WAL[lvl] = wrapped;
-                    });
-                } catch (e) {
-                    // best-effort diagnostic: never let it break the caller
-                }
-
                 // [diag] WhatsApp Stream lifecycle (info/mode/displayInfo) - the
                 // connection-screen transitions behind a stuck-connecting loop.
                 // Pre-sync, GCP-visible. Shared __p2dStreamHooked guard with
@@ -1279,6 +1263,27 @@ class Client extends EventEmitter {
             if (this._injectAbort === abort) {
                 this._injectAbort = null;
             }
+        }
+    }
+
+    /**
+     * Receives everything the injected diagnostics report about the socket and
+     * the storage layer.
+     *
+     * Almost all of it is a console line, which is what the host tails. The one
+     * exception is the storage-initialisation exception: WhatsApp is about to
+     * clear the session's credentials over it, and a console line is not
+     * something a consumer can subscribe to. It also cannot wait for the
+     * general `diag` bridge, which is exposed in attachEventListeners - in this
+     * failure mode initialize() rejects, so that never runs.
+     *
+     * Private function
+     */
+    _onSocketDiagEvent(info) {
+        console.log('[wwjs-diag] SOCKET_DIAG', info);
+        const level = STORAGE_DIAG_LEVELS[info && info.event];
+        if (level) {
+            this.emit('diag', level, info.event, JSON.stringify(info));
         }
     }
 
