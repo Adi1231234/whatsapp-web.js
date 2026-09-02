@@ -445,10 +445,13 @@ describe('WaLoggerHook', function () {
                 install(1);
                 delete global.window.onWaLogBatch;
                 page.WALogger.ERROR(tagged('[storage] purge, logging out'));
-                page.WALogger.ERROR(tagged('Failed to initialize model storage'));
+                page.WALogger.ERROR(
+                    tagged('Failed to initialize model storage'),
+                );
                 expect(allBatched(page)).to.have.length(0);
 
-                global.window.onWaLogBatch = (lines) => page.batches.push(lines);
+                global.window.onWaLogBatch = (lines) =>
+                    page.batches.push(lines);
                 page.timers[0]();
                 expect(allBatched(page).map((l) => l.msg)).to.deep.equal([
                     '[storage] purge, logging out',
@@ -463,7 +466,8 @@ describe('WaLoggerHook', function () {
                     throw new Error('did not dispatch');
                 };
                 page.WALogger.ERROR(tagged('first'));
-                global.window.onWaLogBatch = (lines) => page.batches.push(lines);
+                global.window.onWaLogBatch = (lines) =>
+                    page.batches.push(lines);
                 page.WALogger.ERROR(tagged('second'));
                 // Order survives: the retained batch goes in front.
                 expect(allBatched(page).map((l) => l.msg)).to.deep.equal([
@@ -478,7 +482,8 @@ describe('WaLoggerHook', function () {
                 delete global.window.onWaLogBatch;
                 for (let i = 0; i < 6; i++) page.WALogger.LOG(tagged('l' + i));
 
-                global.window.onWaLogBatch = (lines) => page.batches.push(lines);
+                global.window.onWaLogBatch = (lines) =>
+                    page.batches.push(lines);
                 page.timers[0]();
                 const got = allBatched(page);
                 // The OLDEST are kept: a storage failure happens at boot, so

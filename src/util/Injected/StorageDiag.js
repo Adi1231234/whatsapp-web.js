@@ -195,18 +195,21 @@ const InjectStorageDiag = (
     };
 
     try {
-        indexedDB.databases().then(function (dbs) {
-            snapshot.dbs = dbs.map((d) => ({
-                name: d.name,
-                version: d.version,
-            }));
-            dbsReady = true;
-            sendWhenBothReady();
-        }, function (e) {
-            half('dbsError')(e);
-            dbsReady = true;
-            sendWhenBothReady();
-        });
+        indexedDB.databases().then(
+            function (dbs) {
+                snapshot.dbs = dbs.map((d) => ({
+                    name: d.name,
+                    version: d.version,
+                }));
+                dbsReady = true;
+                sendWhenBothReady();
+            },
+            function (e) {
+                half('dbsError')(e);
+                dbsReady = true;
+                sendWhenBothReady();
+            },
+        );
     } catch (e) {
         half('dbsError')(e);
         dbsReady = true;
@@ -217,14 +220,17 @@ const InjectStorageDiag = (
     try {
         const sv = window.require('WAWebSchemaVersions');
         if (sv && typeof sv.waitUntilSchemaVersionsReady === 'function') {
-            sv.waitUntilSchemaVersionsReady().then(function () {
-                schemaReady = true;
-                sendWhenBothReady();
-            }, function (e) {
-                half('schemaWaitError')(e);
-                schemaReady = true;
-                sendWhenBothReady();
-            });
+            sv.waitUntilSchemaVersionsReady().then(
+                function () {
+                    schemaReady = true;
+                    sendWhenBothReady();
+                },
+                function (e) {
+                    half('schemaWaitError')(e);
+                    schemaReady = true;
+                    sendWhenBothReady();
+                },
+            );
         } else {
             schemaReady = true;
         }
