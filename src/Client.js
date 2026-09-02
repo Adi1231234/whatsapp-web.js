@@ -22,9 +22,11 @@ const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
 const { InjectMediaKeyRecovery } = require('./util/Injected/MediaKeyRecovery');
 const {
     InjectWaLoggerHook,
-    WAL_KEYWORDS,
-    WAL_LOG_PREFIXES,
     WAL_TERMINAL,
+    WAL_LEVELS,
+    WAL_SIGNAL_LEVELS,
+    WAL_BATCH_SIZE,
+    WAL_FLUSH_MS,
 } = require('./util/Injected/WaLoggerHook');
 const {
     InjectStorageDiag,
@@ -399,11 +401,21 @@ class Client extends EventEmitter {
             // times out on a stuck socket, and a storage failure destroys the
             // credentials before it ever returns, so anything installed after
             // it is installed too late for the failures it exists to explain.
+            // Every WALogger line, batched, for the host to keep locally.
+            // Exposed before the hook that fills it, or the first batches land
+            // on a binding that does not exist yet.
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                'onWaLogBatch',
+                async (lines) => this.emit('walog', lines),
+            );
             await this.pupPage.evaluate(
                 InjectWaLoggerHook,
-                WAL_KEYWORDS.source,
-                WAL_LOG_PREFIXES,
                 WAL_TERMINAL.source,
+                WAL_LEVELS,
+                WAL_SIGNAL_LEVELS,
+                WAL_BATCH_SIZE,
+                WAL_FLUSH_MS,
             );
             await this.pupPage.evaluate(InjectStorageDiag);
 

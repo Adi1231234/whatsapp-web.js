@@ -1,57 +1,59 @@
 'use strict';
 
 /**
- * Forwards WhatsApp's own logger to the host.
+ * Forwards WhatsApp's own logger out of the page, to two places.
  *
  * WhatsApp explains its terminal decisions in plain text through `WALogger`,
- * and that text is the only place some failures are ever named. Forwarding all
- * of it is not an option (it is thousands of lines a day per client), so ERROR
- * and WARN are matched by keyword and LOG is matched against exact prefixes.
+ * and that text is the only place some failures are ever named. It used to be
+ * filtered by a keyword set, which is how a shop was destroyed without an
+ * explanation: `logout_reason=0` can only come from the storage layer, every
+ * line WhatsApp writes on that path talks about storage, schemas or databases,
+ * and not one of those words was in the set.
  *
- * The storage vocabulary is in the keyword set on purpose. A logout carrying
- * `logout_reason=0` (CLIENT_FATAL) can only come from the storage layer, and
- * every line WhatsApp writes on that path talks about storage, schemas or
- * databases - so a keyword set without those words is guaranteed to drop the
- * explanation for exactly the failure that destroys a session.
+ * So the filtering is gone. There are two destinations with two rules, and
+ * neither requires guessing vocabulary in advance:
  *
- * The pattern and the prefix list are passed in as evaluate() arguments rather
- * than read from module scope: evaluate serialises the function alone, so a
- * closure over a module constant arrives in the page as undefined.
+ * - EVERY line is batched to `onWaLogBatch`, which the host appends to a local
+ *   per-account file. Nothing is dropped and nothing leaves the machine.
+ * - ERROR, WARN and EXPECTED_ERROR, plus any line the terminal set recognises
+ *   at any level, ALSO go to `onSocketDiagEvent`. That is the signal that says
+ *   go and read the file. Measured on a busy shop over 6.2 minutes: 0 ERROR,
+ *   0 EXPECTED_ERROR, 32 WARN. It costs nothing.
+ *
+ * LOG is excluded from the second rule because it is the volume: 1,773 calls
+ * in that same window. DEV_XMPP is excluded from BOTH, because it is the raw
+ * XMPP wire and it carries message bodies.
  */
 
-// ERROR/WARN. These levels are rare by construction, so keywords are safe here.
-const WAL_KEYWORDS =
-    /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked|storage initialization|schema version|model storage|signal storage|worker storage|status storage|fts storage|jobs storage|offd storage|dexie|indexeddb|clearcredentials|clearalllocalstate/i;
-
-// Terminal at ANY level. This is DiagHooks' set, moved here because this hook
-// now installs first and its __p2dWrapped guard makes DiagHooks' copy a no-op -
-// leaving it there would have silently dropped the coverage it already gives us,
-// including the one line that names the storage decision.
+// Terminal at ANY level, including LOG. Not a vocabulary guess: these are the
+// phrases WhatsApp uses when it is throwing a session away.
 const WAL_TERMINAL =
     /logging out|logged out|device removed|fatal error|failure stanza|dirty bit|identity changed|native logout failed|forced logout/i;
 
-// LOG is high-volume, so it is matched against exact prefixes rather than
-// keywords. Each of these fires at most a handful of times per page load, and
-// each one is either a terminal decision or the schema table that explains it.
-const WAL_LOG_PREFIXES = [
-    'storage initialization error, logging out',
-    '[storage] start load schema versions',
-    '[storage] set schema versions: ',
-    '[reload] reloadAfterLogout errorDuringStorageClear=',
-];
+// Wrapped, in WALogger's own naming. DEV_XMPP, COUNT and DEV are deliberately
+// absent: DEV_XMPP is the wire, and the other two never fired in any measurement.
+const WAL_LEVELS = ['ERROR', 'WARN', 'EXPECTED_ERROR', 'LOG'];
 
-/** True when a WALogger line at `level` should be forwarded. Pure, so testable. */
-const shouldForwardWaLoggerLine = (level, message) =>
-    WAL_TERMINAL.test(message) ||
-    (level === 'LOG'
-        ? WAL_LOG_PREFIXES.some((prefix) => message.startsWith(prefix))
-        : WAL_KEYWORDS.test(message));
+/** Levels quiet enough to forward whole. LOG is not one of them. */
+const WAL_SIGNAL_LEVELS = ['ERROR', 'WARN', 'EXPECTED_ERROR'];
 
-const InjectWaLoggerHook = (keywordSource, logPrefixes, terminalSource) => {
+const WAL_BATCH_SIZE = 200;
+const WAL_FLUSH_MS = 2000;
+
+/** True when a line also deserves a GCP row. Pure, so testable. */
+const isWaLoggerSignal = (level, message) =>
+    WAL_SIGNAL_LEVELS.indexOf(level) !== -1 || WAL_TERMINAL.test(message);
+
+const InjectWaLoggerHook = (
+    terminalSource,
+    levels,
+    signalLevels,
+    batchSize,
+    flushMs,
+) => {
     const WAL = window.require('WALogger');
     if (!WAL) return;
 
-    const keywords = new RegExp(keywordSource, 'i');
     const terminal = new RegExp(terminalSource, 'i');
     const socketState = () => {
         const model = window.require('WAWebSocketModel');
@@ -66,34 +68,57 @@ const InjectWaLoggerHook = (keywordSource, logPrefixes, terminalSource) => {
         return Array.isArray(head) ? head.join('{}') : String(head);
     };
     const renderArgs = (args) => {
-        const rest = Array.prototype.slice.call(args, 1, 3);
+        const rest = Array.prototype.slice.call(args, 1, 4);
         if (!rest.length) return undefined;
         try {
-            return JSON.stringify(rest).slice(0, 300);
+            return JSON.stringify(rest).slice(0, 400);
         } catch (e) {
-            return String(rest).slice(0, 300);
+            return String(rest).slice(0, 400);
         }
     };
 
-    ['ERROR', 'WARN', 'LOG'].forEach((lvl) => {
+    var buffer = [];
+    const flush = () => {
+        if (buffer.length === 0) return;
+        const batch = buffer;
+        buffer = [];
+        try {
+            window.onWaLogBatch(batch);
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
+    };
+    setInterval(flush, flushMs);
+    // The lines that matter most are the last ones before WhatsApp navigates
+    // itself to a logout, so do not let a navigation take the tail with it.
+    window.addEventListener('pagehide', flush);
+
+    levels.forEach((lvl) => {
         const orig = WAL[lvl];
         if (typeof orig !== 'function' || orig.__p2dWrapped) return;
         const wrapped = function () {
             try {
                 const msg = render(arguments);
                 const isTerminal = terminal.test(msg);
-                const hit =
-                    isTerminal ||
-                    (lvl === 'LOG'
-                        ? logPrefixes.some((p) => msg.startsWith(p))
-                        : keywords.test(msg));
-                if (hit) {
+                const args = renderArgs(arguments);
+                const state = socketState();
+
+                buffer.push({
+                    level: lvl,
+                    msg: msg.slice(0, 500),
+                    args: args,
+                    state: state,
+                    ts: Date.now(),
+                });
+                if (buffer.length >= batchSize) flush();
+
+                if (signalLevels.indexOf(lvl) !== -1 || isTerminal) {
                     window.onSocketDiagEvent({
                         event: 'WA_INTERNAL_' + lvl,
                         terminal: isTerminal,
                         msg: msg.slice(0, 300),
-                        args: renderArgs(arguments),
-                        state: socketState(),
+                        args: args,
+                        state: state,
                     });
                 }
             } catch (e) {
@@ -108,8 +133,10 @@ const InjectWaLoggerHook = (keywordSource, logPrefixes, terminalSource) => {
 
 module.exports = {
     InjectWaLoggerHook,
-    WAL_KEYWORDS,
     WAL_TERMINAL,
-    WAL_LOG_PREFIXES,
-    shouldForwardWaLoggerLine,
+    WAL_LEVELS,
+    WAL_SIGNAL_LEVELS,
+    WAL_BATCH_SIZE,
+    WAL_FLUSH_MS,
+    isWaLoggerSignal,
 };
