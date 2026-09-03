@@ -2965,12 +2965,18 @@ class Client extends EventEmitter {
                     // is reset by the next delivery.
                     const deliveryInfo = () => {
                         try {
-                            const h = window.require('WAWebOfflineHandler')
-                                ?.OfflineMessageHandler;
-                            if (!h) return { messageCount: 0, previewReceived: false };
+                            const h = window.require(
+                                'WAWebOfflineHandler',
+                            )?.OfflineMessageHandler;
+                            if (!h)
+                                return {
+                                    messageCount: 0,
+                                    previewReceived: false,
+                                };
                             return {
                                 messageCount:
-                                    typeof h.getOfflineMessageCount === 'function'
+                                    typeof h.getOfflineMessageCount ===
+                                    'function'
                                         ? h.getOfflineMessageCount()
                                         : 0,
                                 previewReceived:
