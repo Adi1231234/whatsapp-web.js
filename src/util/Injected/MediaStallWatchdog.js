@@ -22,8 +22,39 @@
  */
 exports.InjectMediaStallWatchdog = () => {
     const manager = window.require('WAWebDownloadManager').downloadManager;
+    if (!manager) return;
+
+    /**
+     * The one place that knows a download stalled.
+     *
+     * `resolveMediaBlob` has to report a stall as itself, and cannot learn it
+     * any other way: WhatsApp swallows the `AbortError` rather than rethrowing
+     * it, so the reason never reaches the caller. Reading it costs the mark, and
+     * every fresh attempt clears it, so a verdict can only ever describe the
+     * download it came from. A `WeakSet` rather than a property because the
+     * media object is WhatsApp's, and this must leave no trace on it.
+     *
+     * Kept on the manager and republished on EVERY injection, above the
+     * install guard. `LoadUtils` re-runs on each re-sync and assigns
+     * `window.WWebJS = {}`, so a reader published only once is destroyed by the
+     * first re-sync - after which every stall would quietly read as the
+     * FETCHING it was left in, which the host does not retry. The set itself
+     * must outlive that, or the wrapper below would mark into one instance
+     * while the reader consulted another.
+     */
+    const stalls =
+        manager.__mediaStalls || (manager.__mediaStalls = new WeakSet());
+    const markStalled = (mediaObject) => stalls.add(mediaObject);
+    const forgetStall = (mediaObject) => stalls.delete(mediaObject);
+    window.WWebJS = window.WWebJS || {};
+    window.WWebJS.mediaStalls = {
+        /** True once per stall, and only for the attempt that stalled. */
+        consume: (mediaObject) =>
+            mediaObject ? stalls.delete(mediaObject) : false,
+    };
+
     // Re-injected on every re-sync; a second wrapper would double every timer.
-    if (!manager || manager.__mediaStallWatchdogInstalled) return;
+    if (manager.__mediaStallWatchdogInstalled) return;
     manager.__mediaStallWatchdogInstalled = true;
 
     const { cancelDownloadMedia } = window.require(
@@ -96,10 +127,19 @@ exports.InjectMediaStallWatchdog = () => {
      */
     const whenStalled = (mediaObject) => {
         const startedAt = Date.now();
+        // `loadedSize` is never reset - not by `clearBlob`, not by the INIT
+        // consolidate - so a media object that already completed a download
+        // still carries its full byte count. Measure what THIS attempt
+        // delivers, or a re-download after a cache eviction reads the old
+        // total as healthy progress and the stall is never seen. A decrease
+        // means WhatsApp's counter restarted, so follow it down.
+        let baseline = mediaObject.loadedSize || 0;
         let timer = null;
         const promise = new Promise((resolve) => {
             timer = setInterval(() => {
-                const loadedSize = mediaObject.loadedSize || 0;
+                const current = mediaObject.loadedSize || 0;
+                if (current < baseline) baseline = current;
+                const loadedSize = current - baseline;
                 const elapsedMs = Date.now() - startedAt;
                 if (hasStalled(loadedSize, elapsedMs))
                     resolve({ loadedSize, elapsedMs });
@@ -108,12 +148,81 @@ exports.InjectMediaStallWatchdog = () => {
         return { promise, stop: () => clearInterval(timer) };
     };
 
+    /**
+     * Cancels the stalled download and settles on what actually happened.
+     *
+     * Bounded on purpose: the cancel reaches an `AbortController` WhatsApp
+     * registers for this media object and normally settles it at once, but if
+     * none was registered, or the fetch had finished and a decrypt is running,
+     * nothing settles. Waiting on the recovery without a bound would reintroduce
+     * the very defect this file exists to remove.
+     */
+    const cancelAndSettle = async (mediaObject, download) => {
+        try {
+            // Aborts the request WhatsApp is already listening on, which also
+            // releases the one promise every message with this filehash awaits.
+            cancelDownloadMedia(mediaObject);
+        } catch (cancelFailed) {
+            // Swallowed deliberately. Letting this escape would hand WhatsApp a
+            // failure that is not an abort, which it routes to NEED_POKE - and
+            // NEED_POKE is answered by the re-upload request, a wait with no
+            // timeout of its own. The bound below still ends this download, and
+            // the verdict below is still the honest one.
+            window.__metrics?.safeDiagLog?.(
+                'warn',
+                'MEDIA_DOWNLOAD_CANCEL_FAILED',
+                { message: String(cancelFailed?.message || cancelFailed) },
+            );
+        }
+        const settled = deadline(ABORT_SETTLE_MS, null);
+        try {
+            const outcome = await Promise.race([
+                download.then(
+                    (bytes) => ({ bytes }),
+                    (error) => ({ error }),
+                ),
+                settled.promise,
+            ]);
+            // A download that beat the abort by a hair still has its bytes, and
+            // bytes always win: the stall is only real if it failed.
+            if (outcome && 'bytes' in outcome) return outcome.bytes;
+
+            markStalled(mediaObject);
+            // WhatsApp's own AbortError when we have it, an equivalent when the
+            // abort never landed. It is that name which makes WhatsApp unwind
+            // without setting NEED_POKE, and so keeps a stall clear of the
+            // re-upload request - itself a wait with no timeout.
+            throw outcome?.error ?? abortError();
+        } finally {
+            settled.stop();
+        }
+    };
+
+    const report = (opts, mediaObject, stall) =>
+        window.__metrics?.safeDiagLog?.('info', 'MEDIA_DOWNLOAD_STALLED', {
+            type: opts.type,
+            loadedSize: stall.loadedSize,
+            expectedSize: mediaObject.size ?? null,
+            elapsedMs: stall.elapsedMs,
+            directPath: opts.directPath?.slice(0, 80) ?? null,
+        });
+
     const original = manager.downloadAndMaybeDecrypt;
     manager.downloadAndMaybeDecrypt = async function (opts) {
         const mediaObject = opts?.mediaObject;
         // A caller that brings no media object offers nothing to measure.
         if (!mediaObject) return original.call(this, opts);
+        // Queued work is timed from the wrong instant. `preloader.enqueue` and
+        // `loadSequence.enqueue` sit INSIDE the function wrapped here, so for
+        // these the clock would measure waiting for a slot - at zero bytes,
+        // indistinguishable from a stall - rather than transferring. The
+        // downloads this exists for take neither flag and are never queued.
+        if (opts.isPreload === true || opts.shouldSequenceDownload === true)
+            return original.call(this, opts);
 
+        // Every attempt starts clean, so a verdict can only ever describe the
+        // download it came from.
+        forgetStall(mediaObject);
         const download = original.call(this, opts);
         const watchdog = whenStalled(mediaObject);
         try {
@@ -122,43 +231,14 @@ exports.InjectMediaStallWatchdog = () => {
                 watchdog.promise,
             ]);
             if (!stall) return await download;
-
-            window.__metrics?.safeDiagLog?.('info', 'MEDIA_DOWNLOAD_STALLED', {
-                type: opts.type,
-                loadedSize: stall.loadedSize,
-                expectedSize: mediaObject.size ?? null,
-                elapsedMs: stall.elapsedMs,
-                directPath: opts.directPath?.slice(0, 80) ?? null,
-            });
-
-            // Aborts the request WhatsApp is already listening on, which also
-            // releases the one promise every message with this filehash awaits.
-            cancelDownloadMedia(mediaObject);
-
-            // Bounded on purpose. A download that beat the abort by a hair
-            // still has its bytes and they win; anything else is the stall,
-            // including an abort that never lands.
-            const settled = deadline(ABORT_SETTLE_MS, null);
             try {
-                const outcome = await Promise.race([
-                    download.then(
-                        (bytes) => ({ bytes }),
-                        (error) => ({ error }),
-                    ),
-                    settled.promise,
-                ]);
-                if (outcome && 'bytes' in outcome) return outcome.bytes;
-
-                // Read by resolveMediaBlob, so a stall is reported as itself
-                // rather than as the FETCHING it would otherwise look like.
-                mediaObject.__downloadStalled = true;
-                // WhatsApp's own AbortError when we have it, an equivalent when
-                // the abort never landed. It is that name which makes WhatsApp
-                // unwind without setting NEED_POKE, and so keeps a stall clear
-                // of the re-upload request - itself a wait with no timeout.
-                throw outcome?.error ?? abortError();
-            } finally {
-                settled.stop();
+                return await cancelAndSettle(mediaObject, download);
+            } catch (stalled) {
+                // Reported only once the stall is confirmed. Logging on
+                // detection would count the downloads that beat the abort and
+                // returned their bytes, which are successes.
+                report(opts, mediaObject, stall);
+                throw stalled;
             }
         } finally {
             watchdog.stop();
