@@ -188,6 +188,46 @@ describe('media stall watchdog', function () {
         expect(mediaObject.__downloadStalled).to.equal(undefined);
     });
 
+    it('sees a stall on a media object that already downloaded once', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        // WhatsApp never resets `loadedSize`, so a re-download after a cache
+        // eviction starts with the previous attempt's full byte count. Reading
+        // that as progress would hide the stall completely.
+        const mediaObject = { loadedSize: 200 * KB, size: 200 * KB };
+
+        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const settled = result.catch((err) => err);
+
+        await clock.tickAsync(20000);
+
+        expect(world.cancelled).to.deep.equal([mediaObject]);
+        expect((await settled).name).to.equal('AbortError');
+    });
+
+    it('follows the counter down when a fresh transfer restarts it', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        const mediaObject = { loadedSize: 200 * KB, size: 2 * 1024 * KB };
+
+        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const settled = result.then(
+            (v) => v,
+            (e) => e,
+        );
+        // The new transfer's first progress event drops the counter to near
+        // zero, then climbs healthily. A naive delta would go negative here.
+        await clock.tickAsync(1000);
+        mediaObject.loadedSize = 0;
+        const feed = progressing(mediaObject, clock, 11 * KB);
+        await clock.tickAsync(60000);
+        clearInterval(feed);
+
+        expect(world.cancelled).to.be.empty;
+        world.inFlight().resolve('bytes');
+        expect(await settled).to.equal('bytes');
+    });
+
     it('gives up on an abort that never lands, rather than waiting on it', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);

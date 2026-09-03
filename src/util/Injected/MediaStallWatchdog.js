@@ -96,10 +96,19 @@ exports.InjectMediaStallWatchdog = () => {
      */
     const whenStalled = (mediaObject) => {
         const startedAt = Date.now();
+        // `loadedSize` is never reset - not by `clearBlob`, not by the INIT
+        // consolidate - so a media object that already completed a download
+        // still carries its full byte count. Measure what THIS attempt
+        // delivers, or a re-download after a cache eviction reads the old
+        // total as healthy progress and the stall is never seen. A decrease
+        // means WhatsApp's counter restarted, so follow it down.
+        let baseline = mediaObject.loadedSize || 0;
         let timer = null;
         const promise = new Promise((resolve) => {
             timer = setInterval(() => {
-                const loadedSize = mediaObject.loadedSize || 0;
+                const current = mediaObject.loadedSize || 0;
+                if (current < baseline) baseline = current;
+                const loadedSize = current - baseline;
                 const elapsedMs = Date.now() - startedAt;
                 if (hasStalled(loadedSize, elapsedMs))
                     resolve({ loadedSize, elapsedMs });
