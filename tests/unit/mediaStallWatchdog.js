@@ -324,6 +324,30 @@ describe('media stall watchdog', function () {
         await neverArmsFor(world, clock, 'shouldSequenceDownload');
     });
 
+    it('still ends as an abort when the cancel itself throws', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        const mediaObject = { loadedSize: 0, size: 200 * KB };
+        // Letting this escape would hand WhatsApp a non-abort failure, which it
+        // routes to NEED_POKE - and NEED_POKE is answered by the re-upload
+        // request, the unbounded wait this whole file exists to stay clear of.
+        world.setOnCancel(() => {
+            throw new Error('cancelDownloadMedia blew up');
+        });
+
+        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const settled = result.catch((err) => err);
+        await clock.tickAsync(20000 + 6000);
+        const err = await settled;
+
+        expect(err.name).to.equal('AbortError');
+        expect(world.stalls().consume(mediaObject)).to.equal(true);
+        expect(clock.countTimers()).to.equal(0);
+        expect(world.logs.map((l) => l.event)).to.include(
+            'MEDIA_DOWNLOAD_CANCEL_FAILED',
+        );
+    });
+
     it('does not arm for a caller that brings no media object', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);

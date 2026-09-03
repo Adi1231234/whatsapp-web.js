@@ -158,9 +158,22 @@ exports.InjectMediaStallWatchdog = () => {
      * the very defect this file exists to remove.
      */
     const cancelAndSettle = async (mediaObject, download) => {
-        // Aborts the request WhatsApp is already listening on, which also
-        // releases the one promise every message with this filehash awaits.
-        cancelDownloadMedia(mediaObject);
+        try {
+            // Aborts the request WhatsApp is already listening on, which also
+            // releases the one promise every message with this filehash awaits.
+            cancelDownloadMedia(mediaObject);
+        } catch (cancelFailed) {
+            // Swallowed deliberately. Letting this escape would hand WhatsApp a
+            // failure that is not an abort, which it routes to NEED_POKE - and
+            // NEED_POKE is answered by the re-upload request, a wait with no
+            // timeout of its own. The bound below still ends this download, and
+            // the verdict below is still the honest one.
+            window.__metrics?.safeDiagLog?.(
+                'warn',
+                'MEDIA_DOWNLOAD_CANCEL_FAILED',
+                { message: String(cancelFailed?.message || cancelFailed) },
+            );
+        }
         const settled = deadline(ABORT_SETTLE_MS, null);
         try {
             const outcome = await Promise.race([
