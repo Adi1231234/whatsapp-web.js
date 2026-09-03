@@ -1816,6 +1816,21 @@ exports.LoadUtils = () => {
         // ERROR_MISSING. This is WhatsApp's own primitive for that wait.
         await msg.mediaObject?.resolveWhenConsolidated();
 
+        // A download the watchdog cancelled for lack of progress. Reported as
+        // itself - it would otherwise read as the FETCHING it was left in, which
+        // the host does not retry. Checked before the RMR recovery below so a
+        // stall can never be answered by a re-upload request, which has no
+        // timeout of its own. The flag is consumed: the next attempt is fresh.
+        if (msg.mediaObject?.__downloadStalled) {
+            delete msg.mediaObject.__downloadStalled;
+            window.onDiagLog?.(
+                'warn',
+                'resolveMediaBlob: download stalled',
+                JSON.stringify({ id: msgId, resolveError }),
+            );
+            return fail('STALLED');
+        }
+
         // RMR recovery: if resolve failed (NEED_POKE), mark entry off-server to force RMR
         if (msg.mediaData.mediaStage === 'NEED_POKE') {
             var entry = msg.mediaObject?.entries?.getDownloadEntry?.(true);

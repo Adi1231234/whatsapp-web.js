@@ -2579,6 +2579,10 @@ declare namespace WAWebJS {
      * WhatsApp's `MediaDataStage` when the fetch gave up. Left open because
      * WhatsApp owns the list. `null`: no message. `undefined`: never reached
      * the page.
+     *
+     * `'STALLED'` is the one value that is ours: a download the stall watchdog
+     * cancelled because it had stopped delivering bytes. WhatsApp has no stage
+     * for that, and it would otherwise be indistinguishable from `'FETCHING'`.
      */
     export type MediaStage = string | null;
 
