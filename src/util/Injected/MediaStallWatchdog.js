@@ -16,9 +16,20 @@
  * Cancelling is therefore not impatience - it is the only way to turn a stall
  * into the error that unlocks WhatsApp's own retry.
  *
- * Wraps `downloadAndMaybeDecrypt` rather than the caller so that WhatsApp's own
- * auto-downloads are covered too: they are ~70% of images, they share one
- * promise per filehash, and a stalled one hangs every message waiting on it.
+ * Wraps `MmsV4.downloadMedia` rather than the caller so that WhatsApp's own
+ * auto-downloads are covered too: they reach the same function with the same
+ * media object, they are ~70% of images, they share one promise per filehash,
+ * and a stalled one hangs every message waiting on it.
+ *
+ * One deliberate consequence of watching here. The re-upload request is inside
+ * this function - `downloadManager.rmr({mediaObject, signal, ...})` - and it is
+ * a wait with **no timeout and no reject of its own**; its promise is only ever
+ * settled by an inbound notification that may never arrive. It takes the same
+ * signal the cancel aborts and `WAMemoizeConcurrent` races that signal, so this
+ * bounds that wait too. Media that genuinely needs a re-upload is therefore
+ * reported as `STALLED` after the grace instead of waiting indefinitely, and the
+ * retry re-issues the request - the abort frees the memo keyed on its filehash.
+ * Bounded and retried is the point; the unbounded wait is what loses pictures.
  */
 exports.InjectMediaStallWatchdog = () => {
     // `WAWebMediaMmsV4Download.downloadMedia`, NOT
