@@ -185,8 +185,10 @@ describe('media stall watchdog', function () {
         await clock.tickAsync(20000);
 
         expect(await result).to.equal('bytes');
-        // Nothing failed, so nothing may be reported as a stall.
+        // Nothing failed, so nothing may be reported as a stall - neither the
+        // mark the host reads, nor the metric anyone counts.
         expect(world.stalls().consume(mediaObject)).to.equal(false);
+        expect(world.logs).to.be.empty;
     });
 
     it('sees a stall on a media object that already downloaded once', async function () {
@@ -268,6 +270,58 @@ describe('media stall watchdog', function () {
 
         expect(await second).to.equal('bytes');
         expect(world.stalls().consume(mediaObject)).to.equal(false);
+    });
+
+    it('republishes its reader after a re-sync wipes window.WWebJS', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        const wrapped = world.manager.downloadAndMaybeDecrypt;
+
+        // What a re-sync actually does: `LoadUtils` runs again and assigns
+        // `window.WWebJS = {}`, then the watchdog is injected again.
+        global.window.WWebJS = {};
+        evaluateInPage(InjectMediaStallWatchdog);
+
+        // The wrapper is installed once, but the reader must come back - and
+        // must share the set the already-installed wrapper marks into.
+        expect(world.manager.downloadAndMaybeDecrypt).to.equal(wrapped);
+        expect(world.stalls()).to.not.equal(undefined);
+
+        const mediaObject = { loadedSize: 0, size: 200 * KB };
+        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const settled = result.catch((err) => err);
+        await clock.tickAsync(20000);
+        await settled;
+
+        expect(world.stalls().consume(mediaObject)).to.equal(true);
+    });
+
+    // WhatsApp enqueues these INSIDE the wrapped function, so the clock would
+    // measure the wait for a slot, at zero bytes, and cancel work that had not
+    // begun. The downloads this watchdog exists for take neither flag.
+    const neverArmsFor = async (world, clock, flag) => {
+        const mediaObject = { loadedSize: 0, size: 200 * KB };
+        const result = world.manager.downloadAndMaybeDecrypt({
+            mediaObject,
+            [flag]: true,
+        });
+        expect(clock.countTimers()).to.equal(0);
+        await clock.tickAsync(60000);
+        expect(world.cancelled).to.be.empty;
+        world.inFlight().resolve('bytes');
+        expect(await result).to.equal('bytes');
+    };
+
+    it('does not arm for a preload, which waits in a queue', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        await neverArmsFor(world, clock, 'isPreload');
+    });
+
+    it('does not arm for a sequenced download, which waits in a queue', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        await neverArmsFor(world, clock, 'shouldSequenceDownload');
     });
 
     it('does not arm for a caller that brings no media object', async function () {

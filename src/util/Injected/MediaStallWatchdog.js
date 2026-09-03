@@ -22,13 +22,7 @@
  */
 exports.InjectMediaStallWatchdog = () => {
     const manager = window.require('WAWebDownloadManager').downloadManager;
-    // Re-injected on every re-sync; a second wrapper would double every timer.
-    if (!manager || manager.__mediaStallWatchdogInstalled) return;
-    manager.__mediaStallWatchdogInstalled = true;
-
-    const { cancelDownloadMedia } = window.require(
-        'WAWebMediaCancelDownloadMsg',
-    );
+    if (!manager) return;
 
     /**
      * The one place that knows a download stalled.
@@ -39,8 +33,17 @@ exports.InjectMediaStallWatchdog = () => {
      * every fresh attempt clears it, so a verdict can only ever describe the
      * download it came from. A `WeakSet` rather than a property because the
      * media object is WhatsApp's, and this must leave no trace on it.
+     *
+     * Kept on the manager and republished on EVERY injection, above the
+     * install guard. `LoadUtils` re-runs on each re-sync and assigns
+     * `window.WWebJS = {}`, so a reader published only once is destroyed by the
+     * first re-sync - after which every stall would quietly read as the
+     * FETCHING it was left in, which the host does not retry. The set itself
+     * must outlive that, or the wrapper below would mark into one instance
+     * while the reader consulted another.
      */
-    const stalls = new WeakSet();
+    const stalls =
+        manager.__mediaStalls || (manager.__mediaStalls = new WeakSet());
     const markStalled = (mediaObject) => stalls.add(mediaObject);
     const forgetStall = (mediaObject) => stalls.delete(mediaObject);
     window.WWebJS = window.WWebJS || {};
@@ -49,6 +52,14 @@ exports.InjectMediaStallWatchdog = () => {
         consume: (mediaObject) =>
             mediaObject ? stalls.delete(mediaObject) : false,
     };
+
+    // Re-injected on every re-sync; a second wrapper would double every timer.
+    if (manager.__mediaStallWatchdogInstalled) return;
+    manager.__mediaStallWatchdogInstalled = true;
+
+    const { cancelDownloadMedia } = window.require(
+        'WAWebMediaCancelDownloadMsg',
+    );
 
     /**
      * Below this a download is not slow, it is stopped.
@@ -188,6 +199,13 @@ exports.InjectMediaStallWatchdog = () => {
         const mediaObject = opts?.mediaObject;
         // A caller that brings no media object offers nothing to measure.
         if (!mediaObject) return original.call(this, opts);
+        // Queued work is timed from the wrong instant. `preloader.enqueue` and
+        // `loadSequence.enqueue` sit INSIDE the function wrapped here, so for
+        // these the clock would measure waiting for a slot - at zero bytes,
+        // indistinguishable from a stall - rather than transferring. The
+        // downloads this exists for take neither flag and are never queued.
+        if (opts.isPreload === true || opts.shouldSequenceDownload === true)
+            return original.call(this, opts);
 
         // Every attempt starts clean, so a verdict can only ever describe the
         // download it came from.
@@ -200,8 +218,15 @@ exports.InjectMediaStallWatchdog = () => {
                 watchdog.promise,
             ]);
             if (!stall) return await download;
-            report(opts, mediaObject, stall);
-            return await cancelAndSettle(mediaObject, download);
+            try {
+                return await cancelAndSettle(mediaObject, download);
+            } catch (stalled) {
+                // Reported only once the stall is confirmed. Logging on
+                // detection would count the downloads that beat the abort and
+                // returned their bytes, which are successes.
+                report(opts, mediaObject, stall);
+                throw stalled;
+            }
         } finally {
             watchdog.stop();
         }
