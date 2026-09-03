@@ -557,6 +557,22 @@ declare namespace WAWebJS {
             ) => void,
         ): this;
 
+        /**
+         * Emitted for a media message that appeared in the store without
+         * WhatsApp announcing it as new.
+         *
+         * These carry `isNewMsg: false`, so the ordinary `message` event never
+         * fires for them. Only media-bearing ones are emitted: the rest is
+         * history the store loads by the hundred on every connect.
+         */
+        on(
+            event: 'message_backfilled',
+            listener: (
+                /** The message that was already in the store */
+                message: Message,
+            ) => void,
+        ): this;
+
         /** Emitted when a new message ciphertext is received  */
         on(
             event: 'message_ciphertext',
@@ -627,6 +643,25 @@ declare namespace WAWebJS {
                 /** State the chat was previously in */
                 prevState: boolean,
             ) => void,
+        ): this;
+
+        /**
+         * Emitted when WhatsApp has finished delivering the messages it held
+         * while this client was disconnected.
+         *
+         * Fires on every connect, with a backlog or without one, and only once
+         * WhatsApp has drained its own offline queue into the local store.
+         *
+         * `messageCount` is how many messages the server announced for this
+         * delivery, so 0 means nothing is in flight and a consumer waiting for
+         * the burst has nothing to wait for. WhatsApp's counter starts at -1
+         * and is clamped to 0, so a count of 0 means EITHER the server said
+         * zero or it never announced anything - `previewReceived` is what tells
+         * those apart.
+         */
+        on(
+            event: 'offline_delivery_end',
+            listener: (info: OfflineDeliveryInfo) => void,
         ): this;
 
         /** Emitted when loading screen is appearing */
@@ -1022,6 +1057,14 @@ declare namespace WAWebJS {
     }
 
     /** Events that can be emitted by the client */
+    /** What one offline delivery carried, reported as it ends. */
+    export interface OfflineDeliveryInfo {
+        /** Messages the server announced for this delivery. 0 = nothing in flight. */
+        messageCount: number;
+        /** Whether the server announced anything at all for this delivery. */
+        previewReceived: boolean;
+    }
+
     export enum Events {
         AUTHENTICATED = 'authenticated',
         AUTHENTICATION_FAILURE = 'auth_failure',
@@ -1029,6 +1072,7 @@ declare namespace WAWebJS {
         CHAT_REMOVED = 'chat_removed',
         CHAT_ARCHIVED = 'chat_archived',
         MESSAGE_RECEIVED = 'message',
+        MESSAGE_BACKFILLED = 'message_backfilled',
         MESSAGE_CIPHERTEXT = 'message_ciphertext',
         MESSAGE_CIPHERTEXT_FAILED = 'message_ciphertext_failed',
         MESSAGE_CREATE = 'message_create',
@@ -1048,6 +1092,7 @@ declare namespace WAWebJS {
         QR_RECEIVED = 'qr',
         CODE_RECEIVED = 'code',
         LOADING_SCREEN = 'loading_screen',
+        OFFLINE_DELIVERY_END = 'offline_delivery_end',
         CALL = 'call',
         DISCONNECTED = 'disconnected',
         STATE_CHANGED = 'change_state',
