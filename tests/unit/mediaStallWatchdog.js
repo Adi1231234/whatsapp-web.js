@@ -8,43 +8,79 @@ const { evaluateInPage } = require('./evaluateBoundary');
 const KB = 1024;
 
 /**
+ * The options `WAWebMediaMmsV4Download.downloadMedia` is really called with,
+ * copied from a live page rather than invented.
+ *
+ * This matters more than it looks. The watchdog first wrapped
+ * `downloadManager.downloadAndMaybeDecrypt`, whose options are
+ * `{directPath, encFilehash, filehash, signal, onProgress, ...}` and carry **no
+ * media object at all** - so it returned early on every real download and was
+ * inert in production. Every test passed, because the double invented a
+ * `mediaObject` the real caller never passes. A double that does not match the
+ * real shape hides exactly the bug it was written to catch.
+ */
+const realOpts = (mediaObject, extra) => ({
+    mimetype: 'image/jpeg',
+    mediaObject,
+    downloadEvenIfExpensive: true,
+    mediaType: 'image',
+    rmrReason: 1,
+    rmrData: undefined,
+    downloadOrigin: null,
+    isVcardOverMmsDocument: false,
+    mode: 'manual',
+    isAutoDownload: false,
+    isViewOnce: false,
+    chatWid: null,
+    shouldSequenceDownload: false,
+    shouldThrow: undefined,
+    experienceIds: undefined,
+    ...extra,
+});
+
+/**
  * The real shape of a media download.
  *
- * A stalled one never resolves and never rejects on its own - that is the whole
- * defect - so the double must settle ONLY when WhatsApp's cancel path aborts it,
- * and must then reject with an `AbortError`, because it is that specific name
- * that makes WhatsApp unwind without setting NEED_POKE. A double that rejected
- * on its own, or with a plain Error, would pass while hiding both.
+ * A stalled one never settles on its own - that is the whole defect - so the
+ * double settles ONLY when WhatsApp's cancel path reaches it, and then in the
+ * way WhatsApp really behaves at this layer: see `onCancel` below.
  */
 function page() {
     const logs = [];
     const cancelled = [];
     let inFlight = null;
-    // What WhatsApp's abort does to the in-flight request. Overridable, because
-    // a download can also finish in the instant the cancel is landing.
-    let onCancel = () => {
-        const err = new Error('The operation was aborted.');
-        err.name = 'AbortError';
-        inFlight.reject(err);
-    };
+    // What an abort really does at this layer. `MmsV4.downloadMedia` catches
+    // its own `AbortError` (`if (e.name === ABORT_ERROR) ... return`) and
+    // RESOLVES with `undefined` - the very value it also resolves with on
+    // success - leaving `downloadStage` wherever the failure left it. A double
+    // that rejected here would hide the fact that the return value cannot tell
+    // a cancelled download from a finished one.
+    let onCancel = () => inFlight.resolve(undefined);
 
-    const manager = {
-        downloadAndMaybeDecrypt(opts) {
+    // The module under test wraps this module's own `downloadMedia`, and takes
+    // `cancelDownloadMedia` from the same object.
+    const mms = {
+        downloadMedia(opts) {
             return new Promise((resolve, reject) => {
                 inFlight = { resolve, reject, opts };
             });
+        },
+        cancelDownloadMedia(mediaObject) {
+            cancelled.push(mediaObject);
+            onCancel();
         },
     };
 
     global.window = {
         require(name) {
-            if (name === 'WAWebDownloadManager')
-                return { downloadManager: manager };
-            if (name === 'WAWebMediaCancelDownloadMsg')
+            if (name === 'WAWebMediaMmsV4Download') return mms;
+            if (name === 'WAWebMediaTypes')
                 return {
-                    cancelDownloadMedia(mediaObject) {
-                        cancelled.push(mediaObject);
-                        onCancel();
+                    DownloadStage: {
+                        RESOLVED: 'RESOLVED',
+                        NEED_POKE: 'NEED_POKE',
+                        FETCHING: 'FETCHING',
+                        INIT: 'INIT',
                     },
                 };
             throw new Error(`unexpected module ${name}`);
@@ -56,7 +92,7 @@ function page() {
     };
 
     return {
-        manager,
+        mms,
         logs,
         cancelled,
         stalls: () => global.window.WWebJS.mediaStalls,
@@ -67,8 +103,14 @@ function page() {
     };
 }
 
+/** What WhatsApp leaves behind when a download genuinely finishes. */
+function succeed(world, mediaObject, value) {
+    mediaObject.downloadStage = 'RESOLVED';
+    world.inFlight().resolve(value);
+}
+
 /** A download that is progressing at `bytesPerSec`, driven by the fake clock. */
-function progressing(mediaObject, clock, bytesPerSec) {
+function progressing(mediaObject, bytesPerSec) {
     return setInterval(() => {
         mediaObject.loadedSize = (mediaObject.loadedSize || 0) + bytesPerSec;
     }, 1000);
@@ -94,39 +136,44 @@ describe('media stall watchdog', function () {
         delete global.window;
     });
 
+    it('wraps the layer that actually carries the media object', function () {
+        const world = page();
+        const before = world.mms.downloadMedia;
+        evaluateInPage(InjectMediaStallWatchdog);
+        // The bug this replaces: wrapping a layer whose options have no media
+        // object, where the watchdog can neither measure nor cancel.
+        expect(world.mms.downloadMedia).to.not.equal(before);
+        expect(world.mms.__mediaStallWatchdogInstalled).to.equal(true);
+        expect(world.stalls()).to.not.equal(undefined);
+    });
+
     it('passes a download that completes through untouched', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
-        const mediaObject = { loadedSize: 0, size: 200 * KB };
+        const mo = { loadedSize: 0, size: 200 * KB };
 
-        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
-        world.inFlight().resolve('bytes');
+        const result = world.mms.downloadMedia(realOpts(mo));
+        succeed(world, mo, 'bytes');
 
         expect(await result).to.equal('bytes');
         expect(world.cancelled).to.be.empty;
-        // The interval must not outlive the download.
         expect(clock.countTimers()).to.equal(0);
     });
 
     it('cancels a download that never delivers a byte', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
-        const mediaObject = { loadedSize: 0, size: 200 * KB };
+        const mo = { loadedSize: 0, size: 200 * KB, filehash: 'abc123def456' };
 
-        const result = world.manager.downloadAndMaybeDecrypt({
-            mediaObject,
-            type: 'image',
-            directPath: '/v/t62/stalled.enc',
-        });
+        const result = world.mms.downloadMedia(realOpts(mo));
         const settled = result.catch((err) => err);
 
         await clock.tickAsync(20000);
         const err = await settled;
 
-        expect(world.cancelled).to.deep.equal([mediaObject]);
-        // The AbortError must survive: WhatsApp routes on that name.
+        expect(world.cancelled).to.deep.equal([mo]);
         expect(err.name).to.equal('AbortError');
-        expect(world.stalls().consume(mediaObject)).to.equal(true);
+        expect(world.stalls().consume(mo)).to.equal(true);
         expect(clock.countTimers()).to.equal(0);
 
         const [log] = world.logs;
@@ -140,10 +187,10 @@ describe('media stall watchdog', function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
         // 11 KB/s: the slowest download measured fleet-wide that still finished.
-        const mediaObject = { loadedSize: 0, size: 2 * 1024 * KB };
-        const feed = progressing(mediaObject, clock, 11 * KB);
+        const mo = { loadedSize: 0, size: 2048 * KB };
+        const feed = progressing(mo, 11 * KB);
 
-        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const result = world.mms.downloadMedia(realOpts(mo));
         const settled = result.then(
             (v) => v,
             (e) => e,
@@ -153,41 +200,42 @@ describe('media stall watchdog', function () {
         clearInterval(feed);
 
         expect(world.cancelled).to.be.empty;
-        world.inFlight().resolve('bytes');
+        succeed(world, mo, 'bytes');
         expect(await settled).to.equal('bytes');
     });
 
     it('cancels a download that delivers a trickle below the floor', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
-        // 200 B/s - an order of magnitude under anything ever measured.
-        const mediaObject = { loadedSize: 0, size: 2 * 1024 * KB };
-        const feed = progressing(mediaObject, clock, 200);
+        const mo = { loadedSize: 0, size: 2048 * KB };
+        const feed = progressing(mo, 200);
 
-        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const result = world.mms.downloadMedia(realOpts(mo));
         const settled = result.catch((err) => err);
 
         await clock.tickAsync(20000);
         clearInterval(feed);
 
-        expect(world.cancelled).to.deep.equal([mediaObject]);
+        expect(world.cancelled).to.deep.equal([mo]);
         expect((await settled).name).to.equal('AbortError');
     });
 
     it('keeps the bytes of a download that beat the abort', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
-        const mediaObject = { loadedSize: 0, size: 200 * KB };
-        // The cancel lands, but this download had already finished.
-        world.setOnCancel(() => world.inFlight().resolve('bytes'));
+        const mo = { loadedSize: 0, size: 200 * KB };
+        // It finished in the instant the cancel was landing, so WhatsApp's own
+        // state says RESOLVED - the only thing that distinguishes this from a
+        // swallowed abort.
+        world.setOnCancel(() => succeed(world, mo, 'bytes'));
 
-        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const result = world.mms.downloadMedia(realOpts(mo));
         await clock.tickAsync(20000);
 
         expect(await result).to.equal('bytes');
         // Nothing failed, so nothing may be reported as a stall - neither the
         // mark the host reads, nor the metric anyone counts.
-        expect(world.stalls().consume(mediaObject)).to.equal(false);
+        expect(world.stalls().consume(mo)).to.equal(false);
         expect(world.logs).to.be.empty;
     });
 
@@ -195,139 +243,58 @@ describe('media stall watchdog', function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
         // WhatsApp never resets `loadedSize`, so a re-download after a cache
-        // eviction starts with the previous attempt's full byte count. Reading
-        // that as progress would hide the stall completely.
-        const mediaObject = { loadedSize: 200 * KB, size: 200 * KB };
+        // eviction starts with the previous attempt's full byte count.
+        const mo = { loadedSize: 200 * KB, size: 200 * KB };
 
-        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const result = world.mms.downloadMedia(realOpts(mo));
         const settled = result.catch((err) => err);
-
         await clock.tickAsync(20000);
 
-        expect(world.cancelled).to.deep.equal([mediaObject]);
+        expect(world.cancelled).to.deep.equal([mo]);
         expect((await settled).name).to.equal('AbortError');
     });
 
     it('follows the counter down when a fresh transfer restarts it', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
-        const mediaObject = { loadedSize: 200 * KB, size: 2 * 1024 * KB };
+        const mo = { loadedSize: 200 * KB, size: 2048 * KB };
 
-        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const result = world.mms.downloadMedia(realOpts(mo));
         const settled = result.then(
             (v) => v,
             (e) => e,
         );
-        // The new transfer's first progress event drops the counter to near
-        // zero, then climbs healthily. A naive delta would go negative here.
         await clock.tickAsync(1000);
-        mediaObject.loadedSize = 0;
-        const feed = progressing(mediaObject, clock, 11 * KB);
+        mo.loadedSize = 0;
+        const feed = progressing(mo, 11 * KB);
         await clock.tickAsync(60000);
         clearInterval(feed);
 
         expect(world.cancelled).to.be.empty;
-        world.inFlight().resolve('bytes');
+        succeed(world, mo, 'bytes');
         expect(await settled).to.equal('bytes');
     });
 
     it('gives up on an abort that never lands, rather than waiting on it', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
-        const mediaObject = { loadedSize: 0, size: 200 * KB };
-        // WhatsApp registered no abort for this media object, so cancelling
-        // settles nothing. Waiting on that unbounded would be the original bug.
+        const mo = { loadedSize: 0, size: 200 * KB };
         world.setOnCancel(() => {});
 
-        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const result = world.mms.downloadMedia(realOpts(mo));
         const settled = result.catch((err) => err);
-
         await clock.tickAsync(20000 + 6000);
         const err = await settled;
 
         expect(err.name).to.equal('AbortError');
-        expect(world.stalls().consume(mediaObject)).to.equal(true);
+        expect(world.stalls().consume(mo)).to.equal(true);
         expect(clock.countTimers()).to.equal(0);
-    });
-
-    it('never attributes an earlier stall to a download that succeeded', async function () {
-        const world = page();
-        evaluateInPage(InjectMediaStallWatchdog);
-        // The media object is shared by filehash, and one of WhatsApp's own
-        // auto-downloads can stall on it with nobody to read the verdict.
-        const mediaObject = { loadedSize: 0, size: 200 * KB };
-        const stalledOne = world.manager.downloadAndMaybeDecrypt({
-            mediaObject,
-        });
-        const ignored = stalledOne.catch(() => {});
-        await clock.tickAsync(20000);
-        await ignored;
-
-        // A later download of the same media succeeds. The stale mark must not
-        // survive into it, or a saved picture is reported as lost.
-        const second = world.manager.downloadAndMaybeDecrypt({ mediaObject });
-        world.inFlight().resolve('bytes');
-
-        expect(await second).to.equal('bytes');
-        expect(world.stalls().consume(mediaObject)).to.equal(false);
-    });
-
-    it('republishes its reader after a re-sync wipes window.WWebJS', async function () {
-        const world = page();
-        evaluateInPage(InjectMediaStallWatchdog);
-        const wrapped = world.manager.downloadAndMaybeDecrypt;
-
-        // What a re-sync actually does: `LoadUtils` runs again and assigns
-        // `window.WWebJS = {}`, then the watchdog is injected again.
-        global.window.WWebJS = {};
-        evaluateInPage(InjectMediaStallWatchdog);
-
-        // The wrapper is installed once, but the reader must come back - and
-        // must share the set the already-installed wrapper marks into.
-        expect(world.manager.downloadAndMaybeDecrypt).to.equal(wrapped);
-        expect(world.stalls()).to.not.equal(undefined);
-
-        const mediaObject = { loadedSize: 0, size: 200 * KB };
-        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
-        const settled = result.catch((err) => err);
-        await clock.tickAsync(20000);
-        await settled;
-
-        expect(world.stalls().consume(mediaObject)).to.equal(true);
-    });
-
-    // WhatsApp enqueues these INSIDE the wrapped function, so the clock would
-    // measure the wait for a slot, at zero bytes, and cancel work that had not
-    // begun. The downloads this watchdog exists for take neither flag.
-    const neverArmsFor = async (world, clock, flag) => {
-        const mediaObject = { loadedSize: 0, size: 200 * KB };
-        const result = world.manager.downloadAndMaybeDecrypt({
-            mediaObject,
-            [flag]: true,
-        });
-        expect(clock.countTimers()).to.equal(0);
-        await clock.tickAsync(60000);
-        expect(world.cancelled).to.be.empty;
-        world.inFlight().resolve('bytes');
-        expect(await result).to.equal('bytes');
-    };
-
-    it('does not arm for a preload, which waits in a queue', async function () {
-        const world = page();
-        evaluateInPage(InjectMediaStallWatchdog);
-        await neverArmsFor(world, clock, 'isPreload');
-    });
-
-    it('does not arm for a sequenced download, which waits in a queue', async function () {
-        const world = page();
-        evaluateInPage(InjectMediaStallWatchdog);
-        await neverArmsFor(world, clock, 'shouldSequenceDownload');
     });
 
     it('still ends as an abort when the cancel itself throws', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
-        const mediaObject = { loadedSize: 0, size: 200 * KB };
+        const mo = { loadedSize: 0, size: 200 * KB };
         // Letting this escape would hand WhatsApp a non-abort failure, which it
         // routes to NEED_POKE - and NEED_POKE is answered by the re-upload
         // request, the unbounded wait this whole file exists to stay clear of.
@@ -335,36 +302,91 @@ describe('media stall watchdog', function () {
             throw new Error('cancelDownloadMedia blew up');
         });
 
-        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const result = world.mms.downloadMedia(realOpts(mo));
         const settled = result.catch((err) => err);
         await clock.tickAsync(20000 + 6000);
         const err = await settled;
 
         expect(err.name).to.equal('AbortError');
-        expect(world.stalls().consume(mediaObject)).to.equal(true);
+        expect(world.stalls().consume(mo)).to.equal(true);
         expect(clock.countTimers()).to.equal(0);
         expect(world.logs.map((l) => l.event)).to.include(
             'MEDIA_DOWNLOAD_CANCEL_FAILED',
         );
     });
 
+    it('never attributes an earlier stall to a download that succeeded', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        // The media object is shared by filehash, and one of WhatsApp's own
+        // auto-downloads can stall on it with nobody to read the verdict.
+        const mo = { loadedSize: 0, size: 200 * KB };
+        const first = world.mms.downloadMedia(realOpts(mo));
+        const ignored = first.catch(() => {});
+        await clock.tickAsync(20000);
+        await ignored;
+
+        const second = world.mms.downloadMedia(realOpts(mo));
+        succeed(world, mo, 'bytes');
+
+        expect(await second).to.equal('bytes');
+        expect(world.stalls().consume(mo)).to.equal(false);
+    });
+
+    it('republishes its reader after a re-sync wipes window.WWebJS', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        const wrapped = world.mms.downloadMedia;
+
+        // What a re-sync does: `LoadUtils` runs again and assigns
+        // `window.WWebJS = {}`, then the watchdog is injected again.
+        global.window.WWebJS = {};
+        evaluateInPage(InjectMediaStallWatchdog);
+
+        expect(world.mms.downloadMedia).to.equal(wrapped);
+        expect(world.stalls()).to.not.equal(undefined);
+
+        const mo = { loadedSize: 0, size: 200 * KB };
+        const settled = world.mms.downloadMedia(realOpts(mo)).catch((e) => e);
+        await clock.tickAsync(20000);
+        await settled;
+
+        expect(world.stalls().consume(mo)).to.equal(true);
+    });
+
+    it('does not arm for a sequenced download, which waits in a queue', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        const mo = { loadedSize: 0, size: 200 * KB };
+
+        const result = world.mms.downloadMedia(
+            realOpts(mo, { shouldSequenceDownload: true }),
+        );
+        expect(clock.countTimers()).to.equal(0);
+        await clock.tickAsync(60000);
+
+        expect(world.cancelled).to.be.empty;
+        succeed(world, mo, 'bytes');
+        expect(await result).to.equal('bytes');
+    });
+
     it('does not arm for a caller that brings no media object', async function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
 
-        const result = world.manager.downloadAndMaybeDecrypt({});
+        const result = world.mms.downloadMedia({ mediaType: 'image' });
         expect(clock.countTimers()).to.equal(0);
         world.inFlight().resolve('bytes');
         expect(await result).to.equal('bytes');
     });
 
-    it('wraps once however often it is re-injected', async function () {
+    it('wraps once however often it is re-injected', function () {
         const world = page();
         evaluateInPage(InjectMediaStallWatchdog);
-        const wrapped = world.manager.downloadAndMaybeDecrypt;
+        const wrapped = world.mms.downloadMedia;
         evaluateInPage(InjectMediaStallWatchdog);
         evaluateInPage(InjectMediaStallWatchdog);
 
-        expect(world.manager.downloadAndMaybeDecrypt).to.equal(wrapped);
+        expect(world.mms.downloadMedia).to.equal(wrapped);
     });
 });

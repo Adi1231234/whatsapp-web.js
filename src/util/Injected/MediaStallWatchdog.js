@@ -16,13 +16,32 @@
  * Cancelling is therefore not impatience - it is the only way to turn a stall
  * into the error that unlocks WhatsApp's own retry.
  *
- * Wraps `downloadAndMaybeDecrypt` rather than the caller so that WhatsApp's own
- * auto-downloads are covered too: they are ~70% of images, they share one
- * promise per filehash, and a stalled one hangs every message waiting on it.
+ * Wraps `MmsV4.downloadMedia` rather than the caller so that WhatsApp's own
+ * auto-downloads are covered too: they reach the same function with the same
+ * media object, they are ~70% of images, they share one promise per filehash,
+ * and a stalled one hangs every message waiting on it.
+ *
+ * One deliberate consequence of watching here. The re-upload request is inside
+ * this function - `downloadManager.rmr({mediaObject, signal, ...})` - and it is
+ * a wait with **no timeout and no reject of its own**; its promise is only ever
+ * settled by an inbound notification that may never arrive. It takes the same
+ * signal the cancel aborts and `WAMemoizeConcurrent` races that signal, so this
+ * bounds that wait too. Media that genuinely needs a re-upload is therefore
+ * reported as `STALLED` after the grace instead of waiting indefinitely, and the
+ * retry re-issues the request - the abort frees the memo keyed on its filehash.
+ * Bounded and retried is the point; the unbounded wait is what loses pictures.
  */
 exports.InjectMediaStallWatchdog = () => {
-    const manager = window.require('WAWebDownloadManager').downloadManager;
-    if (!manager) return;
+    // `WAWebMediaMmsV4Download.downloadMedia`, NOT
+    // `downloadManager.downloadAndMaybeDecrypt`. Verified against a live page:
+    // the download manager is handed
+    // `{directPath, encFilehash, filehash, signal, onProgress, ...}` and **no
+    // media object at all**, so a watchdog there can measure nothing and cancel
+    // nothing. This layer is handed `{mediaObject, mediaType,
+    // downloadEvenIfExpensive, rmrReason, ...}`, sits above the fetch, and is
+    // exactly what `cancelDownloadMedia` cancels.
+    const mms = window.require('WAWebMediaMmsV4Download');
+    if (!mms || typeof mms.downloadMedia !== 'function') return;
 
     /**
      * The one place that knows a download stalled.
@@ -42,8 +61,7 @@ exports.InjectMediaStallWatchdog = () => {
      * must outlive that, or the wrapper below would mark into one instance
      * while the reader consulted another.
      */
-    const stalls =
-        manager.__mediaStalls || (manager.__mediaStalls = new WeakSet());
+    const stalls = mms.__mediaStalls || (mms.__mediaStalls = new WeakSet());
     const markStalled = (mediaObject) => stalls.add(mediaObject);
     const forgetStall = (mediaObject) => stalls.delete(mediaObject);
     window.WWebJS = window.WWebJS || {};
@@ -54,12 +72,14 @@ exports.InjectMediaStallWatchdog = () => {
     };
 
     // Re-injected on every re-sync; a second wrapper would double every timer.
-    if (manager.__mediaStallWatchdogInstalled) return;
-    manager.__mediaStallWatchdogInstalled = true;
+    if (mms.__mediaStallWatchdogInstalled) return;
+    mms.__mediaStallWatchdogInstalled = true;
 
-    const { cancelDownloadMedia } = window.require(
-        'WAWebMediaCancelDownloadMsg',
-    );
+    // The same module's own cancel: `WAWebMediaCancelDownloadMsg` only forwards
+    // to it, so taking it here keeps the dependency to one module.
+    const { cancelDownloadMedia } = mms;
+    // The only trustworthy "it worked" signal at this layer - see cancelAndSettle.
+    const { RESOLVED } = window.require('WAWebMediaTypes').DownloadStage;
 
     /**
      * Below this a download is not slow, it is stopped.
@@ -183,15 +203,21 @@ exports.InjectMediaStallWatchdog = () => {
                 ),
                 settled.promise,
             ]);
-            // A download that beat the abort by a hair still has its bytes, and
-            // bytes always win: the stall is only real if it failed.
-            if (outcome && 'bytes' in outcome) return outcome.bytes;
+
+            // Whether it worked is asked of WhatsApp's own state, never of the
+            // return value. This function swallows its own `AbortError`
+            // (`if (e.name === ABORT_ERROR) ... return`) and RESOLVES with
+            // `undefined` - which is also what it resolves with on success - so
+            // the settled value cannot tell a cancelled download from a
+            // finished one. Verified on a live page: a cancelled attempt left
+            // `downloadStage: NEED_POKE` and no blob.
+            if (mediaObject.downloadStage === RESOLVED) return outcome?.bytes;
 
             markStalled(mediaObject);
-            // WhatsApp's own AbortError when we have it, an equivalent when the
-            // abort never landed. It is that name which makes WhatsApp unwind
-            // without setting NEED_POKE, and so keeps a stall clear of the
-            // re-upload request - itself a wait with no timeout.
+            // WhatsApp's own AbortError when we have one, an equivalent when it
+            // swallowed it or the abort never landed. That name is what makes
+            // WhatsApp unwind without setting NEED_POKE, and so keeps a stall
+            // clear of the re-upload request - itself a wait with no timeout.
             throw outcome?.error ?? abortError();
         } finally {
             settled.stop();
@@ -200,24 +226,24 @@ exports.InjectMediaStallWatchdog = () => {
 
     const report = (opts, mediaObject, stall) =>
         window.__metrics?.safeDiagLog?.('info', 'MEDIA_DOWNLOAD_STALLED', {
-            type: opts.type,
+            type: opts.mediaType ?? null,
             loadedSize: stall.loadedSize,
             expectedSize: mediaObject.size ?? null,
             elapsedMs: stall.elapsedMs,
-            directPath: opts.directPath?.slice(0, 80) ?? null,
+            filehash: mediaObject.filehash?.slice(0, 24) ?? null,
         });
 
-    const original = manager.downloadAndMaybeDecrypt;
-    manager.downloadAndMaybeDecrypt = async function (opts) {
+    const original = mms.downloadMedia;
+    mms.downloadMedia = async function (opts) {
         const mediaObject = opts?.mediaObject;
         // A caller that brings no media object offers nothing to measure.
         if (!mediaObject) return original.call(this, opts);
         // Queued work is timed from the wrong instant. `preloader.enqueue` and
-        // `loadSequence.enqueue` sit INSIDE the function wrapped here, so for
-        // these the clock would measure waiting for a slot - at zero bytes,
-        // indistinguishable from a stall - rather than transferring. The
-        // downloads this exists for take neither flag and are never queued.
-        if (opts.isPreload === true || opts.shouldSequenceDownload === true)
+        // `loadSequence.enqueue` sit further down, inside the download manager,
+        // so for these the clock would measure waiting for a slot - at zero
+        // bytes, indistinguishable from a stall - rather than transferring. The
+        // downloads this exists for do not take the flag.
+        if (opts.shouldSequenceDownload === true)
             return original.call(this, opts);
 
         // Every attempt starts clean, so a verdict can only ever describe the
