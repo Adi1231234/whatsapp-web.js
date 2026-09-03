@@ -30,13 +30,9 @@ function page() {
 
     const manager = {
         downloadAndMaybeDecrypt(opts) {
-            let reject;
-            const promise = new Promise((res, rej) => {
-                inFlight = { resolve: res, reject: rej, opts };
-                reject = rej;
+            return new Promise((resolve, reject) => {
+                inFlight = { resolve, reject, opts };
             });
-            void reject;
-            return promise;
         },
     };
 
@@ -82,7 +78,13 @@ describe('media stall watchdog', function () {
 
     beforeEach(function () {
         clock = sinon.useFakeTimers({
-            toFake: ['setInterval', 'clearInterval', 'Date'],
+            toFake: [
+                'setInterval',
+                'clearInterval',
+                'setTimeout',
+                'clearTimeout',
+                'Date',
+            ],
         });
     });
 
@@ -184,6 +186,25 @@ describe('media stall watchdog', function () {
         expect(await result).to.equal('bytes');
         // Nothing failed, so nothing may be reported as a stall.
         expect(mediaObject.__downloadStalled).to.equal(undefined);
+    });
+
+    it('gives up on an abort that never lands, rather than waiting on it', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        const mediaObject = { loadedSize: 0, size: 200 * KB };
+        // WhatsApp registered no abort for this media object, so cancelling
+        // settles nothing. Waiting on that unbounded would be the original bug.
+        world.setOnCancel(() => {});
+
+        const result = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        const settled = result.catch((err) => err);
+
+        await clock.tickAsync(20000 + 6000);
+        const err = await settled;
+
+        expect(err.name).to.equal('AbortError');
+        expect(mediaObject.__downloadStalled).to.equal(true);
+        expect(clock.countTimers()).to.equal(0);
     });
 
     it('does not arm for a caller that brings no media object', async function () {
