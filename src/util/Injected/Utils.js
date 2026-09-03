@@ -1794,13 +1794,6 @@ exports.LoadUtils = () => {
             return fail(msg?.mediaData?.mediaStage ?? null);
         }
 
-        // Cleared before the attempt, not merely after reading it. The flag
-        // lives on the media object, which is shared by filehash and is written
-        // by any download - including one of WhatsApp's own auto-downloads,
-        // which nothing here consumes. Left over, it would report a download
-        // that actually succeeded as a stall.
-        delete msg.mediaObject?.__downloadStalled;
-
         // Always call internal downloadMedia - never skip based on
         // mediaStage, because cache eviction can leave stage=RESOLVED
         // with empty InMemoryMediaBlobCache.
@@ -1823,13 +1816,14 @@ exports.LoadUtils = () => {
         // ERROR_MISSING. This is WhatsApp's own primitive for that wait.
         await msg.mediaObject?.resolveWhenConsolidated();
 
-        // A download the watchdog cancelled for lack of progress. Reported as
-        // itself - it would otherwise read as the FETCHING it was left in, which
-        // the host does not retry. Checked before the RMR recovery below so a
-        // stall can never be answered by a re-upload request, which has no
-        // timeout of its own. The flag is consumed: the next attempt is fresh.
-        if (msg.mediaObject?.__downloadStalled) {
-            delete msg.mediaObject.__downloadStalled;
+        // A download the stall watchdog cancelled for lack of progress. Asked
+        // of the watchdog, which owns the answer and clears it on read, because
+        // WhatsApp swallows the AbortError and the reason reaches us no other
+        // way. Reported as itself - it would otherwise read as the FETCHING it
+        // was left in, which the host does not retry - and checked before the
+        // RMR recovery below, so a stall is never answered by a re-upload
+        // request, itself a wait with no timeout.
+        if (window.WWebJS.mediaStalls?.consume(msg.mediaObject)) {
             window.onDiagLog?.(
                 'warn',
                 'resolveMediaBlob: download stalled',

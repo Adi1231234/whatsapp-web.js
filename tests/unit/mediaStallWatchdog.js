@@ -59,6 +59,7 @@ function page() {
         manager,
         logs,
         cancelled,
+        stalls: () => global.window.WWebJS.mediaStalls,
         inFlight: () => inFlight,
         setOnCancel: (fn) => {
             onCancel = fn;
@@ -125,7 +126,7 @@ describe('media stall watchdog', function () {
         expect(world.cancelled).to.deep.equal([mediaObject]);
         // The AbortError must survive: WhatsApp routes on that name.
         expect(err.name).to.equal('AbortError');
-        expect(mediaObject.__downloadStalled).to.equal(true);
+        expect(world.stalls().consume(mediaObject)).to.equal(true);
         expect(clock.countTimers()).to.equal(0);
 
         const [log] = world.logs;
@@ -185,7 +186,7 @@ describe('media stall watchdog', function () {
 
         expect(await result).to.equal('bytes');
         // Nothing failed, so nothing may be reported as a stall.
-        expect(mediaObject.__downloadStalled).to.equal(undefined);
+        expect(world.stalls().consume(mediaObject)).to.equal(false);
     });
 
     it('sees a stall on a media object that already downloaded once', async function () {
@@ -243,8 +244,30 @@ describe('media stall watchdog', function () {
         const err = await settled;
 
         expect(err.name).to.equal('AbortError');
-        expect(mediaObject.__downloadStalled).to.equal(true);
+        expect(world.stalls().consume(mediaObject)).to.equal(true);
         expect(clock.countTimers()).to.equal(0);
+    });
+
+    it('never attributes an earlier stall to a download that succeeded', async function () {
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        // The media object is shared by filehash, and one of WhatsApp's own
+        // auto-downloads can stall on it with nobody to read the verdict.
+        const mediaObject = { loadedSize: 0, size: 200 * KB };
+        const stalledOne = world.manager.downloadAndMaybeDecrypt({
+            mediaObject,
+        });
+        const ignored = stalledOne.catch(() => {});
+        await clock.tickAsync(20000);
+        await ignored;
+
+        // A later download of the same media succeeds. The stale mark must not
+        // survive into it, or a saved picture is reported as lost.
+        const second = world.manager.downloadAndMaybeDecrypt({ mediaObject });
+        world.inFlight().resolve('bytes');
+
+        expect(await second).to.equal('bytes');
+        expect(world.stalls().consume(mediaObject)).to.equal(false);
     });
 
     it('does not arm for a caller that brings no media object', async function () {
