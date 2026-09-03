@@ -21,6 +21,9 @@ const {
 const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
 const { InjectMediaKeyRecovery } = require('./util/Injected/MediaKeyRecovery');
 const {
+    InjectMediaStallWatchdog,
+} = require('./util/Injected/MediaStallWatchdog');
+const {
     InjectWaLoggerHook,
     WAL_TERMINAL,
     WAL_LEVELS,
@@ -818,6 +821,13 @@ class Client extends EventEmitter {
 
                             // Inject diagnostic hooks (media download, signal/crypto, receipts, etc.)
                             await this.pupPage.evaluate(InjectDiagHooks);
+
+                            // End downloads that stop delivering bytes. Injected
+                            // before the key recovery so each of its per-type
+                            // attempts is watched on its own.
+                            await this.pupPage.evaluate(
+                                InjectMediaStallWatchdog,
+                            );
 
                             // Recover media whose keys WhatsApp Web derived
                             // under the wrong media type.
