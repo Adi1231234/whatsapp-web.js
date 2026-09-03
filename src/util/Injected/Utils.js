@@ -1794,6 +1794,13 @@ exports.LoadUtils = () => {
             return fail(msg?.mediaData?.mediaStage ?? null);
         }
 
+        // Cleared before the attempt, not merely after reading it. The flag
+        // lives on the media object, which is shared by filehash and is written
+        // by any download - including one of WhatsApp's own auto-downloads,
+        // which nothing here consumes. Left over, it would report a download
+        // that actually succeeded as a stall.
+        delete msg.mediaObject?.__downloadStalled;
+
         // Always call internal downloadMedia - never skip based on
         // mediaStage, because cache eviction can leave stage=RESOLVED
         // with empty InMemoryMediaBlobCache.
