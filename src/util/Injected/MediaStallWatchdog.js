@@ -48,10 +48,26 @@ exports.InjectMediaStallWatchdog = () => {
      *
      * `resolveMediaBlob` has to report a stall as itself, and cannot learn it
      * any other way: WhatsApp swallows the `AbortError` rather than rethrowing
-     * it, so the reason never reaches the caller. Reading it costs the mark, and
-     * every fresh attempt clears it, so a verdict can only ever describe the
-     * download it came from. A `WeakSet` rather than a property because the
-     * media object is WhatsApp's, and this must leave no trace on it.
+     * it, so the reason never reaches the caller. A `WeakSet` rather than a
+     * property because the media object is WhatsApp's, and this must leave no
+     * trace on it.
+     *
+     * **Reading does NOT clear the mark**, because one media object can have
+     * more than one reader. WhatsApp shares a single `mediaObject` across every
+     * message with the same filehash - verified on a live page, two messages,
+     * `a.mediaObject === b.mediaObject` - so two copies of one photo can be
+     * resolving at the same moment under an intake that runs them in parallel.
+     * A destructive read gave the mark to whichever finished first: measured
+     * live, one copy returned `STALLED` and the other fell through to the
+     * NEED_POKE branch and returned `NEED_POKE`, which the host does not retry,
+     * so that picture was lost. It also cost the loser a second 15s attempt
+     * through the re-upload path - 30.0s against 15.0s for the same stall.
+     *
+     * Not clearing is safe because the wrapper clears at the START of every
+     * attempt instead: the mark can only ever describe the most recent attempt
+     * on this media object, and a successful attempt has already removed it
+     * before anyone can read it. Verified live: stall -> `STALLED`, then a
+     * recovering attempt -> success with the mark already gone.
      *
      * Kept on the manager and republished on EVERY injection, above the
      * install guard. `LoadUtils` re-runs on each re-sync and assigns
@@ -66,9 +82,9 @@ exports.InjectMediaStallWatchdog = () => {
     const forgetStall = (mediaObject) => stalls.delete(mediaObject);
     window.WWebJS = window.WWebJS || {};
     window.WWebJS.mediaStalls = {
-        /** True once per stall, and only for the attempt that stalled. */
-        consume: (mediaObject) =>
-            mediaObject ? stalls.delete(mediaObject) : false,
+        /** Whether the most recent attempt on this media object stalled. */
+        stalled: (mediaObject) =>
+            mediaObject ? stalls.has(mediaObject) : false,
     };
 
     // Re-injected on every re-sync; a second wrapper would double every timer.

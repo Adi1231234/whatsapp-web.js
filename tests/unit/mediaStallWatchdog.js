@@ -173,7 +173,7 @@ describe('media stall watchdog', function () {
 
         expect(world.cancelled).to.deep.equal([mo]);
         expect(err.name).to.equal('AbortError');
-        expect(world.stalls().consume(mo)).to.equal(true);
+        expect(world.stalls().stalled(mo)).to.equal(true);
         expect(clock.countTimers()).to.equal(0);
 
         const [log] = world.logs;
@@ -235,7 +235,7 @@ describe('media stall watchdog', function () {
         expect(await result).to.equal('bytes');
         // Nothing failed, so nothing may be reported as a stall - neither the
         // mark the host reads, nor the metric anyone counts.
-        expect(world.stalls().consume(mo)).to.equal(false);
+        expect(world.stalls().stalled(mo)).to.equal(false);
         expect(world.logs).to.be.empty;
     });
 
@@ -287,7 +287,7 @@ describe('media stall watchdog', function () {
         const err = await settled;
 
         expect(err.name).to.equal('AbortError');
-        expect(world.stalls().consume(mo)).to.equal(true);
+        expect(world.stalls().stalled(mo)).to.equal(true);
         expect(clock.countTimers()).to.equal(0);
     });
 
@@ -308,7 +308,7 @@ describe('media stall watchdog', function () {
         const err = await settled;
 
         expect(err.name).to.equal('AbortError');
-        expect(world.stalls().consume(mo)).to.equal(true);
+        expect(world.stalls().stalled(mo)).to.equal(true);
         expect(clock.countTimers()).to.equal(0);
         expect(world.logs.map((l) => l.event)).to.include(
             'MEDIA_DOWNLOAD_CANCEL_FAILED',
@@ -330,7 +330,7 @@ describe('media stall watchdog', function () {
         succeed(world, mo, 'bytes');
 
         expect(await second).to.equal('bytes');
-        expect(world.stalls().consume(mo)).to.equal(false);
+        expect(world.stalls().stalled(mo)).to.equal(false);
     });
 
     it('republishes its reader after a re-sync wipes window.WWebJS', async function () {
@@ -351,7 +351,7 @@ describe('media stall watchdog', function () {
         await clock.tickAsync(20000);
         await settled;
 
-        expect(world.stalls().consume(mo)).to.equal(true);
+        expect(world.stalls().stalled(mo)).to.equal(true);
     });
 
     it('does not arm for a sequenced download, which waits in a queue', async function () {
@@ -378,6 +378,53 @@ describe('media stall watchdog', function () {
         expect(clock.countTimers()).to.equal(0);
         world.inFlight().resolve('bytes');
         expect(await result).to.equal('bytes');
+    });
+
+    it('answers every reader of one shared media object, not just the first', async function () {
+        // WhatsApp shares a single mediaObject across every message with the
+        // same filehash, and pic2desk resolves messages in parallel, so two
+        // copies of one photo read this for the same stall. A destructive read
+        // gave the verdict to whichever asked first; the loser fell through to
+        // the NEED_POKE branch, which the host does not retry, and that picture
+        // was lost. Reproduced on a live page before this test existed.
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        const shared = {
+            loadedSize: 0,
+            size: 200 * KB,
+            filehash: 'shared01hash',
+        };
+
+        const result = world.mms.downloadMedia(realOpts(shared));
+        const settled = result.catch((err) => err);
+        await clock.tickAsync(20000);
+        await settled;
+
+        expect(world.stalls().stalled(shared)).to.equal(true);
+        expect(world.stalls().stalled(shared)).to.equal(true);
+        expect(world.stalls().stalled(shared)).to.equal(true);
+    });
+
+    it('lets the next attempt clear what the last one marked', async function () {
+        // The reason not clearing on read is safe: the wrapper clears at the
+        // START of every attempt, so a mark can only describe the most recent
+        // one and a success has already removed it before anyone reads.
+        const world = page();
+        evaluateInPage(InjectMediaStallWatchdog);
+        const mo = { loadedSize: 0, size: 200 * KB, filehash: 'abc123def456' };
+
+        const stalledRun = world.mms.downloadMedia(realOpts(mo));
+        const firstSettled = stalledRun.catch((err) => err);
+        await clock.tickAsync(20000);
+        await firstSettled;
+        expect(world.stalls().stalled(mo)).to.equal(true);
+
+        const healthy = world.mms.downloadMedia(realOpts(mo));
+        // Cleared the moment the new attempt begins, not when it finishes.
+        expect(world.stalls().stalled(mo)).to.equal(false);
+        succeed(world, mo, 'bytes');
+        expect(await healthy).to.equal('bytes');
+        expect(world.stalls().stalled(mo)).to.equal(false);
     });
 
     it('wraps once however often it is re-injected', function () {

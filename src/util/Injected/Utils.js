@@ -1817,13 +1817,15 @@ exports.LoadUtils = () => {
         await msg.mediaObject?.resolveWhenConsolidated();
 
         // A download the stall watchdog cancelled for lack of progress. Asked
-        // of the watchdog, which owns the answer and clears it on read, because
-        // WhatsApp swallows the AbortError and the reason reaches us no other
-        // way. Reported as itself - it would otherwise read as the FETCHING it
-        // was left in, which the host does not retry - and checked before the
-        // RMR recovery below, so a stall is never answered by a re-upload
-        // request, itself a wait with no timeout.
-        if (window.WWebJS.mediaStalls?.consume(msg.mediaObject)) {
+        // of the watchdog, which owns the answer, because WhatsApp swallows the
+        // AbortError and the reason reaches us no other way. Reported as itself
+        // - it would otherwise read as the FETCHING it was left in, which the
+        // host does not retry - and checked before the RMR recovery below, so a
+        // stall is never answered by a re-upload request, itself a wait with no
+        // timeout. The read does not clear the mark: one media object is shared
+        // by every message with the same filehash, so there can be more than one
+        // reader, and the watchdog clears it per attempt instead.
+        if (window.WWebJS.mediaStalls?.stalled(msg.mediaObject)) {
             window.onDiagLog?.(
                 'warn',
                 'resolveMediaBlob: download stalled',
