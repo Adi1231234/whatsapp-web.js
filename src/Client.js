@@ -1108,7 +1108,24 @@ class Client extends EventEmitter {
                 }, 5000);
             }
 
-            Msg.on('add', (msg) => {
+            // Registration must be idempotent. `attachEventListeners`
+            // runs again on every re-sync, and this is the path every incoming
+            // message takes, so a second registration would process each
+            // arrival twice. Nothing removed the previous handler.
+            //
+            // Removing by identity is safe and exact on the live build:
+            // measured, `on` increments the listener count by exactly 1,
+            // `removeListener(event, handler)` removes exactly that handler,
+            // and removing one that was never added is a no-op that throws
+            // nothing.
+            if (window.__wwjsOnMsgAdd) {
+                try {
+                    Msg.removeListener('add', window.__wwjsOnMsgAdd);
+                } catch (e) {
+                    // A rename upstream must not leave the bridge unattached.
+                }
+            }
+            const __onMsgAdd = (msg) => {
                 if (!msg.isNewMsg) return;
 
                 if (msg.type !== 'ciphertext') {
@@ -1142,7 +1159,9 @@ class Client extends EventEmitter {
                         window.WWebJS.getMessageModel(_msg),
                     );
                 });
-            });
+            };
+            window.__wwjsOnMsgAdd = __onMsgAdd;
+            Msg.on('add', __onMsgAdd);
             Chat.on('change:unreadCount', (chat) => {
                 window.onChatUnreadCountEvent(chat);
             });
