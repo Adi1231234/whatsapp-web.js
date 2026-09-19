@@ -1172,15 +1172,23 @@ class Client extends EventEmitter {
                         Socket,
                         'change:hasSynced',
                         () => {
-                            console.log(
-                                '[wwjs-diag] change:hasSynced FIRED ' +
-                                    JSON.stringify({
-                                        hasSynced: Socket.hasSynced,
-                                        state: Socket.state,
-                                        sameAppState:
-                                            Socket === window._wwjsDiagAppState,
-                                        ts: Date.now(),
-                                    }),
+                            // This ran through `console.log`, which is browser
+                            // context: it reached the browser console and NO
+                            // log anywhere else, so it produced zero rows
+                            // fleet-wide over 30 days. The sibling lines that
+                            // do arrive are console.log from the NODE side.
+                            // Anything needed to explain a production failure
+                            // has to go through the diag bridge.
+                            window.__metrics?.safeDiagLog(
+                                'info',
+                                'change:hasSynced FIRED',
+                                {
+                                    hasSynced: Socket.hasSynced,
+                                    state: Socket.state,
+                                    sameAppState:
+                                        Socket === window._wwjsDiagAppState,
+                                    ts: Date.now(),
+                                },
                             );
                             window.onAppStateHasSyncedEvent();
                         },
@@ -3010,7 +3018,24 @@ class Client extends EventEmitter {
                 // A rename upstream must not take the message bridge with it.
             }
 
-            Msg.on('add', (msg) => {
+            // Registration must be idempotent. `attachEventListeners` runs
+            // again on every re-sync (see the watcher re-injection below), and
+            // this is the path every incoming picture takes, so a second
+            // registration would process each arrival twice.
+            //
+            // Removing by identity is safe and exact on the live build:
+            // measured, `on` increments the count by exactly 1,
+            // `removeListener(event, handler)` removes exactly that handler,
+            // and removing one that was never added is a no-op that throws
+            // nothing.
+            if (window.__wwjsOnMsgAdd) {
+                try {
+                    Msg.removeListener('add', window.__wwjsOnMsgAdd);
+                } catch (e) {
+                    // A rename upstream must not leave the bridge unattached.
+                }
+            }
+            const __onMsgAdd = (msg) => {
                 if (msg.isNewMsg) {
                     const _id = msg.id?._serialized;
                     if (_id) {
@@ -3152,7 +3177,9 @@ class Client extends EventEmitter {
                         // own add dispatch, so this one cannot.
                     }
                 }
-            });
+            };
+            window.__wwjsOnMsgAdd = __onMsgAdd;
+            Msg.on('add', __onMsgAdd);
 
             // [SILENT_LOSS_FIX] Fallback: catch messages added to Msg without triggering 'add'
             Msg.on('change:type', (msg) => {
@@ -3258,29 +3285,39 @@ class Client extends EventEmitter {
             );
         });
 
-        // [L7] Verify Store.Msg listener registration succeeded
-        // NOTE: Backbone's .listeners() may not exist in newer WAWeb versions.
-        //       Fall back to checking _events directly.
+        // [L7] Verify Store.Msg listener registration succeeded.
+        //
+        // This used to probe `Msg.listeners()` and `Msg._events`. NEITHER
+        // exists on current WhatsApp Web builds, so both branches fell through
+        // and it reported `{add: -1, changeType: -1}` on every machine in the
+        // fleet, every time - a diagnostic that answers with a non-answer is
+        // worse than none, because the number looks like data.
+        //
+        // The real API is four levels up the prototype chain, alongside
+        // `removeListener`, `removeAllListeners` and `isListening`.
+        //
+        // `ours` is the only field that can reveal a duplicate of the fork's
+        // own handler; registration above is idempotent, so it is a boolean
+        // rather than a count. The TOTALS are context only and must never be
+        // read as a duplication signal: WhatsApp adds its own `add` listeners
+        // as chats load, measured at 48 on a fresh page and 493 fifty minutes
+        // later on that same page with 1,256 chats.
         const listenerCount = await this.pupPage.evaluate(() => {
             const Msg = window.require('WAWebCollections').Msg;
-            var addCount = -1,
-                changeTypeCount = -1;
-            if (typeof Msg.listeners === 'function') {
-                addCount = Msg.listeners('add')?.length ?? -1;
-                changeTypeCount = Msg.listeners('change:type')?.length ?? -1;
-            } else if (Msg._events) {
-                addCount = Msg._events['add']
-                    ? Array.isArray(Msg._events['add'])
-                        ? Msg._events['add'].length
-                        : 1
-                    : 0;
-                changeTypeCount = Msg._events['change:type']
-                    ? Array.isArray(Msg._events['change:type'])
-                        ? Msg._events['change:type'].length
-                        : 1
-                    : 0;
-            }
-            return { add: addCount, changeType: changeTypeCount };
+            const count = (event) => {
+                try {
+                    return typeof Msg.getListenersCount === 'function'
+                        ? Msg.getListenersCount(event)
+                        : -1;
+                } catch (e) {
+                    return -1;
+                }
+            };
+            return {
+                ours: !!window.__wwjsOnMsgAdd,
+                add: count('add'),
+                changeType: count('change:type'),
+            };
         });
         this.emit(
             'diag',
