@@ -1179,7 +1179,7 @@ class Client extends EventEmitter {
                             // do arrive are console.log from the NODE side.
                             // Anything needed to explain a production failure
                             // has to go through the diag bridge.
-                            window.__diag?.safeDiagLog(
+                            window.__metrics?.safeDiagLog(
                                 'info',
                                 'change:hasSynced FIRED',
                                 {
