@@ -3164,6 +3164,33 @@ class Client extends EventEmitter {
                         );
                     });
                 } else if (msg.type !== 'ciphertext') {
+                    // A reply's quote preview, which WhatsApp synthesises and
+                    // puts in this very collection - it is not a message anyone
+                    // sent us. `WAWebQuotedMsgModelUtils.getQuotedMsgObj` ends
+                    // in `collection.add(stub)` whenever the quoted message is
+                    // not already held, and `WAWebMsgModelUtils.createQuotedMsg`
+                    // marks every one `fromQuotedMsg` and assigns no `t`,
+                    // because the quoted payload carries no send time to take.
+                    //
+                    // It has to be refused HERE, before the media test below:
+                    // the preview carries the original's full descriptor -
+                    // directPath, mediaKey, filehash, size - so the UI can open
+                    // the full image, which makes it indistinguishable from a
+                    // real arrival by that test alone. Measured on a live
+                    // account: of 3112 messages exactly 3 had no `t`, and those
+                    // 3 were exactly the synthesised previews.
+                    //
+                    // Nothing is lost by refusing it. WhatsApp's own incoming
+                    // handler does `C.fromQuotedMsg ? MsgCollection.remove(C)`
+                    // and then reprocesses the real message with
+                    // `isNewMsg: true`, so if that picture ever genuinely
+                    // arrives it comes back through the branch above.
+                    //
+                    // The `t` test is not the discriminator, it is a guard: the
+                    // flag survives on a model that later took on real data, and
+                    // such a model is a real message and must still be
+                    // forwarded. A synthesised preview never has a `t`.
+                    if (msg.fromQuotedMsg && msg.t == null) return;
                     // Not announced as new, but it carries media - a picture
                     // nobody was told about. Only media: the rest is history
                     // the store loads by the hundred on every connect.

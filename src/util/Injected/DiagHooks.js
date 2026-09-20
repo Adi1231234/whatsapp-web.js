@@ -1525,6 +1525,27 @@ exports.InjectDiagHooks = () => {
                         alreadyExists: !!alreadyExists,
                         mergeOption: !!opts.merge,
                         hasBody: !!(m.body || m.caption),
+                        // Whether WhatsApp had already STORED this when the
+                        // listener saw it. `rowId` is the message table's own
+                        // primary key, written by `addMsgMetadataToMsgRow`
+                        // (which takes `rowId: void 0` and copies the assigned
+                        // value back), so it is the one field that separates a
+                        // message WhatsApp received from an object it
+                        // synthesised to draw the screen - a reply's quote
+                        // preview has none.
+                        //
+                        // Recorded rather than acted on. Measured here: 167 of
+                        // 167 media models loaded out of IndexedDB carried one
+                        // AT THE MOMENT `add` FIRED, and 408 of 408 reaching
+                        // the backfilled branch did. But it is written by the
+                        // DB write and therefore LAGS the collection, and one
+                        // freshly arrived message was observed in the store
+                        // without it. The path that has not been measured is
+                        // history sync, which is exactly the one the backfilled
+                        // route exists for - so gating on this before that is
+                        // known would risk silently refusing the pictures the
+                        // feature is meant to recover.
+                        hasRowId: m.rowId != null,
                     });
                 }
             } catch (e) {
