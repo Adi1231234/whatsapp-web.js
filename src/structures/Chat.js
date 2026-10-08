@@ -258,8 +258,11 @@ class Chat extends Base {
      *
      * `fetchMessages` spends its budget on message COUNT, so in a chatty chat
      * the limit is consumed by text long before it reaches a given moment, and
-     * the caller has no way to tell whether it got that far. This asks
-     * WhatsApp's own media query instead, and reports whether it reached back.
+     * the caller has no way to tell whether it got that far. This reads the
+     * chat's media from WhatsApp's local database instead, and reports whether
+     * it reached back. It rejects, rather than returning nothing, when that
+     * database query cannot be found, does not answer for this one chat, or
+     * finds a message WhatsApp then will not load.
      *
      * @param {number} sinceTimestamp Unix seconds to reach back to.
      * @param {Object} [options]
@@ -281,25 +284,60 @@ class Chat extends Base {
                     'ptt',
                     'sticker',
                 ];
-                const { MsgCollection } = window.require('WAWebMsgCollection');
                 const chat = await window.WWebJS.getChat(chatId, {
                     getAsModel: false,
                 });
                 if (!chat) return { messages: [], reachedBack: false };
 
+                // `msgFindMedia` sits below the `queryMedia` wrapper, which
+                // WhatsApp moved between modules; it has kept its name and
+                // contract. If its module moves too, find it by its export.
+                const findMedia = (() => {
+                    const known = window.require('WAWebDBMessageFindLocal');
+                    if (typeof known?.msgFindMedia === 'function')
+                        return known.msgFindMedia;
+                    const modules = window.require('__debug')?.modulesMap || {};
+                    for (const id of Object.keys(modules)) {
+                        const m = modules[id];
+                        const found = [m?.exports, m?.defaultExport].find(
+                            (e) => typeof e?.msgFindMedia === 'function',
+                        );
+                        if (found) return found.msgFindMedia;
+                    }
+                    return null;
+                })();
+                if (!findMedia)
+                    throw new Error(
+                        `msgFindMedia not found on WhatsApp Web ${window.Debug?.VERSION}`,
+                    );
+                // No mediaType: "allMedia" ignores `chat` and answers for
+                // the whole account. Only the per-chat query answers with
+                // counts beside the rows; the account-wide ones answer with
+                // a bare array.
+                const localMedia = async () => {
+                    const answer = await findMedia({
+                        chat: chat.id,
+                        count: Infinity,
+                        direction: 'before',
+                    });
+                    if (
+                        Array.isArray(answer) ||
+                        !Array.isArray(answer?.messages)
+                    )
+                        throw new Error(
+                            `msgFindMedia did not answer for one chat on WhatsApp Web ${window.Debug?.VERSION}`,
+                        );
+                    return answer.messages;
+                };
+
                 const collected = new Map();
-                let cursor = undefined;
                 let reachedBack = false;
 
                 const absorb = (msgs) => {
-                    let added = 0;
                     for (const m of msgs || []) {
-                        const key = m.id?.id;
-                        if (!key || collected.has(key)) continue;
-                        collected.set(key, m);
-                        added++;
+                        const key = m.id?.toString();
+                        if (key && !collected.has(key)) collected.set(key, m);
                     }
-                    return added;
                 };
 
                 // The question is whether the whole PERIOD is visible, not
@@ -313,74 +351,82 @@ class Chat extends Base {
                     return loaded.some((m) => m.t <= since);
                 };
 
+                // One read returns every media message the database holds for
+                // the chat. When none is older than `since`, load earlier
+                // messages into the chat until its history shows the period is
+                // covered.
+                absorb(await localMedia());
+                const oldest = [...collected.values()].reduce(
+                    (acc, m) => (acc === null || m.t < acc.t ? m : acc),
+                    null,
+                );
                 for (let page = 0; page < maxPages; page++) {
-                    let batch = [];
-                    try {
-                        const answer = await MsgCollection.queryMedia(
-                            chat.id,
-                            Infinity,
-                            'before',
-                            cursor,
-                        );
-                        batch = Array.isArray(answer)
-                            ? answer
-                            : answer?.messages || [];
-                    } catch (e) {
-                        break;
-                    }
-
-                    const added = absorb(batch);
-                    const all = [...collected.values()];
-                    const oldest = all.reduce(
-                        (acc, m) => (acc === null || m.t < acc.t ? m : acc),
-                        null,
-                    );
                     if ((oldest && oldest.t <= since) || historyReaches()) {
                         reachedBack = true;
                         break;
                     }
-
-                    // Nothing new locally. Everything older lives on the phone,
-                    // so pull one more page from it before deciding.
-                    if (added === 0) {
-                        if (chat.msgs?.msgLoadState?.noEarlierMsgs) {
-                            // There is nothing older to find anywhere.
-                            reachedBack = true;
-                            break;
-                        }
-                        const pulled = await window
-                            .require('WAWebChatLoadMessages')
-                            .loadEarlierMsgs({
-                                chat,
-                                msgCollection: chat.msgs,
-                            });
-                        // Nothing came back for one of two opposite reasons.
-                        // `loadEarlierMsgs` sets `noEarlierMsgs` itself the
-                        // moment it establishes there is nothing older, and
-                        // returns `[]` in the same breath - so the flag, not
-                        // the empty array, is what says whether the period is
-                        // covered. Reading the array alone reported "could not
-                        // read back far enough" for every chat whose history
-                        // simply ends.
-                        if (!pulled || !pulled.length) {
-                            reachedBack =
-                                !!chat.msgs?.msgLoadState?.noEarlierMsgs;
-                            break;
-                        }
+                    if (chat.msgs?.msgLoadState?.noEarlierMsgs) {
+                        // There is nothing older to find anywhere.
+                        reachedBack = true;
+                        break;
                     }
-                    cursor = oldest ? oldest.id : cursor;
+                    const pulled = await window
+                        .require('WAWebChatLoadMessages')
+                        .loadEarlierMsgs({
+                            chat,
+                            msgCollection: chat.msgs,
+                        });
+                    // Nothing came back for one of two opposite reasons.
+                    // `loadEarlierMsgs` sets `noEarlierMsgs` itself the
+                    // moment it establishes there is nothing older, and
+                    // returns `[]` in the same breath - so the flag, not
+                    // the empty array, is what says whether the period is
+                    // covered. Reading the array alone reported "could not
+                    // read back far enough" for every chat whose history
+                    // simply ends.
+                    if (!pulled || !pulled.length) {
+                        reachedBack = !!chat.msgs?.msgLoadState?.noEarlierMsgs;
+                        break;
+                    }
                 }
+                // The last page loaded may be the one that reached.
+                reachedBack = reachedBack || historyReaches();
 
-                const messages = [...collected.values()]
-                    // Paging walks PAST `since` - it has to, because that is
-                    // how it learns it got there - so the collection holds
-                    // media from before the period as well. Only those are
-                    // dropped: `!(m.t < since)` keeps a message WhatsApp gave
-                    // no `t` for, which the caller can still place.
+                // Database rows are not models: hydrate the period's media
+                // into the store, where the rest of the library can use them.
+                // `!(m.t < since)` keeps a message WhatsApp gave no `t` for,
+                // which the caller can still place.
+                const wanted = [...collected.values()]
                     .filter(
                         (m) => MEDIA_TYPES.includes(m.type) && !(m.t < since),
                     )
                     .sort((a, b) => a.t - b.t)
+                    .map((m) => m.id.toString());
+                const Msg = window.require('WAWebCollections').Msg;
+                const missing = wanted.filter((id) => !Msg.get(id));
+                const loaded = missing.length
+                    ? (await Msg.getMessagesById(missing)).messages
+                    : [];
+                const byId = new Map(loaded.map((m) => [m.id.toString(), m]));
+                const models = wanted.map((id) => Msg.get(id) || byId.get(id));
+                // An expired disappearing message stays in the database until
+                // WhatsApp purges it, but WhatsApp will not load it: it is
+                // gone, not lost.
+                const disappearing = (id) => {
+                    const row = collected.get(id);
+                    return !!(row?.ephemeralDuration || row?.afterReadDuration);
+                };
+                // A message found but not loaded must not read as "nothing
+                // there": the caller would move past it for good.
+                const lost = wanted.filter(
+                    (id, i) => !models[i] && !disappearing(id),
+                ).length;
+                if (lost)
+                    throw new Error(
+                        `${lost} of ${wanted.length} media message(s) could not be loaded`,
+                    );
+                const messages = models
+                    .filter(Boolean)
                     .map((m) => window.WWebJS.getMessageModel(m));
                 return { messages, reachedBack };
             },
