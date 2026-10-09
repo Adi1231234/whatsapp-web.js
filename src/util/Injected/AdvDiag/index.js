@@ -5,6 +5,7 @@ const { InstallPendingSyncDiag } = require('./pendingSync');
 const { InstallKeyIndexThrowDiag } = require('./keyIndexThrow');
 const { InstallHostedWriteDiag } = require('./hostedWrite');
 const { InstallDailyCheckDiag } = require('./dailyCheck');
+const { HOSTED_DEVICE_ID } = require('../HostedDeviceFlag');
 
 /** Event names, as they reach the host's socket-diag channel. */
 const ADV_EVENTS = {
@@ -15,8 +16,6 @@ const ADV_EVENTS = {
     DAILY_CHECK: 'ADV_DAILY_CHECK',
 };
 
-/** WhatsApp's id for a Cloud API business's hosted device. */
-const HOSTED_DEVICE_ID = 99;
 const DAY_S = 86400;
 /** The daily check's second clock: a newer own list announced, not received. */
 const EXPECTED_TS_CLOCK_H = 25;
@@ -53,4 +52,4 @@ async function installAdvDiag(page, phase, report) {
     report(Object.assign({ event: ADV_EVENTS.INSTALLED }, status));
 }
 
-module.exports = { installAdvDiag, ADV_EVENTS, HOSTED_DEVICE_ID };
+module.exports = { installAdvDiag, ADV_EVENTS };
