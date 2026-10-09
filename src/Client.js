@@ -3919,10 +3919,7 @@ class Client extends EventEmitter {
      */
     async getMessageById(messageId) {
         const msg = await this.pupPage.evaluate(async (messageId) => {
-            let msg = window.require('WAWebCollections').Msg.get(messageId);
-            // A stand-in WhatsApp built to draw a reply's quote (no `t`, no
-            // row), not the message; getContext reads past it the same way.
-            if (msg?.fromQuotedMsg) msg = undefined;
+            let msg = window.WWebJS.getLoadedMsg(messageId);
             if (msg) return window.WWebJS.getMessageModel(msg);
 
             const params = messageId.split('_');
