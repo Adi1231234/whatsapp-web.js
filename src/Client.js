@@ -44,6 +44,10 @@ const {
     STORAGE_UTILS_MODULES,
 } = require('./util/Injected/StorageDiag');
 const { installAdvDiag } = require('./util/Injected/AdvDiag');
+const {
+    installHostedDeviceFlag,
+    repairHostedDeviceFlag,
+} = require('./util/Injected/HostedDeviceFlag');
 
 // The storage events that get their own `diag` channel entry, and at what
 // level. SOCKET_DIAG is a console line nothing can subscribe to, and this
@@ -440,9 +444,13 @@ class Client extends EventEmitter {
                 STORAGE_UTILS_MODULES,
                 SNAPSHOT_DB_TIMEOUT_MS,
             );
-            // Device-sync stalls and the forced logout they can end in. Here,
-            // before the auth wait, because the first drain of the pending
-            // queue runs as soon as the socket resumes.
+            // Keep a hosted contact's device 99 flagged, so one record cannot
+            // stall device sync. Before the auth wait: the first drain of the
+            // pending queue runs as soon as the socket resumes. Before AdvDiag
+            // too, so its write hook stays outermost and still reports what
+            // WhatsApp tried to store.
+            await installHostedDeviceFlag(this.pupPage);
+            // Device-sync stalls and the forced logout they can end in.
             await installAdvDiag(this.pupPage, 'inject', (info) =>
                 this._onSocketDiagEvent(info),
             );
@@ -831,11 +839,27 @@ class Client extends EventEmitter {
 
                             // Fills any device-sync hook whose module was not
                             // loaded yet at inject(); a no-op for the rest.
+                            await installHostedDeviceFlag(this.pupPage);
                             await installAdvDiag(
                                 this.pupPage,
                                 'synced',
                                 (info) => this._onSocketDiagEvent(info),
                             );
+                            // Records stored unflagged before the wrapper
+                            // existed. Not awaited: a full read of the table
+                            // must not hold up the ready path.
+                            repairHostedDeviceFlag(this.pupPage)
+                                .then((r) =>
+                                    this._onSocketDiagEvent(
+                                        Object.assign(
+                                            {
+                                                event: 'HOSTED_DEVICE_FLAG_REPAIR',
+                                            },
+                                            r,
+                                        ),
+                                    ),
+                                )
+                                .catch(() => {});
 
                             // End downloads that stop delivering bytes. Injected
                             // before the key recovery so each of its per-type

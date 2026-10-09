@@ -3,14 +3,11 @@
 /**
  * Helpers every AdvDiag hook shares, installed once on `window.__p2dAdv`.
  *
- * `pupPage.evaluate` serialises a function alone, so hooks evaluated one by one
- * cannot import from each other. Installing the shared part first, on the page,
- * is what lets each hook stay one small file without repeating this.
+ * `pupPage.evaluate` serialises a function alone, so hooks cannot import from
+ * each other; installing this first, on the page, keeps each hook one file.
  *
- * Only scalars and short strings leave the page: WhatsApp's objects carry keys
- * like `$1` that the host's log queue rejects, and a customer's number never
- * leaves in full - users are written the way WhatsApp's own `toLogString` writes
- * them, the last four digits and the server.
+ * Only scalars and short strings leave the page, and a customer's number never
+ * leaves in full: users are masked the way WhatsApp's `toLogString` masks them.
  */
 const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
     if (window.__p2dAdv) return;
@@ -113,6 +110,16 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
         };
     };
 
+    /** Whether this account is logged out when its own list expires. */
+    const logoutGate = () => {
+        const ab = req('WAWebABProps');
+        return ab
+            ? ab.getABPropConfigValue(
+                  'web_adv_logout_on_self_device_list_expired',
+              )
+            : null;
+    };
+
     /** Replaces `target[key]` once; the factory gets the original. */
     const wrap = (target, key, factory) => {
         if (!target || typeof target[key] !== 'function') return false;
@@ -132,6 +139,7 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
         frames,
         isOwnId,
         ownClocks,
+        logoutGate,
         wrap,
     };
 };

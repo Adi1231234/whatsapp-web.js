@@ -16,7 +16,7 @@
  * ...)`, and the callee falls back to `localRecord.devices` exactly when
  * `deviceList` is null. The error is always rethrown unchanged.
  */
-const InstallKeyIndexThrowDiag = (eventName) => {
+const InstallKeyIndexThrowDiag = (eventName, preventedEvent) => {
     const a = window.__p2dAdv;
     if (!a) return false;
 
@@ -53,13 +53,49 @@ const InstallKeyIndexThrowDiag = (eventName) => {
         };
     };
 
+    // The proof the fix mattered, asked of WhatsApp itself: for a contact the
+    // fix flagged, run WhatsApp's own check again on the record as WhatsApp
+    // left it - device 99 without the flag - and see whether it throws. Only
+    // stored lists are the fix's doing, so a server-sent list is not re-run.
+    // The check computes and returns an update; the re-run discards it, and its
+    // only side effects are a repeated log line and an idempotent cache add.
+    const counterfactual = (orig, self, args) => {
+        const local = args[5];
+        const fromServer = args[1] !== null && args[1] !== undefined;
+        if (!a.fixed || fromServer || !local || local.deleted) return;
+        if (!a.fixed.has(String(args[0]))) return;
+        const d99 = a.device99(local.devices);
+        if (!d99 || d99.isHosted !== true) return;
+        const again = Array.prototype.slice.call(args);
+        again[5] = Object.assign({}, local, {
+            devices: local.devices.map((d) =>
+                d === d99 ? { id: d.id, keyIndex: d.keyIndex } : d,
+            ),
+        });
+        try {
+            orig.apply(self, again);
+        } catch (err) {
+            a.prevented++;
+            a.emit(preventedEvent, {
+                user: a.who(args[0]),
+                keyIndex: d99.keyIndex,
+                wouldHaveThrown: (
+                    String(err && err.name) +
+                    ': ' +
+                    String(err && err.message)
+                ).slice(0, 200),
+            });
+        }
+    };
+
     return a.wrap(
         a.req('WAWebHandleAdvKeyIndexResultApi'),
         'handleKeyIndexResultSync',
         (orig) =>
             function () {
+                let out;
                 try {
-                    return orig.apply(this, arguments);
+                    out = orig.apply(this, arguments);
                 } catch (err) {
                     try {
                         a.emit(eventName, describe(arguments, err));
@@ -68,6 +104,12 @@ const InstallKeyIndexThrowDiag = (eventName) => {
                     }
                     throw err;
                 }
+                try {
+                    counterfactual(orig, this, arguments);
+                } catch (e) {
+                    // best-effort diagnostic: never let it break the caller
+                }
+                return out;
             },
     );
 };
