@@ -71,7 +71,7 @@ describe('AdvDiag: when a prevented stall would have logged out', function () {
         });
     });
 
-    it('names the 35-day clock when nothing was announced, as on the stalled shop', async function () {
+    it('names the 35-day clock when nothing was announced, as on the stalled machine', async function () {
         const { stall } = await drainOnce({ timestamp: nowS() - 3 * DAY });
         expect(stall).to.include({
             ownNewerAnnounced: false,
