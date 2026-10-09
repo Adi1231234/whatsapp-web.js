@@ -14,6 +14,10 @@ const {
 } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { LoadUtils } = require('./util/Injected/Utils');
+const {
+    installHostedDeviceFlag,
+    repairHostedDeviceFlag,
+} = require('./util/Injected/HostedDeviceFlag');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -137,6 +141,11 @@ class Client extends EventEmitter {
             const version = await this.getWWebVersion();
 
             await this.pupPage.evaluate(ExposeAuthStore);
+
+            // Keep a hosted contact's device 99 flagged, so one record cannot
+            // stall device sync. Before the auth wait: the first drain of the
+            // pending queue runs as soon as the socket resumes.
+            await installHostedDeviceFlag(this.pupPage);
 
             const needAuthHandle = await this.pupPage.waitForFunction(
                 () => {
@@ -344,6 +353,13 @@ class Client extends EventEmitter {
 
                         //Load util functions (serializers, helper functions)
                         await this.pupPage.evaluate(LoadUtils);
+
+                        // A no-op unless the module was not loaded at inject().
+                        await installHostedDeviceFlag(this.pupPage);
+                        // Records stored unflagged before the wrapper existed.
+                        // Not awaited: a full read of the table must not hold
+                        // up the ready path. It never rejects.
+                        repairHostedDeviceFlag(this.pupPage);
 
                         await this.pupPage
                             .waitForFunction(
