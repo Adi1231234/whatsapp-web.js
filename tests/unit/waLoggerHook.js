@@ -105,6 +105,12 @@ function fakePage(localStorage) {
 
 const allBatched = (page) => page.batches.reduce((acc, b) => acc.concat(b), []);
 
+/**
+ * A line is recorded once the caller's chain has run (`.catching()` comes after
+ * the call), which is one microtask later. Let it land before looking.
+ */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
 describe('WaLoggerHook', function () {
     afterEach(function () {
         delete global.window;
@@ -161,10 +167,11 @@ describe('WaLoggerHook', function () {
                 page.WALogger[row[0]](tagged(row[1]));
             });
 
-        it('batches EVERY line for the local file, signal or not', function () {
+        it('batches EVERY line for the local file, signal or not', async function () {
             const page = fakePage();
             install(1);
             emitAll(page);
+            await settle();
             const kept = allBatched(page).map(function (l) {
                 return l.msg;
             });
@@ -173,33 +180,37 @@ describe('WaLoggerHook', function () {
             });
         });
 
-        it('sends only the signal lines to GCP', function () {
+        it('sends only the signal lines to GCP', async function () {
             const page = fakePage();
             install(1);
             emitAll(page);
+            await settle();
             expect(page.emitted).to.have.length(SIGNAL_LINES.length);
         });
 
-        it('never touches DEV_XMPP, which carries message bodies', function () {
+        it('never touches DEV_XMPP, which carries message bodies', async function () {
             const page = fakePage();
             install(1);
             page.WALogger.DEV_XMPP(tagged('--- Receiving ---'), 'a message');
+            await settle();
             expect(allBatched(page)).to.have.length(0);
             expect(page.emitted).to.have.length(0);
         });
 
-        it('holds lines until the batch fills', function () {
+        it('holds lines until the batch fills', async function () {
             const page = fakePage();
             install(3);
             page.WALogger.LOG(tagged('one'));
             page.WALogger.LOG(tagged('two'));
+            await settle();
             expect(page.batches).to.have.length(0);
             page.WALogger.LOG(tagged('three'));
+            await settle();
             expect(page.batches).to.have.length(1);
             expect(page.batches[0]).to.have.length(3);
         });
 
-        it('flushes on pagehide, so a logout navigation cannot take the tail', function () {
+        it('flushes on pagehide, so a logout navigation cannot take the tail', async function () {
             // Measured on the live page against a real location.reload():
             // pagehide fires, window.onWaLogBatch is still a function, the call
             // returns a thenable and throws nothing, and 0 of 4 lines reach the
@@ -209,6 +220,7 @@ describe('WaLoggerHook', function () {
             const page = fakePage(store);
             install(200);
             page.WALogger.LOG(tagged('the last thing before the logout'));
+            await settle();
             expect(page.batches).to.have.length(0);
 
             page.listeners.pagehide();
@@ -231,7 +243,7 @@ describe('WaLoggerHook', function () {
             expect(store.getItem(WAL_CARRY_KEY)).to.equal(null);
         });
 
-        it('takes the tail back when the page was not unloaded after all', function () {
+        it('takes the tail back when the page was not unloaded after all', async function () {
             // A bfcache restore fires pageshow with the document intact. The
             // parked copy has to come back into the live buffer, or it sits in
             // localStorage until a page load that may be hours away.
@@ -239,6 +251,7 @@ describe('WaLoggerHook', function () {
             const page = fakePage(store);
             install(200);
             page.WALogger.LOG(tagged('parked but the page came back'));
+            await settle();
             page.listeners.pagehide();
             expect(store.getItem(WAL_CARRY_KEY)).to.be.a('string');
 
@@ -252,13 +265,14 @@ describe('WaLoggerHook', function () {
             ).to.contain('parked but the page came back');
         });
 
-        it('bounds what it parks, so it cannot crowd out WA keys', function () {
+        it('bounds what it parks, so it cannot crowd out WA keys', async function () {
             const store = fakeLocalStorage();
             const page = fakePage(store);
             install(5000, 5000);
             delete global.window.onWaLogBatch;
             for (let i = 0; i < 2000; i++)
                 page.WALogger.LOG(tagged('x'.repeat(400) + i));
+            await settle();
             page.listeners.pagehide();
             const parked = store.getItem(WAL_CARRY_KEY);
             expect(parked.length).to.be.at.most(WAL_CARRY_MAX_BYTES);
@@ -267,7 +281,7 @@ describe('WaLoggerHook', function () {
             expect(JSON.parse(parked)[0].msg).to.contain('x'.repeat(50) + '0');
         });
 
-        it('survives a page with no usable localStorage', function () {
+        it('survives a page with no usable localStorage', async function () {
             const page = fakePage();
             global.window.localStorage = {
                 getItem: () => {
@@ -280,12 +294,13 @@ describe('WaLoggerHook', function () {
             };
             expect(() => install(200)).to.not.throw();
             page.WALogger.LOG(tagged('still logged'));
+            await settle();
             expect(() => page.listeners.pagehide()).to.not.throw();
             page.timers[0]();
             expect(allBatched(page)).to.have.length(1);
         });
 
-        it('carries the substitutions, which is why the schema line is worth keeping', function () {
+        it('carries the substitutions, which is why the schema line is worth keeping', async function () {
             const page = fakePage();
             install(1);
             page.WALogger.LOG(
@@ -293,6 +308,7 @@ describe('WaLoggerHook', function () {
                 [['model-storage', 201]],
                 false,
             );
+            await settle();
             const line = allBatched(page)[0];
             expect(line.args).to.contain('model-storage');
             expect(line.state).to.equal('UNLAUNCHED');
@@ -307,7 +323,7 @@ describe('WaLoggerHook', function () {
             expect(page.calls).to.have.length(2);
         });
 
-        it('caps a repeating template on the GCP side but never in the file', function () {
+        it('caps a repeating template on the GCP side but never in the file', async function () {
             // The level rule carries every WARN, and one routine template is
             // most of them - ~148k rows/day fleet-wide for a line that says
             // nothing. The file still gets all 40.
@@ -320,11 +336,12 @@ describe('WaLoggerHook', function () {
                     ),
                 );
             }
+            await settle();
             expect(page.emitted).to.have.length(WAL_SIGNAL_PER_TEMPLATE);
             expect(allBatched(page)).to.have.length(40);
         });
 
-        it('counts what it dropped, so a climbing rate is still visible', function () {
+        it('counts what it dropped, so a climbing rate is still visible', async function () {
             const page = fakePage();
             const realNow = Date.now;
             try {
@@ -334,6 +351,7 @@ describe('WaLoggerHook', function () {
                 for (let i = 0; i < 40; i++) {
                     page.WALogger.WARN(tagged('a repeating warning'));
                 }
+                await settle();
                 expect(page.emitted).to.have.length(WAL_SIGNAL_PER_TEMPLATE);
                 expect(
                     page.emitted.every((e) => e.suppressed === undefined),
@@ -343,6 +361,7 @@ describe('WaLoggerHook', function () {
                 // swallowed, so the rate is recoverable from GCP alone.
                 now += WAL_SIGNAL_WINDOW_MS;
                 page.WALogger.WARN(tagged('a repeating warning'));
+                await settle();
                 const last = page.emitted[page.emitted.length - 1];
                 expect(last.suppressed).to.equal(37);
             } finally {
@@ -350,7 +369,7 @@ describe('WaLoggerHook', function () {
             }
         });
 
-        it('does not grow its throttle map without bound', function () {
+        it('does not grow its throttle map without bound', async function () {
             // Keys are templates, so the set is small in practice - but
             // WALogger also takes a plain string, and a caller building one per
             // call would otherwise leak over a page that lives for days.
@@ -359,10 +378,11 @@ describe('WaLoggerHook', function () {
             for (let i = 0; i < 2000; i++) {
                 page.WALogger.WARN(tagged('unique warning number ' + i));
             }
+            await settle();
             expect(page.emitted).to.have.length(2000);
         });
 
-        it('never suppresses a terminal line, however often it repeats', function () {
+        it('never suppresses a terminal line, however often it repeats', async function () {
             const page = fakePage();
             install(1);
             for (let i = 0; i < 20; i++) {
@@ -370,19 +390,21 @@ describe('WaLoggerHook', function () {
                     tagged('storage initialization error, logging out'),
                 );
             }
+            await settle();
             expect(page.emitted).to.have.length(20);
             expect(page.emitted.every((e) => e.terminal === true)).to.equal(
                 true,
             );
         });
 
-        it('caps each template separately, so a novel line is never hidden', function () {
+        it('caps each template separately, so a novel line is never hidden', async function () {
             const page = fakePage();
             install(1);
             for (let i = 0; i < 20; i++) {
                 page.WALogger.WARN(tagged('the noisy one'));
             }
             page.WALogger.ERROR(tagged('a failure nobody has seen yet'));
+            await settle();
             const msgs = page.emitted.map((e) => e.msg);
             expect(msgs).to.contain('a failure nobody has seen yet');
         });
@@ -400,13 +422,14 @@ describe('WaLoggerHook', function () {
             expect(page.listenerCalls).to.deep.equal(['pagehide', 'pageshow']);
         });
 
-        it('does not double-wrap when injected twice', function () {
+        it('does not double-wrap when injected twice', async function () {
             const page = fakePage();
             install(1);
             install(1);
             page.WALogger.LOG(
                 tagged('storage initialization error, logging out'),
             );
+            await settle();
             expect(allBatched(page)).to.have.length(1);
             expect(page.emitted).to.have.length(1);
         });
@@ -417,7 +440,7 @@ describe('WaLoggerHook', function () {
             expect(() => install()).to.not.throw();
         });
 
-        it('never lets a broken bridge break WhatsApp', function () {
+        it('never lets a broken bridge break WhatsApp', async function () {
             const page = fakePage();
             install(1);
             global.window.onWaLogBatch = () => {
@@ -431,7 +454,150 @@ describe('WaLoggerHook', function () {
                     tagged('Failed to initialize model storage'),
                 );
             }).to.not.throw();
+            // The recording runs a microtask later; a throw there would be an
+            // uncaught error in WhatsApp's page, which mocha reports as a fail.
+            await settle();
             expect(page.calls).to.have.length(1);
+        });
+
+        // The line this was written for, verbatim: WhatsApp's device sync failed
+        // on shops for days and the file only ever said "doPendingDeviceSync
+        // failed". The reason travels in `.catching()`, after the call.
+        describe('the error a line attaches with .catching()', function () {
+            const invariant = () => {
+                const err = new Error('Minified invariant #76137; %s');
+                err.name = 'Invariant Violation';
+                err.messageFormat = 'Minified invariant #76137; %s';
+                err.messageParams = [];
+                err.stack = [
+                    'Invariant Violation: Minified invariant #76137; %s',
+                    '    at s (https://static.whatsapp.net/rsrc.php/v4/yp/r/NooljZMhLNn.js:80:367)',
+                    '    at https://static.whatsapp.net/rsrc.php/v4/yn/r/F64V0lgHire.js:328:1490',
+                    '    at Array.forEach (<anonymous>)',
+                    '    at Object.d [as handleKeyIndexResultSync] (https://static.whatsapp.net/rsrc.php/v4/yn/r/F64V0lgHire.js:328:1405)',
+                    '    at Object.s [as handleADVSyncResultSync] (https://static.whatsapp.net/rsrc.php/v4/yn/r/F64V0lgHire.js:330:768)',
+                ].join('\n');
+                return err;
+            };
+
+            it('writes it into the line, with where it was thrown', async function () {
+                const page = fakePage();
+                install(1);
+                page.WALogger.ERROR(tagged('doPendingDeviceSync failed'))
+                    .catching(invariant())
+                    .sendLogs('pending-device-sync-failed');
+                await settle();
+                const line = allBatched(page)[0];
+                expect(line.msg).to.equal('doPendingDeviceSync failed');
+                expect(line.error).to.contain(
+                    'Invariant Violation: Minified invariant #76137',
+                );
+                expect(line.error).to.contain('handleKeyIndexResultSync');
+                // Hosts shortened to the file, so the frames fit the cap.
+                expect(line.error).to.contain('F64V0lgHire.js:328:1405');
+                expect(line.error).to.not.contain('static.whatsapp.net');
+                expect(line.error.length).to.be.at.most(600);
+            });
+
+            it('sends it to GCP with the signal, where it says what to look for', async function () {
+                const page = fakePage();
+                install(1);
+                page.WALogger.ERROR(
+                    tagged('doPendingDeviceSync failed'),
+                ).catching(invariant());
+                await settle();
+                expect(page.emitted).to.have.length(1);
+                expect(page.emitted[0].error).to.contain('#76137');
+            });
+
+            it('leaves a line without one exactly as it was', async function () {
+                const page = fakePage();
+                install(1);
+                page.WALogger.ERROR(tagged('a failure with no error object'));
+                await settle();
+                expect(allBatched(page)[0]).to.not.have.property('error');
+            });
+
+            it('drops the empty params a real invariant carries, and keeps real ones', async function () {
+                const page = fakePage();
+                install(1);
+                const empty = invariant();
+                empty.messageParams = [''];
+                const real = invariant();
+                real.messageParams = ['device 99'];
+                page.WALogger.ERROR(tagged('a')).catching(empty);
+                page.WALogger.ERROR(tagged('b')).catching(real);
+                await settle();
+                const [a, b] = allBatched(page);
+                expect(a.error).to.not.contain('[""]');
+                expect(b.error).to.contain('["device 99"]');
+            });
+
+            it('shortens frames from injected code, so WhatsApp frames fit', async function () {
+                const page = fakePage();
+                install(1);
+                const err = invariant();
+                // Shape measured on the live page for a call made through
+                // puppeteer's evaluate.
+                err.stack = [
+                    'Invariant Violation: Minified invariant #76137; %s',
+                    '    at pptr:evaluate;performEvaluation%20(file%3A%2F%2F%2FC%3A%2FUsers%2Fx%2Fnode_modules%2Fsome%2Fscript.js%3A162%3A42):3:41',
+                    '    at Object.d [as handleKeyIndexResultSync] (https://static.whatsapp.net/rsrc.php/v4/yn/r/F64V0lgHire.js:328:1405)',
+                ].join('\n');
+                page.WALogger.ERROR(tagged('x')).catching(err);
+                await settle();
+                const error = allBatched(page)[0].error;
+                expect(error).to.not.contain('file%3A');
+                expect(error).to.contain('handleKeyIndexResultSync');
+            });
+
+            it("keeps the line when WhatsApp's own call throws", async function () {
+                const page = fakePage();
+                page.WALogger.ERROR = function () {
+                    throw new Error('logger broke');
+                };
+                install(1);
+                expect(() =>
+                    page.WALogger.ERROR(tagged('still worth keeping')),
+                ).to.throw('logger broke');
+                await settle();
+                expect(allBatched(page).map((l) => l.msg)).to.deep.equal([
+                    'still worth keeping',
+                ]);
+            });
+
+            it('takes a non-Error value as text', async function () {
+                const page = fakePage();
+                install(1);
+                page.WALogger.ERROR(tagged('x')).catching('plain reason');
+                await settle();
+                expect(allBatched(page)[0].error).to.equal('plain reason');
+            });
+
+            it('hands WhatsApp back what its own catching returned', function () {
+                fakePage();
+                install(1);
+                const ret = global.window
+                    .require('WALogger')
+                    .ERROR(tagged('x'));
+                // The fake's catching returns `{ sendLogs }`, like the real
+                // chain: the wrapper must pass it through untouched.
+                expect(ret.catching(invariant())).to.have.property('sendLogs');
+            });
+
+            it('keeps lines in the order they were written', async function () {
+                const page = fakePage();
+                install(1);
+                page.WALogger.LOG(tagged('first'));
+                page.WALogger.ERROR(tagged('second')).catching(invariant());
+                page.WALogger.LOG(tagged('third'));
+                await settle();
+                expect(allBatched(page).map((l) => l.msg)).to.deep.equal([
+                    'first',
+                    'second',
+                    'third',
+                ]);
+            });
         });
 
         // The failure this whole file exists for arrives in the page's first
@@ -440,7 +606,7 @@ describe('WaLoggerHook', function () {
         // for makes it resolve while `window.<name>` stays undefined. Measured
         // on the live page before this was fixed: 0 of 5 lines survived.
         describe('when the host binding is not there', function () {
-            it('keeps the lines instead of destroying them', function () {
+            it('keeps the lines instead of destroying them', async function () {
                 const page = fakePage();
                 install(1);
                 delete global.window.onWaLogBatch;
@@ -448,6 +614,7 @@ describe('WaLoggerHook', function () {
                 page.WALogger.ERROR(
                     tagged('Failed to initialize model storage'),
                 );
+                await settle();
                 expect(allBatched(page)).to.have.length(0);
 
                 global.window.onWaLogBatch = (lines) =>
@@ -459,16 +626,18 @@ describe('WaLoggerHook', function () {
                 ]);
             });
 
-            it('puts a batch back when the binding throws mid-dispatch', function () {
+            it('puts a batch back when the binding throws mid-dispatch', async function () {
                 const page = fakePage();
                 install(1);
                 global.window.onWaLogBatch = () => {
                     throw new Error('did not dispatch');
                 };
                 page.WALogger.ERROR(tagged('first'));
+                await settle();
                 global.window.onWaLogBatch = (lines) =>
                     page.batches.push(lines);
                 page.WALogger.ERROR(tagged('second'));
+                await settle();
                 // Order survives: the retained batch goes in front.
                 expect(allBatched(page).map((l) => l.msg)).to.deep.equal([
                     'first',
@@ -476,11 +645,12 @@ describe('WaLoggerHook', function () {
                 ]);
             });
 
-            it('caps the backlog and says how much it dropped', function () {
+            it('caps the backlog and says how much it dropped', async function () {
                 const page = fakePage();
                 install(1, 3);
                 delete global.window.onWaLogBatch;
                 for (let i = 0; i < 6; i++) page.WALogger.LOG(tagged('l' + i));
+                await settle();
 
                 global.window.onWaLogBatch = (lines) =>
                     page.batches.push(lines);
@@ -492,22 +662,24 @@ describe('WaLoggerHook', function () {
                 expect(got[0].droppedWhileUnbound).to.equal(3);
             });
 
-            it('does not report a gap that did not happen', function () {
+            it('does not report a gap that did not happen', async function () {
                 const page = fakePage();
                 install(1);
                 page.WALogger.LOG(tagged('fine'));
+                await settle();
                 expect(allBatched(page)[0]).to.not.have.property(
                     'droppedWhileUnbound',
                 );
             });
 
-            it('still writes the local line when only the diag binding is gone', function () {
+            it('still writes the local line when only the diag binding is gone', async function () {
                 const page = fakePage();
                 install(1);
                 delete global.window.onSocketDiagEvent;
                 expect(function () {
                     page.WALogger.ERROR(tagged('[storage] schema mismatch'));
                 }).to.not.throw();
+                await settle();
                 expect(allBatched(page)).to.have.length(1);
             });
         });

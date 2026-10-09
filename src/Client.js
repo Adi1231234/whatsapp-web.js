@@ -43,6 +43,7 @@ const {
     SNAPSHOT_DB_TIMEOUT_MS,
     STORAGE_UTILS_MODULES,
 } = require('./util/Injected/StorageDiag');
+const { installAdvDiag } = require('./util/Injected/AdvDiag');
 
 // The storage events that get their own `diag` channel entry, and at what
 // level. SOCKET_DIAG is a console line nothing can subscribe to, and this
@@ -439,6 +440,12 @@ class Client extends EventEmitter {
                 STORAGE_UTILS_MODULES,
                 SNAPSHOT_DB_TIMEOUT_MS,
             );
+            // Device-sync stalls and the forced logout they can end in. Here,
+            // before the auth wait, because the first drain of the pending
+            // queue runs as soon as the socket resumes.
+            await installAdvDiag(this.pupPage, 'inject', (info) =>
+                this._onSocketDiagEvent(info),
+            );
 
             // Socket.state fires `change:state`, so wait on the event rather than
             // sampling. WAWebEventsWaitForBbEvent is WhatsApp's own helper: it
@@ -821,6 +828,14 @@ class Client extends EventEmitter {
 
                             // Inject diagnostic hooks (media download, signal/crypto, receipts, etc.)
                             await this.pupPage.evaluate(InjectDiagHooks);
+
+                            // Fills any device-sync hook whose module was not
+                            // loaded yet at inject(); a no-op for the rest.
+                            await installAdvDiag(
+                                this.pupPage,
+                                'synced',
+                                (info) => this._onSocketDiagEvent(info),
+                            );
 
                             // End downloads that stop delivering bytes. Injected
                             // before the key recovery so each of its per-type
