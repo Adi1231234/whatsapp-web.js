@@ -251,53 +251,136 @@ const InjectWaLoggerHook = (
     // may be hours away.
     window.addEventListener('pageshow', restore);
 
+    // The error a line carries is not among its arguments. WhatsApp attaches it
+    // afterwards, on the object the call returns:
+    // `WALogger.ERROR(tpl).catching(err).sendLogs(reason)`. Without it a line
+    // reads "doPendingDeviceSync failed" and nothing else, which is how a forced
+    // logout went unexplained: the failure was `Invariant Violation #76137` and
+    // it was only ever visible by re-running the call by hand.
+    // Name, message and the top frames, because the minified message alone
+    // ("Minified invariant #76137; %s") does not say where it was thrown.
+    const describeError = (err) => {
+        if (err === null || err === undefined) return undefined;
+        if (typeof err !== 'object') return String(err).slice(0, 600);
+        let text =
+            String(err.name || 'Error') + ': ' + String(err.message || '');
+        // A real invariant carries `[""]` here; only say something when one
+        // of them does.
+        if (
+            err.messageParams &&
+            err.messageParams.some(
+                (p) => p !== '' && p !== null && p !== undefined,
+            )
+        ) {
+            text += ' ' + JSON.stringify(err.messageParams);
+        }
+        const frames = String(err.stack || '')
+            .split('\n')
+            .slice(1, 5)
+            .map((l) =>
+                l
+                    .trim()
+                    .replace(/^at /, '')
+                    .replace(/https?:\/\/\S*\/([^/\s]+:\d+:\d+)/g, '$1')
+                    // Frames from code injected through puppeteer carry the
+                    // whole URL-encoded caller path, hundreds of characters
+                    // that would crowd WhatsApp's own frames out of the cap.
+                    .replace(/pptr:[^\s)]+/g, 'pptr'),
+            )
+            .filter(Boolean);
+        if (frames.length) text += ' @ ' + frames.join(' | ');
+        return text.slice(0, 600);
+    };
+
+    // The call returns a fresh plain object per line whose methods are its own
+    // properties (verified on the live build), so wrapping `catching` on it
+    // touches that one line and nothing shared.
+    const captureCatching = (ret, line) => {
+        if (!ret || typeof ret.catching !== 'function') return;
+        const original = ret.catching;
+        ret.catching = function (err) {
+            try {
+                line.error = describeError(err);
+            } catch (e) {
+                // best-effort diagnostic: never let it break the caller
+            }
+            return original.apply(this, arguments);
+        };
+    };
+
+    const record = (line, isTerminal) => {
+        try {
+            if (buffer.length >= maxBuffered) {
+                // Only reachable while the host binding is missing, since
+                // a working flush drains at batchSize. Keep the oldest.
+                droppedWhileUnbound++;
+            } else {
+                buffer.push(line);
+            }
+            if (buffer.length >= batchSize) flush();
+
+            if (signalLevels.indexOf(line.level) !== -1 || isTerminal) {
+                // A terminal line is never suppressed: it is rare by
+                // definition and it is the one we came for.
+                const dropped = isTerminal ? 0 : throttle(line.msg);
+                if (
+                    dropped !== null &&
+                    typeof window.onSocketDiagEvent === 'function'
+                ) {
+                    window.onSocketDiagEvent({
+                        event: 'WA_INTERNAL_' + line.level,
+                        terminal: isTerminal,
+                        msg: line.msg.slice(0, 300),
+                        args: line.args,
+                        error: line.error,
+                        state: line.state,
+                        suppressed: dropped || undefined,
+                    });
+                }
+            }
+        } catch (e) {
+            // best-effort diagnostic: never let it break the caller
+        }
+    };
+
     levels.forEach((lvl) => {
         const orig = WAL[lvl];
         if (typeof orig !== 'function' || orig.__p2dWrapped) return;
         const wrapped = function () {
+            let line = null;
+            let isTerminal = false;
             try {
                 const msg = render(arguments);
-                const isTerminal = terminal.test(msg);
-                const args = renderArgs(arguments);
-                const state = socketState();
-
-                if (buffer.length >= maxBuffered) {
-                    // Only reachable while the host binding is missing, since
-                    // a working flush drains at batchSize. Keep the oldest.
-                    droppedWhileUnbound++;
-                } else {
-                    buffer.push({
-                        level: lvl,
-                        msg: msg.slice(0, 500),
-                        args: args,
-                        state: state,
-                        ts: Date.now(),
-                    });
-                }
-                if (buffer.length >= batchSize) flush();
-
-                if (signalLevels.indexOf(lvl) !== -1 || isTerminal) {
-                    // A terminal line is never suppressed: it is rare by
-                    // definition and it is the one we came for.
-                    const dropped = isTerminal ? 0 : throttle(msg);
-                    if (
-                        dropped !== null &&
-                        typeof window.onSocketDiagEvent === 'function'
-                    ) {
-                        window.onSocketDiagEvent({
-                            event: 'WA_INTERNAL_' + lvl,
-                            terminal: isTerminal,
-                            msg: msg.slice(0, 300),
-                            args: args,
-                            state: state,
-                            suppressed: dropped || undefined,
-                        });
-                    }
-                }
+                isTerminal = terminal.test(msg);
+                line = {
+                    level: lvl,
+                    msg: msg.slice(0, 500),
+                    args: renderArgs(arguments),
+                    state: socketState(),
+                    ts: Date.now(),
+                };
             } catch (e) {
                 // best-effort diagnostic: never let it break the caller
             }
-            return orig.apply(this, arguments);
+            let ret;
+            try {
+                ret = orig.apply(this, arguments);
+            } finally {
+                // In a finally, so a line is kept even if WhatsApp's own call
+                // throws - it used to be recorded before the call.
+                if (line) {
+                    try {
+                        captureCatching(ret, line);
+                        // Recorded once the caller's chain has run, which is
+                        // synchronous, so `.catching()` has filled in the
+                        // error. Microtasks run in order, so lines keep theirs.
+                        queueMicrotask(() => record(line, isTerminal));
+                    } catch (e) {
+                        // best-effort diagnostic: never let it break the caller
+                    }
+                }
+            }
+            return ret;
         };
         wrapped.__p2dWrapped = true;
         WAL[lvl] = wrapped;
