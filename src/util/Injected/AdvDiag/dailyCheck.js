@@ -40,7 +40,6 @@ const InstallDailyCheckDiag = (eventName, expiryClockH) => {
                 expiredBad99.push(a.who(wid));
             }
         });
-        const ab = a.req('WAWebABProps');
         a.emit(
             eventName,
             Object.assign(
@@ -48,11 +47,7 @@ const InstallDailyCheckDiag = (eventName, expiryClockH) => {
                     expired: expired.size,
                     closeToExpiry: result.usersCloseToExpiration.size,
                     ownExpired: ownClock,
-                    logoutGate: ab
-                        ? ab.getABPropConfigValue(
-                              'web_adv_logout_on_self_device_list_expired',
-                          )
-                        : null,
+                    logoutGate: a.logoutGate(),
                     expiryDays: days,
                     expiredBad99Count: expiredBad99.length,
                     expiredBad99: expiredBad99.slice(0, 10).join(','),

@@ -4,6 +4,9 @@ const { evaluateInPage } = require('../evaluateBoundary');
 const {
     InstallAdvDiagShared,
 } = require('../../../src/util/Injected/AdvDiag/shared');
+const {
+    InstallAdvFixedSet,
+} = require('../../../src/util/Injected/AdvDiag/fixedSet');
 
 const DAY = 86400;
 const nowS = () => Math.floor(Date.now() / 1000);
@@ -34,12 +37,23 @@ const invariant = () => {
  * The modules the hooks wrap, shaped like the live build: exports objects
  * called by property, so a wrapper placed on them is what WhatsApp calls.
  */
-function fakePage() {
+/** The one store that survives a page load, shared across fake pages. */
+function fakeLocalStorage() {
+    const data = new Map();
+    return {
+        getItem: (k) => (data.has(k) ? data.get(k) : null),
+        setItem: (k, v) => data.set(k, String(v)),
+    };
+}
+
+function fakePage(localStorage) {
     const emitted = [];
     const state = {
         pending: [],
         failSync: false,
         writes: [],
+        // Runs inside the drain, the way WhatsApp's batch reaches the check.
+        duringSync: () => {},
         own: { timestamp: nowS() - 3 * DAY, devices: [{ id: 0 }] },
     };
     const has99Unflagged = (devices) =>
@@ -59,8 +73,18 @@ function fakePage() {
         },
         WAWebApiPendingDeviceSync: {
             doPendingDeviceSync: async () => {
+                try {
+                    state.duringSync();
+                } catch (e) {
+                    return; // swallowed, rows kept, like WhatsApp's own
+                }
                 if (!state.failSync) state.pending = [];
             },
+        },
+        WAWebWidFactory: {
+            createUserWidFromDeviceListPk: (pk) => ({
+                toString: () => String(pk),
+            }),
         },
         WAWebHandleAdvKeyIndexResultApi: {
             handleKeyIndexResultSync: (w, devices, ts, bytes, x, local) => {
@@ -81,12 +105,24 @@ function fakePage() {
     global.window = {
         require: (name) => modules[name],
         onSocketDiagEvent: (info) => emitted.push(info),
+        localStorage: localStorage || fakeLocalStorage(),
     };
     evaluateInPage(InstallAdvDiagShared, 99, DAY);
+    evaluateInPage(InstallAdvFixedSet, '__p2dAdvFixed', 500);
     return { emitted, state, modules, Bridge };
 }
 
 /** Lets the hooks' promise chains land. */
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-module.exports = { fakePage, settle, wid, ME, ME_LID, DAY, nowS, invariant };
+module.exports = {
+    fakePage,
+    fakeLocalStorage,
+    settle,
+    wid,
+    ME,
+    ME_LID,
+    DAY,
+    nowS,
+    invariant,
+};

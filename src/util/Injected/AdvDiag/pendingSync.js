@@ -11,21 +11,55 @@
  * after a fully successful attempt (verified across the live build: its one
  * `bulkRemove` sits after the sync and the campaign cleanup).
  *
+ * When an attempt drained only because the HostedDeviceFlag fix was there -
+ * WhatsApp's own check, re-run on a contact as WhatsApp had left it, threw
+ * during this attempt - a second line says what that attempt would have meant
+ * without the fix: whether our own number was waiting for a newer list of its
+ * own, and whether this account logs out when that list expires.
+ *
  * Silent when nothing was waiting, which is the healthy steady state.
  */
-const InstallPendingSyncDiag = (eventName) => {
+const InstallPendingSyncDiag = (eventName, preventedEvent) => {
     const a = window.__p2dAdv;
     if (!a) return false;
-    const table = () => {
-        const s = a.req('WAWebSchemaPendingDeviceSync');
-        return s ? s.getTable() : null;
-    };
+    const table = () => a.req('WAWebSchemaPendingDeviceSync').getTable();
     const snapshot = async () => {
         const rows = await table().all();
-        return {
-            n: rows.length,
-            own: rows.some((r) => a.isOwnId(r.id)),
-        };
+        return { n: rows.length, own: rows.some((r) => a.isOwnId(r.id)) };
+    };
+
+    const report = async (before, own, preventedFrom, startedAt) => {
+        const b = await before;
+        if (!b || b.n === 0) return;
+        const after = await snapshot().catch(() => null);
+        const drained = !!after && after.n < b.n;
+        const prevented = (a.prevented || 0) - preventedFrom;
+        a.emit(eventName, {
+            before: b.n,
+            after: after ? after.n : null,
+            drained: drained,
+            ownQueued: b.own,
+            preventedThrows: prevented,
+            ms: Date.now() - startedAt,
+        });
+        if (!drained || prevented <= 0) return;
+        const o = (await own) || {};
+        const gate = a.logoutGate();
+        a.emit(preventedEvent, {
+            preventedThrows: prevented,
+            ownQueued: b.own,
+            ownNewerAnnounced: o.ownNewerAnnounced === true,
+            ownHoursSinceAnnounced:
+                o.ownHoursSinceAnnounced === undefined
+                    ? null
+                    : o.ownHoursSinceAnnounced,
+            logoutGate: gate,
+            withoutFix: !b.own
+                ? 'batch stalled; own number not waiting'
+                : gate === true
+                  ? 'own list stuck; logout once its 25h run out'
+                  : 'own list stuck; no logout on this account',
+        });
     };
 
     return a.wrap(
@@ -35,10 +69,14 @@ const InstallPendingSyncDiag = (eventName) => {
             function () {
                 const startedAt = Date.now();
                 let before = null;
+                let own = null;
+                const preventedFrom = a.prevented || 0;
                 try {
                     // Read alongside the attempt, never ahead of it: delaying
-                    // WhatsApp's own call is not ours to do.
+                    // WhatsApp's own call is not ours to do. The own clocks are
+                    // read now because a drain that succeeds clears them.
                     before = snapshot().catch(() => null);
+                    own = a.ownClocks(startedAt / 1000).catch(() => null);
                 } catch (e) {
                     // best-effort diagnostic: never let it break the caller
                 }
@@ -48,18 +86,7 @@ const InstallPendingSyncDiag = (eventName) => {
                         () => null,
                         () => null,
                     )
-                    .then(async () => {
-                        const b = await before;
-                        if (!b || b.n === 0) return;
-                        const after = await snapshot().catch(() => null);
-                        a.emit(eventName, {
-                            before: b.n,
-                            after: after ? after.n : null,
-                            drained: !!after && after.n < b.n,
-                            ownQueued: b.own,
-                            ms: Date.now() - startedAt,
-                        });
-                    })
+                    .then(() => report(before, own, preventedFrom, startedAt))
                     .catch(() => {});
                 return ret;
             },

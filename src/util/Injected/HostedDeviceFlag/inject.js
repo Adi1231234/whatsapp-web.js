@@ -89,7 +89,15 @@ const RepairHostedDeviceFlag = async () => {
     const unflagged = async () =>
         (await api.getAllDeviceLists()).filter(fix.needsFlag);
     const found = await unflagged();
-    if (found.length) await api.bulkCreateOrReplaceDeviceRecord(found);
+    if (found.length) {
+        // Lets an outer observer tell this pass from WhatsApp's own writes.
+        fix.repairing = true;
+        try {
+            await api.bulkCreateOrReplaceDeviceRecord(found);
+        } finally {
+            fix.repairing = false;
+        }
+    }
     return {
         found: found.length,
         remaining: found.length ? (await unflagged()).length : 0,

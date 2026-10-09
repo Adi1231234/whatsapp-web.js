@@ -24,6 +24,21 @@ SOCKET_DIAG`, info level, so it reaches GCP on every machine):
 - `ADV_DIAG_INSTALLED` - which hooks are live, twice per page (inject and
   synced). A missing hook must not read as a quiet machine.
 
+What the HostedDeviceFlag fix prevented, asked of WhatsApp itself:
+
+- `ADV_FIX_PREVENTED_THROW` - for a contact the fix flagged (remembered in
+  `localStorage` across page loads), WhatsApp's own check is re-run on the
+  record as WhatsApp left it, and it threw. Only fires when WhatsApp actually
+  ran that check on a stored list, so a contact it never checked counts for
+  nothing.
+- `ADV_FIX_PREVENTED_STALL` - a drain that passed only because of it, and what
+  it would have meant: `withoutFix` says whether our own number was waiting and
+  whether this account logs out when its list expires.
+
+Verified live: a hosted contact stored unflagged, then given a newer signature
+by the server, passed the real check with the fix while the re-run threw
+#76137; the drain went 1 -> 0 and both events fired.
+
 Users are masked the way WhatsApp's `toLogString` masks them.
 
 ## Verified on a live stalled shop (2026-10-09)

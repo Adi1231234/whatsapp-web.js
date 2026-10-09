@@ -21,8 +21,23 @@ const InstallHostedWriteDiag = (eventName) => {
     const api = a.req('WAWebApiDeviceList');
     const seen = new Set();
 
+    // This hook is installed OUTSIDE the HostedDeviceFlag fix, so it sees what
+    // WhatsApp tried to store before the fix flags it. With the fix active,
+    // every record seen here is one the fix corrected - remembered so a later
+    // sync can be checked against WhatsApp's own verdict without it.
+    const userWid = (pk) => {
+        try {
+            const W = a.req('WAWebWidFactory');
+            return W.createUserWidFromDeviceListPk(pk).toString();
+        } catch (e) {
+            return null;
+        }
+    };
     const inspect = (record) => {
         if (!record || record.deleted || !a.isBad99(record.devices)) return;
+        const fix = window.__p2dHostedFlag;
+        const wid = userWid(record.id);
+        if (fix && wid && a.fixed) a.fixed.add(wid);
         const user = a.who(record.id);
         if (seen.has(user) || seen.size > 200) return;
         seen.add(user);
@@ -35,6 +50,8 @@ const InstallHostedWriteDiag = (eventName) => {
                     ? record.advAccountType
                     : null,
             devices: record.devices.length,
+            fixActive: !!fix,
+            source: fix && fix.repairing ? 'repair' : 'whatsapp',
             // Frame 0 is this wrapper; the writer is a few frames up.
             by: a.frames(new Error().stack, 2, 5),
         });
