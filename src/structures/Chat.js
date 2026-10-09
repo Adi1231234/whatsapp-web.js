@@ -394,8 +394,8 @@ class Chat extends Base {
 
                 // Database rows are not models: hydrate the period's media
                 // into the store, where the rest of the library can use them.
-                // `!(m.t < since)` keeps a row WhatsApp gave no `t` for; what
-                // to make of it is the caller's call.
+                // `!(m.t < since)` keeps a row WhatsApp gave no `t` for, so it
+                // is reported below rather than skipped.
                 const wanted = [...collected.values()]
                     .filter(
                         (m) => MEDIA_TYPES.includes(m.type) && !(m.t < since),
@@ -411,8 +411,11 @@ class Chat extends Base {
                     ? (await Msg.getMessagesById(missing)).messages
                     : [];
                 const byId = new Map(loaded.map((m) => [m.id.toString(), m]));
-                const models = wanted.map(
-                    (id) => loadedMsg(id) || byId.get(id),
+                // A model with no `t` is not the stored message - a stand-in
+                // the row was not merged into - so it counts as not loaded.
+                const withTime = (m) => (m?.t != null ? m : undefined);
+                const models = wanted.map((id) =>
+                    withTime(loadedMsg(id) || byId.get(id)),
                 );
                 // An expired disappearing message stays in the database until
                 // WhatsApp purges it, but WhatsApp will not load it: it is
