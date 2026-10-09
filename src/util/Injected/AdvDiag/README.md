@@ -32,8 +32,13 @@ What the HostedDeviceFlag fix prevented, asked of WhatsApp itself:
   ran that check on a stored list, so a contact it never checked counts for
   nothing.
 - `ADV_FIX_PREVENTED_STALL` - a drain that passed only because of it, and what
-  it would have meant: `withoutFix` says whether our own number was waiting and
-  whether this account logs out when its list expires.
+  it would have meant: `withoutFix` says whether our own number was waiting,
+  whether this account logs out when its list expires, and if so which of the
+  daily check's two clocks runs out first (`logoutClock`) and in how many hours
+  (`logoutInHours`). The 25h clock only runs once a newer own list has been
+  announced; until then only the age clock does. The logout waits for the next
+  daily check and needs the stall to last that long, so `logoutInHours` is the
+  earliest it could have come.
 
 Verified live: a hosted contact stored unflagged, then given a newer signature
 by the server, passed the real check with the fix while the re-run threw
@@ -52,6 +57,13 @@ number, then the daily check's read and one drain attempt:
 - `ADV_DAILY_CHECK` 674 contacts expired, 4 of them unflagged - including
   `0996@lid`, only 4 days old, so on the 25h clock: a stalled batch starves
   its own contacts of their newer lists until the daily check expires them.
+
+The same machine's first boot with the fix shipped: the repair found 10
+unflagged records and left 0, `ADV_FIX_PREVENTED_THROW` fired 8 times
+(`0996@lid` among them), and `ADV_PENDING_SYNC` went 2850 -> 0 in 27s with
+`ownQueued: true`. Its `ADV_FIX_PREVENTED_STALL` had no newer own list
+announced, so only the age clock was running - which is why the event names
+the clock: it first said "25h" in every case.
 
 ## Reading it
 

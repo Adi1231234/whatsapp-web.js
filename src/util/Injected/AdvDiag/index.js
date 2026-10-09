@@ -3,6 +3,7 @@
 const { InstallAdvDiagShared } = require('./shared');
 const { InstallAdvFixedSet } = require('./fixedSet');
 const { InstallPendingSyncDiag } = require('./pendingSync');
+const { InstallPreventedStallVerdict } = require('./preventedStall');
 const { InstallKeyIndexThrowDiag } = require('./keyIndexThrow');
 const { InstallHostedWriteDiag } = require('./hostedWrite');
 const { InstallDailyCheckDiag } = require('./dailyCheck');
@@ -29,10 +30,11 @@ const FIXED_MAX = 500;
 
 const HOOKS = [
     [
-        'pendingSync',
-        InstallPendingSyncDiag,
-        [ADV_EVENTS.PENDING_SYNC, ADV_EVENTS.FIX_PREVENTED_STALL],
+        'preventedStall',
+        InstallPreventedStallVerdict,
+        [ADV_EVENTS.FIX_PREVENTED_STALL, EXPECTED_TS_CLOCK_H],
     ],
+    ['pendingSync', InstallPendingSyncDiag, [ADV_EVENTS.PENDING_SYNC]],
     [
         'keyIndexThrow',
         InstallKeyIndexThrowDiag,

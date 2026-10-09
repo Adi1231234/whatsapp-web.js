@@ -13,13 +13,12 @@
  *
  * When an attempt drained only because the HostedDeviceFlag fix was there -
  * WhatsApp's own check, re-run on a contact as WhatsApp had left it, threw
- * during this attempt - a second line says what that attempt would have meant
- * without the fix: whether our own number was waiting for a newer list of its
- * own, and whether this account logs out when that list expires.
+ * during this attempt - it is handed to `reportPreventedStall`
+ * (preventedStall.js), which says what it would have meant without the fix.
  *
  * Silent when nothing was waiting, which is the healthy steady state.
  */
-const InstallPendingSyncDiag = (eventName, preventedEvent) => {
+const InstallPendingSyncDiag = (eventName) => {
     const a = window.__p2dAdv;
     if (!a) return false;
     const table = () => a.req('WAWebSchemaPendingDeviceSync').getTable();
@@ -42,24 +41,8 @@ const InstallPendingSyncDiag = (eventName, preventedEvent) => {
             preventedThrows: prevented,
             ms: Date.now() - startedAt,
         });
-        if (!drained || prevented <= 0) return;
-        const o = (await own) || {};
-        const gate = a.logoutGate();
-        a.emit(preventedEvent, {
-            preventedThrows: prevented,
-            ownQueued: b.own,
-            ownNewerAnnounced: o.ownNewerAnnounced === true,
-            ownHoursSinceAnnounced:
-                o.ownHoursSinceAnnounced === undefined
-                    ? null
-                    : o.ownHoursSinceAnnounced,
-            logoutGate: gate,
-            withoutFix: !b.own
-                ? 'batch stalled; own number not waiting'
-                : gate === true
-                  ? 'own list stuck; logout once its 25h run out'
-                  : 'own list stuck; no logout on this account',
-        });
+        if (!drained || prevented <= 0 || !a.reportPreventedStall) return;
+        await a.reportPreventedStall(b.own, prevented, own);
     };
 
     return a.wrap(
