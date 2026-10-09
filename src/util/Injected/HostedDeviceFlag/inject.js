@@ -56,7 +56,7 @@ const InjectHostedDeviceFlag = (hostedDeviceId) => {
             let fixed = arg;
             try {
                 fixed = map(arg);
-            } catch (e) {
+            } catch (ignoredError) {
                 // never let the correction break the write itself
             }
             const rest = Array.prototype.slice.call(arguments, 1);

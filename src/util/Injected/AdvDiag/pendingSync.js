@@ -60,7 +60,7 @@ const InstallPendingSyncDiag = (eventName) => {
                     // read now because a drain that succeeds clears them.
                     before = snapshot().catch(() => null);
                     own = a.ownClocks(startedAt / 1000).catch(() => null);
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 const ret = orig.apply(this, arguments);

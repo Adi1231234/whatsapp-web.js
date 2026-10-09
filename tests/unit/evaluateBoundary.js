@@ -15,7 +15,6 @@
  * with no access to anything lexically around the original definition.
  */
 const evaluateInPage = (fn, ...args) => {
-    // eslint-disable-next-line no-new-func
     const rebuilt = new Function(`return (${fn.toString()})`)();
     return rebuilt(...args);
 };

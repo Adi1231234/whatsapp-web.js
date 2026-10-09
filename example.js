@@ -119,7 +119,7 @@ client.on('message', async (msg) => {
         try {
             await client.acceptInvite(inviteCode);
             msg.reply('Joined the group!');
-        } catch (e) {
+        } catch (ignoredError) {
             msg.reply('That invite code seems to be invalid.');
         }
     } else if (msg.body.startsWith('!addmembers')) {

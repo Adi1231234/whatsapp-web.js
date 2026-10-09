@@ -14,7 +14,7 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
     const req = (name) => {
         try {
             return window.require(name) || null;
-        } catch (e) {
+        } catch (ignoredError) {
             return null;
         }
     };
@@ -22,7 +22,7 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
     const emit = (event, payload) => {
         try {
             window.onSocketDiagEvent(Object.assign({ event: event }, payload));
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     };
@@ -34,7 +34,7 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
                 return id.toLogString();
             }
             return String(id).replace(/^[^@]*?(\d{1,4})(@\S+)$/, '$1$2');
-        } catch (e) {
+        } catch (ignoredError) {
             return '?';
         }
     };
@@ -70,13 +70,13 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
         const out = [];
         try {
             out.push(me.getMeUserOrThrow());
-        } catch (e) {
+        } catch (ignoredError) {
             // not registered yet
         }
         try {
             const lid = me.getMaybeMeLidUser && me.getMaybeMeLidUser();
             if (lid) out.push(lid);
-        } catch (e) {
+        } catch (ignoredError) {
             // no LID on this account
         }
         return out;

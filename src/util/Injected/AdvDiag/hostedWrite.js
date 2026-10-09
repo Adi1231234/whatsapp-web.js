@@ -29,7 +29,7 @@ const InstallHostedWriteDiag = (eventName) => {
         try {
             const W = a.req('WAWebWidFactory');
             return W.createUserWidFromDeviceListPk(pk).toString();
-        } catch (e) {
+        } catch (ignoredError) {
             return null;
         }
     };
@@ -59,7 +59,7 @@ const InstallHostedWriteDiag = (eventName) => {
     const check = (records) => {
         try {
             (Array.isArray(records) ? records : [records]).forEach(inspect);
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     };

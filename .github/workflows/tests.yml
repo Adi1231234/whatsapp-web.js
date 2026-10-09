@@ -26,3 +26,9 @@ jobs:
 
             - name: Run Eslint
               run: npm run lint
+
+            # The unit tests need no WhatsApp session. The rest of tests/ does
+            # (tests/helper.js throws without WWEBJS_TEST_REMOTE_ID), so only
+            # tests/unit can run here.
+            - name: Run unit tests
+              run: npx mocha tests/unit --recursive --timeout 5000

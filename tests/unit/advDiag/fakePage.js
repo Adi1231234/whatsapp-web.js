@@ -75,7 +75,7 @@ function fakePage(localStorage) {
             doPendingDeviceSync: async () => {
                 try {
                     state.duringSync();
-                } catch (e) {
+                } catch (ignoredError) {
                     return; // swallowed, rows kept, like WhatsApp's own
                 }
                 if (!state.failSync) state.pending = [];

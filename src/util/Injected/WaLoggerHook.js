@@ -146,7 +146,7 @@ const InjectWaLoggerHook = (
         if (!rest.length) return undefined;
         try {
             return JSON.stringify(rest).slice(0, 400);
-        } catch (e) {
+        } catch (ignoredError) {
             return String(rest).slice(0, 400);
         }
     };
@@ -201,7 +201,7 @@ const InjectWaLoggerHook = (
         }
         try {
             window.onWaLogBatch(batch);
-        } catch (e) {
+        } catch (ignoredError) {
             // The binding exists but did not dispatch, so nothing was
             // delivered. Put them back in front of whatever arrived since.
             buffer = batch.concat(buffer);
@@ -221,7 +221,7 @@ const InjectWaLoggerHook = (
             }
             window.localStorage.setItem(carryKey, json);
             buffer = [];
-        } catch (e) {
+        } catch (ignoredError) {
             // A full or unavailable localStorage loses the tail, which is no
             // worse than not having tried. Never break the unload.
         }
@@ -236,7 +236,7 @@ const InjectWaLoggerHook = (
             window.localStorage.removeItem(carryKey);
             const lines = JSON.parse(raw);
             if (lines && lines.length) buffer = lines.concat(buffer);
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     };
@@ -301,7 +301,7 @@ const InjectWaLoggerHook = (
         ret.catching = function (err) {
             try {
                 line.error = describeError(err);
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             return original.apply(this, arguments);
@@ -338,7 +338,7 @@ const InjectWaLoggerHook = (
                     });
                 }
             }
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     };
@@ -359,7 +359,7 @@ const InjectWaLoggerHook = (
                     state: socketState(),
                     ts: Date.now(),
                 };
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             let ret;
@@ -375,7 +375,7 @@ const InjectWaLoggerHook = (
                         // synchronous, so `.catching()` has filled in the
                         // error. Microtasks run in order, so lines keep theirs.
                         queueMicrotask(() => record(line, isTerminal));
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                 }
