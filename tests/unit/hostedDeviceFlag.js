@@ -4,6 +4,7 @@ const {
     InjectHostedDeviceFlag,
     RepairHostedDeviceFlag,
 } = require('../../src/util/Injected/HostedDeviceFlag/inject');
+const { installGateway } = require('./waGateway/fakeWhatsApp');
 
 // Shapes from the live build: the writers are exports called by property, and
 // the record that stalled a real queue was `[99:1, 0:0]` with no flag.
@@ -34,6 +35,7 @@ function fakePage(stored) {
     global.window = {
         require: (n) => (n === 'WAWebApiDeviceList' ? api : null),
     };
+    installGateway();
     return { api, table, writes };
 }
 

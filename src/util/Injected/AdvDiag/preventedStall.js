@@ -22,7 +22,7 @@ const InstallPreventedStallVerdict = (eventName, expectedTsClockH) => {
 
     /** The first clock's length, read the way the daily check reads it. */
     const expiryDays = () => {
-        const job = a.req('WAWebAdvDeviceInfoCheckJob');
+        const job = window.WaGateway.module('WAWebAdvDeviceInfoCheckJob');
         const Bridge = job && job.AdvToSystemBridgeImpl;
         return Bridge ? new Bridge().getNumDaysKeyIndexListExpiration() : null;
     };

@@ -1,0 +1,72 @@
+{
+    "src/Client.js": {
+        "no-restricted-properties": {
+            "count": 164
+        }
+    },
+    "src/structures/Channel.js": {
+        "no-restricted-properties": {
+            "count": 10
+        }
+    },
+    "src/structures/Chat.js": {
+        "no-restricted-properties": {
+            "count": 5
+        }
+    },
+    "src/structures/ClientInfo.js": {
+        "no-restricted-properties": {
+            "count": 1
+        }
+    },
+    "src/structures/Contact.js": {
+        "no-restricted-properties": {
+            "count": 6
+        }
+    },
+    "src/structures/GroupChat.js": {
+        "no-restricted-properties": {
+            "count": 27
+        }
+    },
+    "src/structures/Message.js": {
+        "no-restricted-properties": {
+            "count": 43
+        }
+    },
+    "src/util/Injected/AuthStore/AuthStore.js": {
+        "no-restricted-properties": {
+            "count": 10
+        }
+    },
+    "src/util/Injected/DiagHooks.js": {
+        "no-restricted-properties": {
+            "count": 72
+        }
+    },
+    "src/util/Injected/MediaKeyRecovery.js": {
+        "no-restricted-properties": {
+            "count": 5
+        }
+    },
+    "src/util/Injected/MediaStallWatchdog.js": {
+        "no-restricted-properties": {
+            "count": 2
+        }
+    },
+    "src/util/Injected/StorageDiag.js": {
+        "no-restricted-properties": {
+            "count": 4
+        }
+    },
+    "src/util/Injected/Utils.js": {
+        "no-restricted-properties": {
+            "count": 146
+        }
+    },
+    "src/util/InterfaceController.js": {
+        "no-restricted-properties": {
+            "count": 21
+        }
+    }
+}

@@ -48,14 +48,21 @@ const {
     installHostedDeviceFlag,
     repairHostedDeviceFlag,
 } = require('./util/Injected/HostedDeviceFlag');
+const {
+    installWaGateway,
+    checkWaGateway,
+    WA_GATEWAY_CHECK,
+} = require('./util/Injected/WaGateway');
 
-// The storage events that get their own `diag` channel entry, and at what
-// level. SOCKET_DIAG is a console line nothing can subscribe to, and this
-// failure mode rejects initialize(), so the general diag bridge - exposed in
-// attachEventListeners - never registers.
-const STORAGE_DIAG_LEVELS = {
+// The socket-diag events that also get their own `diag` channel entry, and at
+// what level. SOCKET_DIAG is a console line nothing can subscribe to. The
+// storage failure mode rejects initialize(), so the general diag bridge -
+// exposed in attachEventListeners - never registers; the gateway check is
+// what a consumer acts on when WhatsApp changes underneath this library.
+const SUBSCRIBABLE_DIAG_LEVELS = {
     [STORAGE_INIT_ERROR]: 'error',
     [STORAGE_SCHEMA_SNAPSHOT]: 'info',
+    [WA_GATEWAY_CHECK]: 'info',
 };
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
@@ -269,6 +276,9 @@ class Client extends EventEmitter {
                 'onSocketDiagEvent',
                 async (info) => this._onSocketDiagEvent(info),
             );
+            // Every injected module below reaches WhatsApp through the gateway,
+            // so it goes first; after the binding, so its reports have a way out.
+            await installWaGateway(this.pupPage);
             await this.pupPage.evaluate(() => {
                 const _st = () => {
                     try {
@@ -845,6 +855,12 @@ class Client extends EventEmitter {
                                 'synced',
                                 (info) => this._onSocketDiagEvent(info),
                             );
+                            // Everything this library depends on inside
+                            // WhatsApp, checked against the build that just
+                            // loaded - the moment a WhatsApp change can land.
+                            await checkWaGateway(this.pupPage, (info) =>
+                                this._onSocketDiagEvent(info),
+                            );
                             // Records stored unflagged before the wrapper
                             // existed. Not awaited: a full read of the table
                             // must not hold up the ready path.
@@ -1338,7 +1354,7 @@ class Client extends EventEmitter {
      */
     _onSocketDiagEvent(info) {
         console.log('[wwjs-diag] SOCKET_DIAG', info);
-        const level = STORAGE_DIAG_LEVELS[info && info.event];
+        const level = SUBSCRIBABLE_DIAG_LEVELS[info && info.event];
         if (level) {
             this.emit('diag', level, info.event, JSON.stringify(info));
         }

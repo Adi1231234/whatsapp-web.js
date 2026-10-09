@@ -26,7 +26,7 @@
 
 /** Wraps the two writers so device 99 is always stored flagged. */
 const InjectHostedDeviceFlag = (hostedDeviceId) => {
-    const api = window.require('WAWebApiDeviceList');
+    const api = window.WaGateway.module('WAWebApiDeviceList');
     if (!api) return false;
 
     const isUnflagged = (d) =>
@@ -83,7 +83,7 @@ const InjectHostedDeviceFlag = (hostedDeviceId) => {
  * the report says what is left rather than what was attempted.
  */
 const RepairHostedDeviceFlag = async () => {
-    const api = window.require('WAWebApiDeviceList');
+    const api = window.WaGateway.module('WAWebApiDeviceList');
     const fix = window.__p2dHostedFlag;
     if (!api || !fix) return { found: null };
     const unflagged = async () =>

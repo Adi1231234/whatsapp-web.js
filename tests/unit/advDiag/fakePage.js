@@ -7,6 +7,7 @@ const {
 const {
     InstallAdvFixedSet,
 } = require('../../../src/util/Injected/AdvDiag/fixedSet');
+const { installGateway } = require('../waGateway/fakeWhatsApp');
 
 const DAY = 86400;
 const nowS = () => Math.floor(Date.now() / 1000);
@@ -107,6 +108,7 @@ function fakePage(localStorage) {
         onSocketDiagEvent: (info) => emitted.push(info),
         localStorage: localStorage || fakeLocalStorage(),
     };
+    installGateway();
     evaluateInPage(InstallAdvDiagShared, 99, DAY);
     evaluateInPage(InstallAdvFixedSet, '__p2dAdvFixed', 500);
     return { emitted, state, modules, Bridge };

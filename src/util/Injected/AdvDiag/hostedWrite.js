@@ -18,7 +18,7 @@
 const InstallHostedWriteDiag = (eventName) => {
     const a = window.__p2dAdv;
     if (!a) return false;
-    const api = a.req('WAWebApiDeviceList');
+    const api = window.WaGateway.module('WAWebApiDeviceList');
     const seen = new Set();
 
     // This hook is installed OUTSIDE the HostedDeviceFlag fix, so it sees what
@@ -27,7 +27,7 @@ const InstallHostedWriteDiag = (eventName) => {
     // sync can be checked against WhatsApp's own verdict without it.
     const userWid = (pk) => {
         try {
-            const W = a.req('WAWebWidFactory');
+            const W = window.WaGateway.module('WAWebWidFactory');
             return W.createUserWidFromDeviceListPk(pk).toString();
         } catch (ignoredError) {
             return null;

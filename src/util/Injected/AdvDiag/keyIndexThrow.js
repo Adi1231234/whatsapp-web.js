@@ -89,7 +89,7 @@ const InstallKeyIndexThrowDiag = (eventName, preventedEvent) => {
     };
 
     return a.wrap(
-        a.req('WAWebHandleAdvKeyIndexResultApi'),
+        window.WaGateway.module('WAWebHandleAdvKeyIndexResultApi'),
         'handleKeyIndexResultSync',
         (orig) =>
             function () {

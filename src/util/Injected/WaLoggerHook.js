@@ -117,7 +117,7 @@ const InjectWaLoggerHook = (
     carryKey,
     carryMaxBytes,
 ) => {
-    const WAL = window.require('WALogger');
+    const WAL = window.WaGateway.module('WALogger');
     if (!WAL) return;
 
     // inject() runs more than once per document: initialize() and framenavigated
@@ -130,7 +130,7 @@ const InjectWaLoggerHook = (
 
     const terminal = new RegExp(terminalSource, 'i');
     const socketState = () => {
-        const model = window.require('WAWebSocketModel');
+        const model = window.WaGateway.module('WAWebSocketModel');
         return model ? String(model.Socket.state) : undefined;
     };
 

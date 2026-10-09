@@ -3,6 +3,13 @@ import pluginEslintJs from '@eslint/js';
 import pluginMocha from 'eslint-plugin-mocha';
 import configEslintConfigPrettier from 'eslint-plugin-prettier/recommended';
 
+// WhatsApp Web's internals are reached through one door, so that the list of
+// what this library depends on inside WhatsApp is the gateway's bindings and
+// nothing else. Existing direct lookups are recorded in eslint-suppressions.json
+// and move behind the gateway over time; a new one fails the lint.
+const THROUGH_THE_GATEWAY =
+    "Reach WhatsApp's internals through window.WaGateway.module(name), and declare the module in src/util/Injected/WaGateway/bindings.js.";
+
 export default [
     pluginEslintJs.configs.recommended,
     {
@@ -31,6 +38,34 @@ export default [
                     // args: 'all',
                     vars: 'all',
                     caughtErrorsIgnorePattern: '^ignoredError',
+                },
+            ],
+        },
+    },
+    {
+        name: 'whatsapp-web.js/fork/whatsapp-internals-through-the-gateway',
+        files: ['src/**/*.js'],
+        ignores: ['src/util/Injected/WaGateway/install.js'],
+        rules: {
+            'no-restricted-properties': [
+                'error',
+                ...['window', 'globalThis', 'self'].map((object) => ({
+                    object,
+                    property: 'require',
+                    message: THROUGH_THE_GATEWAY,
+                })),
+                {
+                    object: 'window',
+                    property: 'injectToFunction',
+                    message: THROUGH_THE_GATEWAY,
+                },
+            ],
+            'no-restricted-syntax': [
+                'error',
+                {
+                    selector:
+                        "CallExpression[callee.name='require'][arguments.0.value=/^WA/]",
+                    message: THROUGH_THE_GATEWAY,
                 },
             ],
         },
