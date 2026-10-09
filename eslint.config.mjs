@@ -49,11 +49,10 @@ export default [
         rules: {
             'no-restricted-properties': [
                 'error',
-                ...['window', 'globalThis', 'self'].map((object) => ({
-                    object,
-                    property: 'require',
-                    message: THROUGH_THE_GATEWAY,
-                })),
+                // `require` off ANY object, so an alias of window
+                // (`const w = window; w.require(...)`) is caught too. Nothing
+                // in src reads a `require` property for any other reason.
+                { property: 'require', message: THROUGH_THE_GATEWAY },
                 {
                     object: 'window',
                     property: 'injectToFunction',

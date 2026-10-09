@@ -40,8 +40,9 @@ A problem is `{ module, export?, problem, ... }` with `problem` one of
 
 ## What keeps the list complete
 
-- ESLint forbids `window.require`, `globalThis.require`, `self.require`,
-  `window.injectToFunction` and a bare `require('WA…')` anywhere in `src/`
+- ESLint forbids reading `require` off any object (so `window.require`, an
+  alias of `window`, `globalThis.require` and a destructured `require` alike),
+  `window.injectToFunction`, and a bare `require('WA…')`, anywhere in `src/`
   except `install.js`. The lookups that predate the gateway are recorded in
   `eslint-suppressions.json` at the repo root. A new one fails the lint, even
   in a file that already has suppressed ones. Moving one behind the gateway
@@ -49,7 +50,8 @@ A problem is `{ module, export?, problem, ... }` with `problem` one of
   ever shrinks.
 - `tests/unit/waGateway/declared.js` fails when code asks the gateway for a
   module `bindings.js` does not declare, when a declared module is no longer
-  asked for, or when a name is not written out in full.
+  asked for, when a name is not written out in full, or when the gateway is
+  reached through an alias that would hide the name from these checks.
 
 ## Adding a dependency
 

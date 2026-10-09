@@ -52,6 +52,35 @@ describe('WaGateway: the bindings are the whole list', function () {
         );
     });
 
+    it('is reached only as window.WaGateway, never through an alias', function () {
+        // `const gw = window.WaGateway; gw.module('X')` would hide X from the
+        // checks above, so outside its own folder the gateway is only ever
+        // named in a direct call.
+        const own = path.join('util', 'Injected', 'WaGateway');
+        const aliased = sourceFiles(SRC)
+            .filter((f) => !path.relative(SRC, f).startsWith(own))
+            .flatMap((file) =>
+                fs
+                    .readFileSync(file, 'utf8')
+                    .split('\n')
+                    .map((line, i) => ({
+                        line,
+                        at: `${path.relative(SRC, file)}:${i + 1}`,
+                    }))
+                    .filter(
+                        ({ line }) =>
+                            /window\.WaGateway(?!\.(module|check)\()/.test(
+                                line,
+                            ) || /\bWaGateway\b[^}]*\}\s*=\s*window/.test(line),
+                    )
+                    .map(({ at }) => at),
+            );
+        expect(
+            aliased,
+            'call window.WaGateway.module(...) directly',
+        ).to.deep.equal([]);
+    });
+
     it('declares each module once', function () {
         const names = BINDINGS.map((b) => b.module);
         expect(names).to.have.length(new Set(names).size);
