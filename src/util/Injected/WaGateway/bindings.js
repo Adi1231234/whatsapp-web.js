@@ -16,8 +16,8 @@
  *   of on page load.
  * - `why`: who depends on it.
  *
- * Checked against build 2.3000.1049833609 (2026-10-09): every export present,
- * `handleKeyIndexResultSync.length === 9`.
+ * Checked against build 2.3000.1049833609 (2026-10-09/10): every export and
+ * member present, `handleKeyIndexResultSync.length === 9`.
  */
 const BINDINGS = [
     {
@@ -90,6 +90,27 @@ const BINDINGS = [
         module: 'WAWebSocketModel',
         why: 'WaLoggerHook stamps each line with the socket state',
         exports: { Socket: { kind: 'value', members: ['state'] } },
+    },
+    {
+        module: 'WAWebDBMessageFindLocal',
+        why: 'MediaRefs lists the media in each chat from the local index',
+        exports: { msgFindMedia: { kind: 'function' } },
+    },
+    {
+        // Only read when msgFindMedia has left WAWebDBMessageFindLocal, to find
+        // it again by export name; the caller copes without it.
+        module: '__debug',
+        optional: true,
+        why: 'MediaRefs finds msgFindMedia by name if its module moves',
+        exports: { modulesMap: { kind: 'value' } },
+    },
+    {
+        module: 'WAWebCollections',
+        why: 'MediaRefs walks the chat list; getLoadedMsg reads a loaded message',
+        exports: {
+            Chat: { kind: 'value', members: ['getModelsArray'] },
+            Msg: { kind: 'value', members: ['get'] },
+        },
     },
 ];
 

@@ -115,6 +115,13 @@ declare namespace WAWebJS {
          */
         getChatsSince(timestamp: number): Promise<Chat[]>;
 
+        /**
+         * List the media stored locally since a moment in time, in unix
+         * SECONDS, without loading any message. A chat that could not be read
+         * is listed in `failures` with WhatsApp's reason.
+         */
+        getMediaRefsSince(timestamp: number): Promise<MediaRefsSince>;
+
         /** Gets all cached {@link Channel} instances */
         getChannels(): Promise<Channel[]>;
 
@@ -553,22 +560,6 @@ declare namespace WAWebJS {
             event: 'message_create',
             listener: (
                 /** The message that was created */
-                message: Message,
-            ) => void,
-        ): this;
-
-        /**
-         * Emitted for a media message that appeared in the store without
-         * WhatsApp announcing it as new.
-         *
-         * These carry `isNewMsg: false`, so the ordinary `message` event never
-         * fires for them. Only media-bearing ones are emitted: the rest is
-         * history the store loads by the hundred on every connect.
-         */
-        on(
-            event: 'message_backfilled',
-            listener: (
-                /** The message that was already in the store */
                 message: Message,
             ) => void,
         ): this;
@@ -1072,7 +1063,6 @@ declare namespace WAWebJS {
         CHAT_REMOVED = 'chat_removed',
         CHAT_ARCHIVED = 'chat_archived',
         MESSAGE_RECEIVED = 'message',
-        MESSAGE_BACKFILLED = 'message_backfilled',
         MESSAGE_CIPHERTEXT = 'message_ciphertext',
         MESSAGE_CIPHERTEXT_FAILED = 'message_ciphertext_failed',
         MESSAGE_CREATE = 'message_create',
@@ -2165,6 +2155,30 @@ declare namespace WAWebJS {
          * Return only messages from the bot number or vise versa. To get all messages, leave the option undefined.
          */
         fromMe?: boolean;
+    }
+
+    /** One media message as stored locally, not loaded. */
+    export interface MediaRef {
+        /** The serialized message id. */
+        id: string;
+        /** The chat it belongs to. */
+        remote: string;
+        fromMe: boolean;
+        /** Unix SECONDS, or null if the stored row has none. */
+        t: number | null;
+        type: string;
+        isGif: boolean;
+        /** A disappearing message, which WhatsApp may refuse to load once expired. */
+        disappearing: boolean;
+    }
+
+    /** What {@link Client.getMediaRefsSince} found. */
+    export interface MediaRefsSince {
+        refs: MediaRef[];
+        /** Chats whose read failed, with WhatsApp's reason. */
+        failures: { chatId: string; reason: string }[];
+        /** How many chats were active since the moment asked. */
+        chatsRead: number;
     }
 
     /**

@@ -50,8 +50,6 @@ exports.Events = {
     CHAT_REMOVED: 'chat_removed',
     CHAT_ARCHIVED: 'chat_archived',
     MESSAGE_RECEIVED: 'message',
-    /** A message already in the store that never arrived as a new one. */
-    MESSAGE_BACKFILLED: 'message_backfilled',
     MESSAGE_CIPHERTEXT: 'message_ciphertext',
     MESSAGE_CIPHERTEXT_FAILED: 'message_ciphertext_failed',
     MESSAGE_CREATE: 'message_create',
