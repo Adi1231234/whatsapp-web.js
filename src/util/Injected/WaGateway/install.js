@@ -10,6 +10,9 @@
  *   its first use.
  * - `check()`: every eager binding against the build this page loaded, as
  *   `{ build, checked, problems }`.
+ * - `keepShape(wrapper, original)`: gives a wrapper over a WhatsApp function
+ *   the original's `length`, so check() sees WhatsApp's function through it.
+ *   Every wrapper this library installs over a WhatsApp export goes through it.
  *
  * Reports go through `window.onSocketDiagEvent` as `WA_GATEWAY_CHECK`. It never
  * throws and never changes what WhatsApp returns: a broken binding is the
@@ -137,7 +140,27 @@ const InstallWaGateway = (bindings) => {
         return { build: build(), checked: eager.length, problems: problems };
     };
 
-    window.WaGateway = { module: moduleOf, check: check };
+    // A wrapper this library puts over a WhatsApp function must still look like
+    // that function to check(): `length` is what an `arity` binding reads, and
+    // a wrapper's own is 0. Without this the check saw the wrapper - a false
+    // problem on every load, and a real change to the argument count hidden.
+    const keepShape = (wrapper, original) => {
+        try {
+            Object.defineProperty(wrapper, 'length', {
+                value: original.length,
+            });
+        } catch (ignoredError) {
+            // a wrapper that cannot be reshaped still works; only the check
+            // would read it wrong
+        }
+        return wrapper;
+    };
+
+    window.WaGateway = {
+        module: moduleOf,
+        check: check,
+        keepShape: keepShape,
+    };
     return true;
 };
 

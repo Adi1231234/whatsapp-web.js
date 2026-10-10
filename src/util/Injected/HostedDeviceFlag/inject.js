@@ -62,6 +62,7 @@ const InjectHostedDeviceFlag = (hostedDeviceId) => {
             const rest = Array.prototype.slice.call(arguments, 1);
             return orig.apply(this, [fixed].concat(rest));
         };
+        window.WaGateway.keepShape(wrapped, orig);
         wrapped.__p2dHostedFlag = true;
         api[key] = wrapped;
         return true;

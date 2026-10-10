@@ -117,7 +117,10 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
     const wrap = (target, key, factory) => {
         if (!target || typeof target[key] !== 'function') return false;
         if (target[key].__p2dAdv) return true;
-        const wrapped = factory(target[key]);
+        const wrapped = window.WaGateway.keepShape(
+            factory(target[key]),
+            target[key],
+        );
         wrapped.__p2dAdv = true;
         target[key] = wrapped;
         return true;

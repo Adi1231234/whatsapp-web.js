@@ -382,6 +382,7 @@ const InjectWaLoggerHook = (
             }
             return ret;
         };
+        window.WaGateway.keepShape(wrapped, orig);
         wrapped.__p2dWrapped = true;
         WAL[lvl] = wrapped;
     });

@@ -24,10 +24,14 @@ async function checkWaGateway(page, report) {
     const result = await page
         .evaluate(() => (window.WaGateway ? window.WaGateway.check() : null))
         .catch(() => null);
-    if (result) {
+    if (!result) return;
+    try {
         report(
             Object.assign({ event: WA_GATEWAY_CHECK, phase: 'load' }, result),
         );
+    } catch (ignoredError) {
+        // The report is emitted synchronously, from inside the synced phase:
+        // a consumer's listener that throws must not abort what follows it.
     }
 }
 

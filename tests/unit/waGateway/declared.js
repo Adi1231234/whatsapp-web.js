@@ -15,7 +15,8 @@ const sourceFiles = (dir) =>
 // Whole-file matches, whitespace and newlines allowed anywhere Prettier may
 // put them: it splits a long chain as `window\n    .WaGateway.module(\n 'X',\n)`.
 const CALL = /WaGateway\s*\.\s*module\s*\(\s*([^)]*?)\s*,?\s*\)/g;
-const NOT_A_CALL = /window\s*\.\s*WaGateway(?!\s*\.\s*(module|check)\s*\()/g;
+const NOT_A_CALL =
+    /window\s*\.\s*WaGateway(?!\s*\.\s*(module|check|keepShape)\s*\()/g;
 const DESTRUCTURED = /\{[^}]*\bWaGateway\b[^}]*\}\s*=\s*window\b/g;
 
 /** Every match of `re` in src outside the gateway, with where it is. */
