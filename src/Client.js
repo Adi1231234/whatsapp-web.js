@@ -20,6 +20,7 @@ const {
 } = require('./util/Injected/DiagCommon');
 const { InjectDiagHooks } = require('./util/Injected/DiagHooks');
 const { InjectMediaKeyRecovery } = require('./util/Injected/MediaKeyRecovery');
+const { ListMediaRefsSince } = require('./util/Injected/MediaRefs');
 const {
     InjectMediaStallWatchdog,
 } = require('./util/Injected/MediaStallWatchdog');
@@ -3803,6 +3804,16 @@ class Client extends EventEmitter {
         }, timestamp);
 
         return chats.map((chat) => ChatFactory.create(this, chat));
+    }
+
+    /**
+     * Lists the media stored locally since a moment, without loading any of
+     * it. See util/Injected/MediaRefs.js.
+     * @param {number} timestamp Unix SECONDS.
+     * @returns {Promise<{refs: Array<{id: string, remote: string, fromMe: boolean, t: number|null, type: string, isGif: boolean, disappearing: boolean}>, failures: Array<{chatId: string, reason: string}>, chatsRead: number}>}
+     */
+    async getMediaRefsSince(timestamp) {
+        return await this.pupPage.evaluate(ListMediaRefsSince, timestamp);
     }
 
     /**
