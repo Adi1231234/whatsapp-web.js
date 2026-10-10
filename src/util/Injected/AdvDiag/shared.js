@@ -11,18 +11,11 @@
  */
 const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
     if (window.__p2dAdv) return;
-    const req = (name) => {
-        try {
-            return window.require(name) || null;
-        } catch (e) {
-            return null;
-        }
-    };
 
     const emit = (event, payload) => {
         try {
             window.onSocketDiagEvent(Object.assign({ event: event }, payload));
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     };
@@ -34,7 +27,7 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
                 return id.toLogString();
             }
             return String(id).replace(/^[^@]*?(\d{1,4})(@\S+)$/, '$1$2');
-        } catch (e) {
+        } catch (ignoredError) {
             return '?';
         }
     };
@@ -65,18 +58,18 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
             .slice(0, 400);
 
     const ownUsers = () => {
-        const me = req('WAWebUserPrefsMeUser');
+        const me = window.WaGateway.module('WAWebUserPrefsMeUser');
         if (!me) return [];
         const out = [];
         try {
             out.push(me.getMeUserOrThrow());
-        } catch (e) {
+        } catch (ignoredError) {
             // not registered yet
         }
         try {
             const lid = me.getMaybeMeLidUser && me.getMaybeMeLidUser();
             if (lid) out.push(lid);
-        } catch (e) {
+        } catch (ignoredError) {
             // no LID on this account
         }
         return out;
@@ -92,7 +85,7 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
      * learned a newer one exists that has not arrived (25h).
      */
     const ownClocks = async (nowS) => {
-        const api = req('WAWebApiDeviceList');
+        const api = window.WaGateway.module('WAWebApiDeviceList');
         const users = ownUsers();
         if (!api || !users.length) return { ownKnown: false };
         const recs = await api.bulkGetDeviceRecord(users);
@@ -112,7 +105,7 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
 
     /** Whether this account is logged out when its own list expires. */
     const logoutGate = () => {
-        const ab = req('WAWebABProps');
+        const ab = window.WaGateway.module('WAWebABProps');
         return ab
             ? ab.getABPropConfigValue(
                   'web_adv_logout_on_self_device_list_expired',
@@ -124,14 +117,16 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
     const wrap = (target, key, factory) => {
         if (!target || typeof target[key] !== 'function') return false;
         if (target[key].__p2dAdv) return true;
-        const wrapped = factory(target[key]);
+        const wrapped = window.WaGateway.keepShape(
+            factory(target[key]),
+            target[key],
+        );
         wrapped.__p2dAdv = true;
         target[key] = wrapped;
         return true;
     };
 
     window.__p2dAdv = {
-        req,
         emit,
         who,
         device99,

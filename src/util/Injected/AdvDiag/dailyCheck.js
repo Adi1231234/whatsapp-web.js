@@ -21,7 +21,7 @@
 const InstallDailyCheckDiag = (eventName, expiryClockH) => {
     const a = window.__p2dAdv;
     if (!a) return false;
-    const job = a.req('WAWebAdvDeviceInfoCheckJob');
+    const job = window.WaGateway.module('WAWebAdvDeviceInfoCheckJob');
     const proto =
         job && job.AdvToSystemBridgeImpl && job.AdvToSystemBridgeImpl.prototype;
 

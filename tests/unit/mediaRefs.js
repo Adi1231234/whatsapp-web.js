@@ -1,6 +1,7 @@
 const { expect } = require('chai');
 const { ListMediaRefsSince } = require('../../src/util/Injected/MediaRefs');
 const { evaluateInPage } = require('./evaluateBoundary');
+const { installGateway } = require('./waGateway/fakeWhatsApp');
 
 const SINCE = 1_800_000_000;
 
@@ -52,6 +53,7 @@ function page(chats, { shape } = {}) {
             return undefined;
         },
     };
+    installGateway();
     return { calls };
 }
 
@@ -225,6 +227,7 @@ describe('ListMediaRefsSince', function () {
             require: (name) =>
                 name === '__debug' ? { modulesMap: {} } : undefined,
         };
+        installGateway();
 
         let error = null;
         try {

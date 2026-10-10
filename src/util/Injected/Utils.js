@@ -333,7 +333,7 @@ exports.LoadUtils = () => {
                             .vcardGetNameFromParsed(parsed),
                     };
                 }
-            } catch (_) {
+            } catch (ignoredError) {
                 // not a vcard
             }
         }
@@ -806,7 +806,7 @@ exports.LoadUtils = () => {
     // draw a reply's quote (`fromQuotedMsg`, no `t`, no row), which is not the
     // message. WAWebMsgCollection.getContext reads past it the same way.
     window.WWebJS.getLoadedMsg = (id) => {
-        const msg = window.require('WAWebCollections').Msg.get(id);
+        const msg = window.WaGateway.module('WAWebCollections').Msg.get(id);
         return msg && !msg.fromQuotedMsg ? msg : undefined;
     };
 
@@ -905,7 +905,7 @@ exports.LoadUtils = () => {
                         .require('WAWebCollections')
                         .WAWebNewsletterCollection.find(chatWid);
                 }
-            } catch (err) {
+            } catch (ignoredError) {
                 chat = null;
             }
         } else {
@@ -1146,7 +1146,7 @@ exports.LoadUtils = () => {
                         iq.content &&
                         iq.content[0] &&
                         iq.content[0].tag === 'business_profile';
-                } catch (_) {
+                } catch (ignoredError) {
                     /* filter probe is best-effort */
                 }
                 const p = orig.apply(this, arguments);
@@ -1162,7 +1162,7 @@ exports.LoadUtils = () => {
                                 errorBackoff: res.errorBackoff,
                             };
                         }
-                    } catch (_) {
+                    } catch (ignoredError) {
                         /* capture must never disturb the query */
                     }
                     return res;
@@ -1171,7 +1171,7 @@ exports.LoadUtils = () => {
             wrapped.__bizCaptureWrapper = true;
             mod.deprecatedSendIq = wrapped;
             window.WWebJS.__bizIqCaptureInstalled = true;
-        } catch (_) {
+        } catch (ignoredError) {
             /* interceptor install is best-effort */
         }
     };
@@ -1216,7 +1216,7 @@ exports.LoadUtils = () => {
         const safe = (fn, d) => {
             try {
                 return fn();
-            } catch (_) {
+            } catch (ignoredError) {
                 return d;
             }
         };
@@ -1613,7 +1613,7 @@ exports.LoadUtils = () => {
                     bizWasCached = !!window
                         .require('WAWebCollections')
                         .BusinessProfile.get(contact.id);
-                } catch (_) {
+                } catch (ignoredError) {
                     /* cache probe is best-effort */
                 }
                 try {
@@ -1640,7 +1640,7 @@ exports.LoadUtils = () => {
                             bizErr,
                             Date.now() - bizStart,
                         );
-                    } catch (_) {
+                    } catch (ignoredError) {
                         /* diagnostics must never mask the real error */
                     }
                     throw bizErr;
@@ -1853,7 +1853,7 @@ exports.LoadUtils = () => {
                         rmrReason: 1,
                         isUserInitiated: true,
                     });
-                } catch (re2) {
+                } catch (ignoredError) {
                     /* ignore */
                 }
                 // Same debounce again, or the stage reported below is the one
@@ -2002,7 +2002,7 @@ exports.LoadUtils = () => {
             );
 
             return waveform;
-        } catch (e) {
+        } catch (ignoredError) {
             return undefined;
         }
     };
@@ -2240,7 +2240,7 @@ exports.LoadUtils = () => {
                         return base64Image;
                     }
                 }
-            } catch (error) {
+            } catch (ignoredError) {
                 /* empty */
             }
         }
@@ -2277,7 +2277,7 @@ exports.LoadUtils = () => {
                 rpcResult.value.addParticipant[0]
                     .addParticipantsParticipantAddedOrNonRegisteredWaUserParticipantErrorLidResponseMixinGroup
                     .value.addParticipantsParticipantMixins;
-        } catch (err) {
+        } catch (ignoredError) {
             data.code = 400;
             return data;
         }
@@ -2447,7 +2447,7 @@ exports.LoadUtils = () => {
                     ));
             }
             return result;
-        } catch (err) {
+        } catch (ignoredError) {
             return [];
         }
     };

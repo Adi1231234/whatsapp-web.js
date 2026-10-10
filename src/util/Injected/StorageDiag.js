@@ -67,7 +67,7 @@ const InjectStorageDiag = (
     const emit = (payload) => {
         try {
             window.onSocketDiagEvent(payload);
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     };
@@ -101,14 +101,14 @@ const InjectStorageDiag = (
                                     ? String(err.stack).slice(0, 600)
                                     : null,
                         });
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     return orig.apply(this, arguments);
                 };
             }
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -130,7 +130,7 @@ const InjectStorageDiag = (
             const dbg = window.Debug;
             snapshot.waVersion =
                 dbg && dbg.VERSION ? String(dbg.VERSION) : null;
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
 
@@ -158,7 +158,7 @@ const InjectStorageDiag = (
                 const storage = utils.getStorage();
                 snapshot.localMax[utils.DATABASE_NAME] =
                     storage.versions.getMax();
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
         });
@@ -234,7 +234,7 @@ const InjectStorageDiag = (
         } else {
             schemaReady = true;
         }
-    } catch (e) {
+    } catch (ignoredError) {
         schemaReady = true;
     }
     sendWhenBothReady();

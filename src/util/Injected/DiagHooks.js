@@ -119,7 +119,7 @@ exports.InjectDiagHooks = () => {
                     receipt.author &&
                     _meUser.isMeAccount(receipt.author)
                 );
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             if (!isFromMe && msgInfo && msgInfo.id && msgInfo.id.fromMe)
@@ -247,7 +247,7 @@ exports.InjectDiagHooks = () => {
                     participant =
                         wid(node.participantLid) || wid(node.participant);
                 }
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             // Filter group and status identity changes - not relevant for 1:1 diagnostics
@@ -287,7 +287,7 @@ exports.InjectDiagHooks = () => {
                         }
                     }
                 }
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             var skipDiag =
@@ -326,7 +326,7 @@ exports.InjectDiagHooks = () => {
                                             resultInfo.isNewMsg = res.isNewMsg;
                                     }
                                 }
-                            } catch (e2) {
+                            } catch (ignoredError) {
                                 // best-effort diagnostic: never let it break the caller
                             }
                             safeDiagLog('debug', 'ENC_MSG_RESULT', resultInfo);
@@ -462,7 +462,7 @@ exports.InjectDiagHooks = () => {
                 return result;
             },
         );
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -493,7 +493,7 @@ exports.InjectDiagHooks = () => {
                             : null),
                 };
             }
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
         return null;
@@ -523,7 +523,7 @@ exports.InjectDiagHooks = () => {
         var mod = null;
         try {
             mod = window.require('WAWebCryptoLibrary');
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
         if (!mod || typeof mod.processSenderKeyDistributionMsg !== 'function')
@@ -605,7 +605,7 @@ exports.InjectDiagHooks = () => {
                     },
                 );
             })(signalFns[si]);
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     }
@@ -626,7 +626,7 @@ exports.InjectDiagHooks = () => {
                             else if (args[0] && args[0]._serialized)
                                 jid = args[0]._serialized;
                             else if (args[0] && args[0].jid) jid = args[0].jid;
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // best-effort diagnostic: never let it break the caller
                         }
                         if (!_isStatusOrGroup(jid)) {
@@ -654,7 +654,7 @@ exports.InjectDiagHooks = () => {
                     },
                 );
             })(sessionFns[ei]);
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     }
@@ -678,7 +678,7 @@ exports.InjectDiagHooks = () => {
                                 jid = args[0]._serialized;
                             else if (args[0] && args[0].user)
                                 jid = args[0].user;
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // best-effort diagnostic: never let it break the caller
                         }
                         if (!_isStatusOrGroup(jid)) {
@@ -710,7 +710,7 @@ exports.InjectDiagHooks = () => {
                     },
                 );
             })(signalSessionFns[ssi]);
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     }
@@ -750,7 +750,7 @@ exports.InjectDiagHooks = () => {
                 return result;
             },
         );
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -775,7 +775,7 @@ exports.InjectDiagHooks = () => {
                                 : args[0] && args[0].directPath
                                   ? args[0].directPath.slice(0, 100)
                                   : '';
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     var result = func.apply(this, args);
@@ -819,7 +819,7 @@ exports.InjectDiagHooks = () => {
                             args[0] && args[0].directPath
                                 ? args[0].directPath.slice(0, 100)
                                 : '';
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     var result = func.apply(this, args);
@@ -849,7 +849,7 @@ exports.InjectDiagHooks = () => {
         } else {
             // WAWebMediaDownloadUtils removed in 2.3000+, covered by DL_DECRYPT
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -893,7 +893,7 @@ exports.InjectDiagHooks = () => {
         } else {
             // WAWebPreKeyUtils.getOrGenPreKeys inlined in 2.3000+
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -928,7 +928,7 @@ exports.InjectDiagHooks = () => {
         } else {
             // uploadPreKeys module not available
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -947,7 +947,7 @@ exports.InjectDiagHooks = () => {
                     var jid = '';
                     try {
                         jid = wid(args[0]) || safeStr(args[0]);
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     if (!_isStatusOrGroup(jid)) {
@@ -959,7 +959,7 @@ exports.InjectDiagHooks = () => {
         } else {
             // WAWebDeleteSessionJob removed in 2.3000+, covered by WAWebSignal.Session hooks
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -993,7 +993,7 @@ exports.InjectDiagHooks = () => {
                     _socketHooked = true;
                     break;
                 }
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
         }
@@ -1014,11 +1014,11 @@ exports.InjectDiagHooks = () => {
                         return func.apply(this, args);
                     },
                 );
-            } catch (e) {
+            } catch (ignoredError) {
                 // SOCKET_CLOSE: no hookable module found
             }
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -1054,7 +1054,7 @@ exports.InjectDiagHooks = () => {
                                 ).length;
                             }
                         }
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     safeDiagLog('debug', 'HISTORY_SYNC_PROCESS', {
@@ -1072,7 +1072,7 @@ exports.InjectDiagHooks = () => {
         } else {
             // HISTORY_SYNC_PROCESS: no module found
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -1112,7 +1112,7 @@ exports.InjectDiagHooks = () => {
                         inputLog.mediaKeyLength =
                             opts.mediaKey.byteLength || opts.mediaKey.length;
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
 
@@ -1200,7 +1200,7 @@ exports.InjectDiagHooks = () => {
                                                 protoProps[pn] = String(
                                                     err[pn],
                                                 ).substring(0, 200);
-                                            } catch (e2) {
+                                            } catch (ignoredError) {
                                                 // best-effort diagnostic: never let it break the caller
                                             }
                                         }
@@ -1208,7 +1208,7 @@ exports.InjectDiagHooks = () => {
                                     if (Object.keys(protoProps).length > 0)
                                         errorInfo.errorProtoProps = protoProps;
                                 }
-                            } catch (e2) {
+                            } catch (ignoredError) {
                                 // best-effort diagnostic: never let it break the caller
                             }
                             // Only surface as a warning when WE initiated the download
@@ -1465,7 +1465,7 @@ exports.InjectDiagHooks = () => {
                 return result;
             },
         );
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -1496,7 +1496,7 @@ exports.InjectDiagHooks = () => {
         } else {
             // WAWebMsgModel.isPlaceholder removed in 2.3000+
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -1527,7 +1527,7 @@ exports.InjectDiagHooks = () => {
                         hasBody: !!(m.body || m.caption),
                     });
                 }
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             return origMsgAdd(...args);
@@ -1559,14 +1559,14 @@ exports.InjectDiagHooks = () => {
                             isNewMsg: !!m?.isNewMsg,
                         });
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 return origAddAndGet(...args);
             };
             safeDiagLog('debug', 'HOOK_OK', 'Msg.addAndGet-wrapper');
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -1595,7 +1595,7 @@ exports.InjectDiagHooks = () => {
                     functions: fnNames.slice(0, 20).join(','),
                 });
             }
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
     }
@@ -1623,7 +1623,7 @@ exports.InjectDiagHooks = () => {
                 return func.apply(this, args);
             },
         );
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -1673,7 +1673,7 @@ exports.InjectDiagHooks = () => {
                             });
                         }
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 var hasCiphertext = msgSummaries.some(function (s) {
@@ -1728,7 +1728,7 @@ exports.InjectDiagHooks = () => {
                                                 : null,
                                         });
                                     }
-                                } catch (e) {
+                                } catch (ignoredError) {
                                     // best-effort diagnostic: never let it break the caller
                                 }
                                 safeDiagLog(
@@ -1918,7 +1918,7 @@ exports.InjectDiagHooks = () => {
                 return result;
             },
         );
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -1944,7 +1944,7 @@ exports.InjectDiagHooks = () => {
                                 .split('\n')
                                 .slice(1, 8)
                                 .join(' | ');
-                        } catch (_e) {
+                        } catch (ignoredError) {
                             // best-effort diagnostic: never let it break the caller
                         }
                         safeDiagLog('warn', 'CIPHERTEXT_STORE_REMOVE', {
@@ -1958,7 +1958,7 @@ exports.InjectDiagHooks = () => {
                             stack: removeStack,
                         });
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
             });
@@ -1968,7 +1968,7 @@ exports.InjectDiagHooks = () => {
                 'Store.Msg.remove (ciphertext tracking)',
             );
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -1992,7 +1992,7 @@ exports.InjectDiagHooks = () => {
                                 ? msg.isPlaceholder()
                                 : null,
                     });
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
             });
@@ -2002,7 +2002,7 @@ exports.InjectDiagHooks = () => {
                 'Store.Msg.add (ciphertext add tracking)',
             );
         }
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -2037,7 +2037,7 @@ exports.InjectDiagHooks = () => {
                 return func.apply(this, args);
             },
         );
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -2065,7 +2065,7 @@ exports.InjectDiagHooks = () => {
                             });
                         }
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 safeDiagLog('info', 'PLACEHOLDER_MSGS_SEEN', {
@@ -2076,7 +2076,7 @@ exports.InjectDiagHooks = () => {
                 return func.apply(this, args);
             },
         );
-    } catch (e) {
+    } catch (ignoredError) {
         // best-effort diagnostic: never let it break the caller
     }
 
@@ -2119,16 +2119,16 @@ exports.InjectDiagHooks = () => {
                             s.pendingIqs = inst.pendingIqs
                                 ? inst.pendingIqs.size
                                 : null;
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // best-effort diagnostic: never let it break the caller
                         }
                     }
                     try {
                         s.connected = !!_wac.isSocketConnected();
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 return s;
@@ -2168,7 +2168,7 @@ exports.InjectDiagHooks = () => {
                             }
                         }
                     });
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 if (_inflight.size > 0) {
@@ -2203,7 +2203,7 @@ exports.InjectDiagHooks = () => {
                         p.then(done, done);
                         _arm();
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 return p;
@@ -2238,7 +2238,7 @@ exports.InjectDiagHooks = () => {
             var _LR = window.require('WAWebLogoutReasonConstants').LogoutReason;
             for (var _rk of Object.getOwnPropertyNames(_LR))
                 _logoutReasonName[_LR[_rk]] = _rk;
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
 
@@ -2259,7 +2259,7 @@ exports.InjectDiagHooks = () => {
                 c.streamPhoneAuthed = St.phoneAuthed;
                 c.streamAvailable = St.available;
                 c.streamResumeCount = St.resumeCount;
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             // Conn is a Backbone model — its fields are attributes, not direct props.
@@ -2273,7 +2273,7 @@ exports.InjectDiagHooks = () => {
                 c.connWid = _A.wid ? String(_A.wid) : undefined;
                 c.connWaVersion = _A.phone && _A.phone.wa_version;
                 c.connOsVersion = _A.phone && _A.phone.os_version;
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             try {
@@ -2283,7 +2283,7 @@ exports.InjectDiagHooks = () => {
                 c.lastWid = (localStorage.getItem('last-wid-md') || '')
                     .replace(/"/g, '')
                     .slice(0, 40);
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             try {
@@ -2293,7 +2293,7 @@ exports.InjectDiagHooks = () => {
                         .require('WAWebUserPrefsIndexedDBStorage')
                         .userPrefsIdb.get(ICU.INTEGRITY_CHALLENGE_IDB_KEY) !=
                     null;
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             try {
@@ -2304,22 +2304,22 @@ exports.InjectDiagHooks = () => {
                 c.canonicalTokenPresent = !!(
                     CU.isCanonicalTokenPresent && CU.isCanonicalTokenPresent()
                 );
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             try {
                 c.msSincePageLoad = Math.round(performance.now());
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             try {
                 c.waVersion = window.Debug && window.Debug.VERSION;
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             try {
                 c.url = (location.href || '').slice(0, 120);
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
             return c;
@@ -2354,7 +2354,7 @@ exports.InjectDiagHooks = () => {
                         })
                         .catch(function () {});
                 }
-            } catch (e) {
+            } catch (ignoredError) {
                 // best-effort diagnostic: never let it break the caller
             }
         };
@@ -2387,7 +2387,7 @@ exports.InjectDiagHooks = () => {
                             captureErr: String(e),
                             reasonRaw: String(reason),
                         });
-                    } catch (e2) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                 }
@@ -2426,7 +2426,7 @@ exports.InjectDiagHooks = () => {
                             captureErr: String(e),
                             reasonRaw: String(reason),
                         });
-                    } catch (e2) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                 }
@@ -2479,7 +2479,7 @@ exports.InjectDiagHooks = () => {
                         null,
                         Array.prototype.slice.call(v),
                     );
-            } catch (e) {
+            } catch (ignoredError) {
                 // fall through to String()
             }
             return String(v);
@@ -2496,7 +2496,7 @@ exports.InjectDiagHooks = () => {
                 var keys = Object.keys(attrs);
                 for (var ai = 0; ai < keys.length; ai++)
                     decoded[keys[ai]] = _asText(attrs[keys[ai]]);
-            } catch (e) {
+            } catch (ignoredError) {
                 return null;
             }
             return decoded;
@@ -2596,10 +2596,10 @@ exports.InjectDiagHooks = () => {
                 var ctx = _logoutCtx();
                 for (var k in info) ctx[k] = info[k];
                 safeDiagLog('info', 'STREAM_ERROR_RAW', ctx);
-            } catch (e) {
+            } catch (ignoredError) {
                 try {
                     safeDiagLog('info', 'STREAM_ERROR_RAW', info);
-                } catch (e2) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
             }
@@ -2641,14 +2641,14 @@ exports.InjectDiagHooks = () => {
                                         configurable: true,
                                     },
                                 );
-                            } catch (e) {
+                            } catch (ignoredError) {
                                 this.__p2dIsStreamErrParser = isStreamErr;
                             }
                         }
                         if (this.__p2dIsStreamErrParser) {
                             _logRawStreamError(node, result);
                         }
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // never let a diagnostic break WhatsApp's parse
                     }
                     return result;
@@ -2659,7 +2659,7 @@ exports.InjectDiagHooks = () => {
                     reason: 'parser prototype not available',
                 });
             }
-        } catch (e) {
+        } catch (ignoredError) {
             // best-effort diagnostic: never let it break the caller
         }
 
@@ -2678,7 +2678,7 @@ exports.InjectDiagHooks = () => {
                         ctx: _logoutCtx(),
                         stack: _logoutStack(),
                     });
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 return func(arg);
@@ -2702,7 +2702,7 @@ exports.InjectDiagHooks = () => {
                             ctx: _logoutCtx(),
                             stack: _logoutStack(),
                         });
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     return func.apply(null, a);
@@ -2722,7 +2722,7 @@ exports.InjectDiagHooks = () => {
                         challengeType: ch && ch.challenge_type,
                         ctx: _logoutCtx(),
                     });
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 return func(ch);
@@ -2776,7 +2776,7 @@ exports.InjectDiagHooks = () => {
                             ) {
                                 try {
                                     extra.push(safeStr(arguments[i]));
-                                } catch (e) {
+                                } catch (ignoredError) {
                                     extra.push('<?>');
                                 }
                             }
@@ -2785,7 +2785,7 @@ exports.InjectDiagHooks = () => {
                                 st =
                                     window.require('WAWebSocketModel').Socket
                                         .state;
-                            } catch (e) {
+                            } catch (ignoredError) {
                                 // best-effort diagnostic: never let it break the caller
                             }
                             safeDiagLog(
@@ -2798,7 +2798,7 @@ exports.InjectDiagHooks = () => {
                                 },
                             );
                         }
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     return orig.apply(this, arguments);
@@ -2835,12 +2835,12 @@ exports.InjectDiagHooks = () => {
                     try {
                         s.socketState =
                             window.require('WAWebSocketModel').Socket.state;
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     try {
                         s.msSincePageLoad = Math.round(performance.now());
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     return s;
@@ -2855,7 +2855,7 @@ exports.InjectDiagHooks = () => {
                                         ev.replace('change:', '').toUpperCase(),
                                     { event: ev, snap: _streamSnap() },
                                 );
-                            } catch (e) {
+                            } catch (ignoredError) {
                                 // best-effort diagnostic: never let it break the caller
                             }
                         });

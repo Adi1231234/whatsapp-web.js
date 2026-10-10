@@ -21,7 +21,8 @@
 const InstallPendingSyncDiag = (eventName) => {
     const a = window.__p2dAdv;
     if (!a) return false;
-    const table = () => a.req('WAWebSchemaPendingDeviceSync').getTable();
+    const table = () =>
+        window.WaGateway.module('WAWebSchemaPendingDeviceSync').getTable();
     const snapshot = async () => {
         const rows = await table().all();
         return { n: rows.length, own: rows.some((r) => a.isOwnId(r.id)) };
@@ -46,7 +47,7 @@ const InstallPendingSyncDiag = (eventName) => {
     };
 
     return a.wrap(
-        a.req('WAWebApiPendingDeviceSync'),
+        window.WaGateway.module('WAWebApiPendingDeviceSync'),
         'doPendingDeviceSync',
         (orig) =>
             function () {
@@ -60,7 +61,7 @@ const InstallPendingSyncDiag = (eventName) => {
                     // read now because a drain that succeeds clears them.
                     before = snapshot().catch(() => null);
                     own = a.ownClocks(startedAt / 1000).catch(() => null);
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 const ret = orig.apply(this, arguments);

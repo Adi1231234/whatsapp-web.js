@@ -49,14 +49,21 @@ const {
     installHostedDeviceFlag,
     repairHostedDeviceFlag,
 } = require('./util/Injected/HostedDeviceFlag');
+const {
+    installWaGateway,
+    checkWaGateway,
+    WA_GATEWAY_CHECK,
+} = require('./util/Injected/WaGateway');
 
-// The storage events that get their own `diag` channel entry, and at what
-// level. SOCKET_DIAG is a console line nothing can subscribe to, and this
-// failure mode rejects initialize(), so the general diag bridge - exposed in
-// attachEventListeners - never registers.
-const STORAGE_DIAG_LEVELS = {
+// The socket-diag events that also get their own `diag` channel entry, and at
+// what level. SOCKET_DIAG is a console line nothing can subscribe to. The
+// storage failure mode rejects initialize(), so the general diag bridge -
+// exposed in attachEventListeners - never registers; the gateway check is
+// what a consumer acts on when WhatsApp changes underneath this library.
+const SUBSCRIBABLE_DIAG_LEVELS = {
     [STORAGE_INIT_ERROR]: 'error',
     [STORAGE_SCHEMA_SNAPSHOT]: 'info',
+    [WA_GATEWAY_CHECK]: 'info',
 };
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
@@ -180,7 +187,7 @@ class Client extends EventEmitter {
             let _injectUrl = '';
             try {
                 _injectUrl = this.pupPage?.url?.() || '';
-            } catch (_) {
+            } catch (ignoredError) {
                 /* page may be closed */
             }
             console.log('[wwjs-diag] inject:start', {
@@ -270,13 +277,16 @@ class Client extends EventEmitter {
                 'onSocketDiagEvent',
                 async (info) => this._onSocketDiagEvent(info),
             );
+            // Every injected module below reaches WhatsApp through the gateway,
+            // so it goes first; after the binding, so its reports have a way out.
+            await installWaGateway(this.pupPage);
             await this.pupPage.evaluate(() => {
                 const _st = () => {
                     try {
                         return String(
                             window.require('WAWebSocketModel').Socket.state,
                         );
-                    } catch (e) {
+                    } catch (ignoredError) {
                         return undefined;
                     }
                 };
@@ -294,7 +304,7 @@ class Client extends EventEmitter {
                                     let arg;
                                     try {
                                         arg = JSON.stringify(a).slice(0, 200);
-                                    } catch (e) {
+                                    } catch (ignoredError) {
                                         // best-effort diagnostic: never let it break the caller
                                     }
                                     window.onSocketDiagEvent({
@@ -306,7 +316,7 @@ class Client extends EventEmitter {
                                         arg,
                                         state: _st(),
                                     });
-                                } catch (e) {
+                                } catch (ignoredError) {
                                     // best-effort diagnostic: never let it break the caller
                                 }
                                 return orig.apply(this, args);
@@ -326,7 +336,7 @@ class Client extends EventEmitter {
                             '[wwjs-diag] socket bridge diag hooks installed (early)',
                         );
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 // Stream lifecycle transitions.
@@ -352,13 +362,13 @@ class Client extends EventEmitter {
                                         info: String(_S.info),
                                         state: _st(),
                                     });
-                                } catch (e) {
+                                } catch (ignoredError) {
                                     // best-effort diagnostic: never let it break the caller
                                 }
                             });
                         });
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 // One-shot registered/state snapshot (guarded so the later block
@@ -373,7 +383,7 @@ class Client extends EventEmitter {
                                 _me.getMaybeMePnUser() ||
                                 _me.getMaybeMeLidUser()
                             );
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // best-effort diagnostic: never let it break the caller
                         }
                         let _sm, _sd, _si, _rc, _hr, _stream;
@@ -384,7 +394,7 @@ class Client extends EventEmitter {
                             _si = String(S.info);
                             _rc = S.resumeCount;
                             _hr = S.isHardRefresh;
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // best-effort diagnostic: never let it break the caller
                         }
                         try {
@@ -392,7 +402,7 @@ class Client extends EventEmitter {
                                 window.require('WAWebSocketModel').Socket
                                     .stream,
                             );
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // best-effort diagnostic: never let it break the caller
                         }
                         window.onSocketDiagEvent({
@@ -407,7 +417,7 @@ class Client extends EventEmitter {
                             isHardRefresh: _hr,
                         });
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
             });
@@ -473,7 +483,7 @@ class Client extends EventEmitter {
                     const req = (n) => {
                         try {
                             return window.require?.(n) ?? null;
-                        } catch (e) {
+                        } catch (ignoredError) {
                             return null;
                         }
                     };
@@ -846,6 +856,12 @@ class Client extends EventEmitter {
                                 'synced',
                                 (info) => this._onSocketDiagEvent(info),
                             );
+                            // Everything this library depends on inside
+                            // WhatsApp, checked against the build that just
+                            // loaded - the moment a WhatsApp change can land.
+                            await checkWaGateway(this.pupPage, (info) =>
+                                this._onSocketDiagEvent(info),
+                            );
                             // Records stored unflagged before the wrapper
                             // existed. Not awaited: a full read of the table
                             // must not hold up the ready path.
@@ -1037,7 +1053,7 @@ class Client extends EventEmitter {
                                     let arg;
                                     try {
                                         arg = JSON.stringify(a).slice(0, 200);
-                                    } catch (e) {
+                                    } catch (ignoredError) {
                                         // best-effort diagnostic: never let it break the caller
                                     }
                                     window.onSocketDiagEvent({
@@ -1049,7 +1065,7 @@ class Client extends EventEmitter {
                                         arg,
                                         state: String(Socket.state),
                                     });
-                                } catch (e) {
+                                } catch (ignoredError) {
                                     // best-effort diagnostic: never let it break the caller
                                 }
                                 return orig.apply(this, args);
@@ -1108,13 +1124,13 @@ class Client extends EventEmitter {
                                         info: String(_Stream.info),
                                         state: String(Socket.state),
                                     });
-                                } catch (e) {
+                                } catch (ignoredError) {
                                     // best-effort diagnostic: never let it break the caller
                                 }
                             });
                         });
                     }
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
 
@@ -1141,7 +1157,7 @@ class Client extends EventEmitter {
                         _registered = !!(
                             _me.getMaybeMePnUser() || _me.getMaybeMeLidUser()
                         );
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     let _stream = {};
@@ -1154,7 +1170,7 @@ class Client extends EventEmitter {
                             resumeCount: S.resumeCount,
                             isHardRefresh: S.isHardRefresh,
                         };
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     window.onSocketDiagEvent({
@@ -1169,7 +1185,7 @@ class Client extends EventEmitter {
                         resumeCount: _stream.resumeCount,
                         isHardRefresh: _stream.isHardRefresh,
                     });
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
 
@@ -1339,7 +1355,7 @@ class Client extends EventEmitter {
      */
     _onSocketDiagEvent(info) {
         console.log('[wwjs-diag] SOCKET_DIAG', info);
-        const level = STORAGE_DIAG_LEVELS[info && info.event];
+        const level = SUBSCRIBABLE_DIAG_LEVELS[info && info.event];
         if (level) {
             this.emit('diag', level, info.event, JSON.stringify(info));
         }
@@ -1485,7 +1501,7 @@ class Client extends EventEmitter {
             if (this._diagCdpSession) {
                 await this._diagCdpSession.send('Performance.enable');
             }
-        } catch (e) {
+        } catch (ignoredError) {
             // ignore - Performance domain may not be available
         }
 
@@ -1642,7 +1658,7 @@ class Client extends EventEmitter {
                 storeAvailable = await this.pupPage.evaluate(() => {
                     return typeof window.WWebJS !== 'undefined';
                 });
-            } catch (e) {
+            } catch (ignoredError) {
                 /* page may not be ready */
             }
 
@@ -2222,7 +2238,7 @@ class Client extends EventEmitter {
                                     ?.hasSynced,
                             storeInjected: typeof window.WWebJS !== 'undefined',
                         }));
-                    } catch (_) {
+                    } catch (ignoredError) {
                         /* page may be closing */
                     }
                     console.log(
@@ -2414,7 +2430,7 @@ class Client extends EventEmitter {
                         .Contact?.get(wid);
                     const phone = contact?.phoneNumber?._serialized;
                     return phone || serialized;
-                } catch (e) {
+                } catch (ignoredError) {
                     return wid?._serialized || String(wid || '');
                 }
             };
@@ -2425,7 +2441,7 @@ class Client extends EventEmitter {
                     const from = window.__telemetry.resolvePhone(senderWid);
                     const to = window.__telemetry.resolvePhone(msg.to);
                     return { traceId, from, to };
-                } catch (e) {
+                } catch (ignoredError) {
                     return {
                         traceId: msg.id?._serialized || '',
                         from: msg.from?._serialized || '',
@@ -2636,7 +2652,7 @@ class Client extends EventEmitter {
                                 'WAWebNonMessageDataRequestPlaceholderMessageResendUtils',
                             )
                             .handlePlaceholderMsgsSeen(msgs, true);
-                    } catch (_) {
+                    } catch (ignoredError) {
                         // module may not be available
                     }
                 }, 5000);
@@ -2679,7 +2695,7 @@ class Client extends EventEmitter {
                     const _g = (fn) => {
                         try {
                             return fn();
-                        } catch (e) {
+                        } catch (ignoredError) {
                             return null;
                         }
                     };
@@ -2905,7 +2921,7 @@ class Client extends EventEmitter {
                                     ...s,
                                 }),
                             );
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // noop: diagnostics must never throw
                         }
                     };
@@ -2919,17 +2935,17 @@ class Client extends EventEmitter {
                     const mdModel = msg.mediaData;
                     try {
                         msg.on('change:directPath', onDp);
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // noop: diagnostics must never throw
                     }
                     try {
                         msg.on('change:type', onType);
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // noop: diagnostics must never throw
                     }
                     try {
                         mdModel?.on?.('change:mediaStage', onStage);
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // noop: diagnostics must never throw
                     }
 
@@ -2938,17 +2954,17 @@ class Client extends EventEmitter {
                     const cleanup = () => {
                         try {
                             msg.off('change:directPath', onDp);
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // noop: diagnostics must never throw
                         }
                         try {
                             msg.off('change:type', onType);
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // noop: diagnostics must never throw
                         }
                         try {
                             mdModel?.off?.('change:mediaStage', onStage);
-                        } catch (e) {
+                        } catch (ignoredError) {
                             // noop: diagnostics must never throw
                         }
                     };
@@ -2962,12 +2978,12 @@ class Client extends EventEmitter {
                                         : 'backstop@' + ms / 1000 + 's',
                                 );
                                 if (ms === 30000) cleanup();
-                            } catch (e) {
+                            } catch (ignoredError) {
                                 // noop: diagnostics must never throw
                             }
                         }, ms),
                     );
-                } catch (e) {
+                } catch (ignoredError) {
                     // Debug diagnostics must never break the message flow.
                 }
             }
@@ -3022,7 +3038,7 @@ class Client extends EventEmitter {
                                         ? !!h.hasReceivedOfflinePreviewIb()
                                         : false,
                             };
-                        } catch (e) {
+                        } catch (ignoredError) {
                             return { messageCount: 0, previewReceived: false };
                         }
                     };
@@ -3033,7 +3049,7 @@ class Client extends EventEmitter {
                         window.onOfflineDeliveryEndEvent?.(deliveryInfo());
                     }
                 }
-            } catch (e) {
+            } catch (ignoredError) {
                 // A rename upstream must not take the message bridge with it.
             }
 
@@ -3050,7 +3066,7 @@ class Client extends EventEmitter {
             if (window.__wwjsOnMsgAdd) {
                 try {
                     Msg.removeListener('add', window.__wwjsOnMsgAdd);
-                } catch (e) {
+                } catch (ignoredError) {
                     // A rename upstream must not leave the bridge unattached.
                 }
             }
@@ -3213,7 +3229,7 @@ class Client extends EventEmitter {
                     window.onAddMessageEvent(
                         window.WWebJS.getMessageModel(msg),
                     );
-                } catch (e) {
+                } catch (ignoredError) {
                     // Fallback must never break the main flow
                 }
             });
@@ -3319,7 +3335,7 @@ class Client extends EventEmitter {
                     return typeof Msg.getListenersCount === 'function'
                         ? Msg.getListenersCount(event)
                         : -1;
-                } catch (e) {
+                } catch (ignoredError) {
                     return -1;
                 }
             };
@@ -4552,7 +4568,7 @@ class Client extends EventEmitter {
                             },
                             participantWids,
                         );
-                } catch (err) {
+                } catch (ignoredError) {
                     return 'CreateGroupError: An unknown error occupied while creating a group';
                 }
 
@@ -4793,7 +4809,7 @@ class Client extends EventEmitter {
                                     meContact,
                                 ));
                     }
-                } catch (error) {
+                } catch (ignoredError) {
                     return false;
                 }
 

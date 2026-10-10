@@ -26,7 +26,7 @@
 
 /** Wraps the two writers so device 99 is always stored flagged. */
 const InjectHostedDeviceFlag = (hostedDeviceId) => {
-    const api = window.require('WAWebApiDeviceList');
+    const api = window.WaGateway.module('WAWebApiDeviceList');
     if (!api) return false;
 
     const isUnflagged = (d) =>
@@ -56,12 +56,13 @@ const InjectHostedDeviceFlag = (hostedDeviceId) => {
             let fixed = arg;
             try {
                 fixed = map(arg);
-            } catch (e) {
+            } catch (ignoredError) {
                 // never let the correction break the write itself
             }
             const rest = Array.prototype.slice.call(arguments, 1);
             return orig.apply(this, [fixed].concat(rest));
         };
+        window.WaGateway.keepShape(wrapped, orig);
         wrapped.__p2dHostedFlag = true;
         api[key] = wrapped;
         return true;
@@ -83,7 +84,7 @@ const InjectHostedDeviceFlag = (hostedDeviceId) => {
  * the report says what is left rather than what was attempted.
  */
 const RepairHostedDeviceFlag = async () => {
-    const api = window.require('WAWebApiDeviceList');
+    const api = window.WaGateway.module('WAWebApiDeviceList');
     const fix = window.__p2dHostedFlag;
     if (!api || !fix) return { found: null };
     const unflagged = async () =>

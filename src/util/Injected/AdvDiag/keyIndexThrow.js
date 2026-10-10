@@ -89,7 +89,7 @@ const InstallKeyIndexThrowDiag = (eventName, preventedEvent) => {
     };
 
     return a.wrap(
-        a.req('WAWebHandleAdvKeyIndexResultApi'),
+        window.WaGateway.module('WAWebHandleAdvKeyIndexResultApi'),
         'handleKeyIndexResultSync',
         (orig) =>
             function () {
@@ -99,14 +99,14 @@ const InstallKeyIndexThrowDiag = (eventName, preventedEvent) => {
                 } catch (err) {
                     try {
                         a.emit(eventName, describe(arguments, err));
-                    } catch (e) {
+                    } catch (ignoredError) {
                         // best-effort diagnostic: never let it break the caller
                     }
                     throw err;
                 }
                 try {
                     counterfactual(orig, this, arguments);
-                } catch (e) {
+                } catch (ignoredError) {
                     // best-effort diagnostic: never let it break the caller
                 }
                 return out;

@@ -17,7 +17,7 @@ const InstallAdvFixedSet = (storageKey, max) => {
     try {
         ids = JSON.parse(window.localStorage.getItem(storageKey) || '[]');
         if (!Array.isArray(ids)) ids = [];
-    } catch (e) {
+    } catch (ignoredError) {
         ids = [];
     }
     const set = new Set(ids);
@@ -27,7 +27,7 @@ const InstallAdvFixedSet = (storageKey, max) => {
                 storageKey,
                 JSON.stringify(Array.from(set).slice(-max)),
             );
-        } catch (e) {
+        } catch (ignoredError) {
             // a full or blocked localStorage only costs the memory
         }
     };

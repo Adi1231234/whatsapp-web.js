@@ -40,10 +40,10 @@ exports.ListMediaRefsSince = async (since) => {
     ];
     // Found by export name if its module moves, as `fetchMediaSince` does.
     const findMedia = (() => {
-        const known = window.require('WAWebDBMessageFindLocal');
+        const known = window.WaGateway.module('WAWebDBMessageFindLocal');
         if (typeof known?.msgFindMedia === 'function')
             return known.msgFindMedia;
-        const modules = window.require('__debug')?.modulesMap || {};
+        const modules = window.WaGateway.module('__debug')?.modulesMap || {};
         for (const id of Object.keys(modules)) {
             const m = modules[id];
             const found = [m?.exports, m?.defaultExport].find(
@@ -81,8 +81,7 @@ exports.ListMediaRefsSince = async (since) => {
         return answer.messages;
     };
 
-    const chats = window
-        .require('WAWebCollections')
+    const chats = window.WaGateway.module('WAWebCollections')
         .Chat.getModelsArray()
         .filter((chat) => chat.t >= since);
 

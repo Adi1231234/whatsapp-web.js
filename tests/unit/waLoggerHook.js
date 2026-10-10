@@ -12,6 +12,7 @@ const {
     isWaLoggerSignal,
 } = require('../../src/util/Injected/WaLoggerHook');
 const { evaluateInPage } = require('./evaluateBoundary');
+const { installGateway } = require('./waGateway/fakeWhatsApp');
 
 // Verbatim from WhatsApp Web, on the path that ends in
 // `clearCredentialsAndStoredData(WebFailStorageInitialization)` and a
@@ -92,6 +93,7 @@ function fakePage(localStorage) {
         },
         localStorage: localStorage || fakeLocalStorage(),
     };
+    installGateway();
     return {
         emitted,
         batches,
@@ -437,6 +439,7 @@ describe('WaLoggerHook', function () {
         it('survives a page where WALogger is not loaded yet', function () {
             global.setInterval = () => 0;
             global.window = { require: () => undefined };
+            installGateway();
             expect(() => install()).to.not.throw();
         });
 
