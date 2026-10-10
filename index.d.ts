@@ -557,22 +557,6 @@ declare namespace WAWebJS {
             ) => void,
         ): this;
 
-        /**
-         * Emitted for a media message that appeared in the store without
-         * WhatsApp announcing it as new.
-         *
-         * These carry `isNewMsg: false`, so the ordinary `message` event never
-         * fires for them. Only media-bearing ones are emitted: the rest is
-         * history the store loads by the hundred on every connect.
-         */
-        on(
-            event: 'message_backfilled',
-            listener: (
-                /** The message that was already in the store */
-                message: Message,
-            ) => void,
-        ): this;
-
         /** Emitted when a new message ciphertext is received  */
         on(
             event: 'message_ciphertext',
@@ -1072,7 +1056,6 @@ declare namespace WAWebJS {
         CHAT_REMOVED = 'chat_removed',
         CHAT_ARCHIVED = 'chat_archived',
         MESSAGE_RECEIVED = 'message',
-        MESSAGE_BACKFILLED = 'message_backfilled',
         MESSAGE_CIPHERTEXT = 'message_ciphertext',
         MESSAGE_CIPHERTEXT_FAILED = 'message_ciphertext_failed',
         MESSAGE_CREATE = 'message_create',

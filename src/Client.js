@@ -1834,27 +1834,6 @@ class Client extends EventEmitter {
             },
         );
 
-        // A message that reached the store without ever being a new one.
-        //
-        // `Msg.on('add')` fires for these too, and the handler below drops them
-        // because `isNewMsg` is false - which is right for a normal arrival,
-        // and wrong for a caller whose job is not to miss anything. Only ones
-        // carrying media are forwarded: the rest are history the store loads by
-        // the hundred on every connect, and a consumer would discard them all.
-        await exposeFunctionIfAbsent(
-            this.pupPage,
-            'onBackfilledMessageEvent',
-            (msg) => {
-                /**
-                 * Emitted for a media message that appeared in the store
-                 * without WhatsApp announcing it as new.
-                 * @event Client#message_backfilled
-                 * @param {Message} message
-                 */
-                this.emit(Events.MESSAGE_BACKFILLED, new Message(this, msg));
-            },
-        );
-
         await exposeFunctionIfAbsent(
             this.pupPage,
             'onAddMessageEvent',
@@ -3202,20 +3181,11 @@ class Client extends EventEmitter {
                             window.WWebJS.getMessageModel(_msg),
                         );
                     });
-                } else if (msg.type !== 'ciphertext') {
-                    // Not announced as new, but it carries media - a picture
-                    // nobody was told about. Only media: the rest is history
-                    // the store loads by the hundred on every connect.
-                    if (!msg.directPath && !msg.mediaKey) return;
-                    try {
-                        window.onBackfilledMessageEvent?.(
-                            window.WWebJS.getMessageModel(msg),
-                        );
-                    } catch (e) {
-                        // A listener that throws aborts the rest of WhatsApp's
-                        // own add dispatch, so this one cannot.
-                    }
                 }
+                // Nothing for an add that is not new. Every delivery is marked
+                // isNewMsg (WAWebUpdateMessageUIAction); the rest is what
+                // WhatsApp loaded to draw the screen - opened chats, searches,
+                // and the quoted message of a reply, which it builds with no `t`.
             };
             window.__wwjsOnMsgAdd = __onMsgAdd;
             Msg.on('add', __onMsgAdd);
@@ -3949,7 +3919,7 @@ class Client extends EventEmitter {
      */
     async getMessageById(messageId) {
         const msg = await this.pupPage.evaluate(async (messageId) => {
-            let msg = window.require('WAWebCollections').Msg.get(messageId);
+            let msg = window.WWebJS.getLoadedMsg(messageId);
             if (msg) return window.WWebJS.getMessageModel(msg);
 
             const params = messageId.split('_');
