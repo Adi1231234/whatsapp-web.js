@@ -14,6 +14,7 @@ const {
 } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { LoadUtils } = require('./util/Injected/Utils');
+const { ListMediaRefsSince } = require('./util/Injected/MediaRefs');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -1793,6 +1794,16 @@ class Client extends EventEmitter {
         }, timestamp);
 
         return chats.map((chat) => ChatFactory.create(this, chat));
+    }
+
+    /**
+     * Lists the media stored locally since a moment, without loading any of
+     * it. See util/Injected/MediaRefs.js.
+     * @param {number} timestamp Unix SECONDS.
+     * @returns {Promise<{refs: Array<{id: string, remote: string, fromMe: boolean, t: number|null, type: string, isGif: boolean, disappearing: boolean}>, failures: Array<{chatId: string, reason: string}>, chatsRead: number}>}
+     */
+    async getMediaRefsSince(timestamp) {
+        return await this.pupPage.evaluate(ListMediaRefsSince, timestamp);
     }
 
     /**
