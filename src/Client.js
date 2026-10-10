@@ -1884,7 +1884,7 @@ class Client extends EventEmitter {
      */
     async getMessageById(messageId) {
         const msg = await this.pupPage.evaluate(async (messageId) => {
-            let msg = window.require('WAWebCollections').Msg.get(messageId);
+            let msg = window.WWebJS.getLoadedMsg(messageId);
             if (msg) return window.WWebJS.getMessageModel(msg);
 
             const params = messageId.split('_');

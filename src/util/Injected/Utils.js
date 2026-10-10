@@ -802,6 +802,14 @@ exports.LoadUtils = () => {
         return mediaData;
     };
 
+    // The loaded model of a message - but not the stand-in WhatsApp builds to
+    // draw a reply's quote (`fromQuotedMsg`, no `t`, no row), which is not the
+    // message. WAWebMsgCollection.getContext reads past it the same way.
+    window.WWebJS.getLoadedMsg = (id) => {
+        const msg = window.require('WAWebCollections').Msg.get(id);
+        return msg && !msg.fromQuotedMsg ? msg : undefined;
+    };
+
     window.WWebJS.getMessageModel = (message) => {
         const msg = message.serialize();
 
