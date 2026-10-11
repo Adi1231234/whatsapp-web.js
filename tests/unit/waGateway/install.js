@@ -136,6 +136,35 @@ describe('WaGateway: what this library depends on inside WhatsApp', function () 
         ]);
     });
 
+    it('wraps a function once per owner, and keeps its shape', function () {
+        const { gateway } = page(healthyModules());
+        const calls = [];
+        const target = { add: (a, b) => a + b };
+        const by = (owner) => (orig) =>
+            function () {
+                calls.push(owner);
+                return orig.apply(this, arguments);
+            };
+        gateway.wrap('fix', target, 'add', by('fix'));
+        gateway.wrap('diag', target, 'add', by('diag'));
+        const installed = target.add;
+        // Each owner sees the other's wrapper on top: still not wrapped again.
+        expect(gateway.wrap('fix', target, 'add', by('fix'))).to.equal(true);
+        expect(gateway.wrap('diag', target, 'add', by('diag'))).to.equal(true);
+        expect(target.add).to.equal(installed);
+        expect(target.add(1, 2)).to.equal(3);
+        expect(calls).to.deep.equal(['diag', 'fix']);
+        expect(target.add.length).to.equal(2);
+    });
+
+    it('wraps nothing that is not a function', function () {
+        const { gateway } = page(healthyModules());
+        expect(gateway.wrap('fix', {}, 'gone', (o) => o)).to.equal(false);
+        expect(gateway.wrap('fix', undefined, 'gone', (o) => o)).to.equal(
+            false,
+        );
+    });
+
     it('installs once, however often inject runs', function () {
         const { gateway } = page(healthyModules());
         installGateway();

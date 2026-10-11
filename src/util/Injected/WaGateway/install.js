@@ -13,6 +13,9 @@
  * - `keepShape(wrapper, original)`: gives a wrapper over a WhatsApp function
  *   the original's `length`, so check() sees WhatsApp's function through it.
  *   Every wrapper this library installs over a WhatsApp export goes through it.
+ * - `wrap(owner, target, key, factory)`: puts `factory(original)` over
+ *   `target[key]`, once per owner for the life of the page, shaped by
+ *   keepShape. Use it wherever two owners wrap the same function.
  *
  * Reports go through `window.onSocketDiagEvent` as `WA_GATEWAY_CHECK`. It never
  * throws and never changes what WhatsApp returns: a broken binding is the
@@ -156,10 +159,28 @@ const InstallWaGateway = (bindings) => {
         return wrapper;
     };
 
+    // Who already wrapped what is remembered here, not read off the function:
+    // a marker on the outermost wrapper hides every owner beneath it, so two
+    // owners over one function each took the other's wrapper for "not mine
+    // yet" and wrapped again on every install, piling layers up.
+    const owners = new WeakMap(); // target -> Map(key -> Set(owner))
+    const wrap = (owner, target, key, factory) => {
+        if (!target || typeof target[key] !== 'function') return false;
+        if (!owners.has(target)) owners.set(target, new Map());
+        const byKey = owners.get(target);
+        if (!byKey.has(key)) byKey.set(key, new Set());
+        if (byKey.get(key).has(owner)) return true;
+        const original = target[key];
+        target[key] = keepShape(factory(original), original);
+        byKey.get(key).add(owner);
+        return true;
+    };
+
     window.WaGateway = {
         module: moduleOf,
         check: check,
         keepShape: keepShape,
+        wrap: wrap,
     };
     return true;
 };

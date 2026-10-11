@@ -16,7 +16,7 @@ const sourceFiles = (dir) =>
 // put them: it splits a long chain as `window\n    .WaGateway.module(\n 'X',\n)`.
 const CALL = /WaGateway\s*\.\s*module\s*\(\s*([^)]*?)\s*,?\s*\)/g;
 const NOT_A_CALL =
-    /window\s*\.\s*WaGateway(?!\s*\.\s*(module|check|keepShape)\s*\()/g;
+    /window\s*\.\s*WaGateway(?!\s*\.\s*(module|check|keepShape|wrap)\s*\()/g;
 const DESTRUCTURED = /\{[^}]*\bWaGateway\b[^}]*\}\s*=\s*window\b/g;
 
 /** Every match of `re` in src outside the gateway, with where it is. */

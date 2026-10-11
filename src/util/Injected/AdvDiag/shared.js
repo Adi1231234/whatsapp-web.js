@@ -20,13 +20,16 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
         }
     };
 
-    /** A wid, or a device-list key like "972500000000@c.us", masked. */
+    /**
+     * A wid, or a device-list key, masked to the last four digits of each
+     * number in it. A phone number's key is the bare number, with no `@`.
+     */
     const who = (id) => {
         try {
             if (id && typeof id.toLogString === 'function') {
                 return id.toLogString();
             }
-            return String(id).replace(/^[^@]*?(\d{1,4})(@\S+)$/, '$1$2');
+            return String(id).replace(/\d+(?=\d{4})/g, '');
         } catch (ignoredError) {
             return '?';
         }
@@ -113,18 +116,9 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
             : null;
     };
 
-    /** Replaces `target[key]` once; the factory gets the original. */
-    const wrap = (target, key, factory) => {
-        if (!target || typeof target[key] !== 'function') return false;
-        if (target[key].__p2dAdv) return true;
-        const wrapped = window.WaGateway.keepShape(
-            factory(target[key]),
-            target[key],
-        );
-        wrapped.__p2dAdv = true;
-        target[key] = wrapped;
-        return true;
-    };
+    /** Replaces `target[key]` once per page; the factory gets the original. */
+    const wrap = (target, key, factory) =>
+        window.WaGateway.wrap('AdvDiag', target, key, factory);
 
     window.__p2dAdv = {
         emit,

@@ -20,6 +20,15 @@ loads the build that carries it.
       the module exists, each export exists and has the declared kind, the
       argument count matches where one is declared, and each declared member is
       on the value or on its class's prototype.
+    - `keepShape(wrapper, original)` gives a wrapper the original's `length`,
+      so `check()` reads WhatsApp's argument count through it.
+    - `wrap(owner, target, key, factory)` puts a wrapper over a WhatsApp
+      function once per owner for the life of the page. It remembers who
+      wrapped what itself: when HostedDeviceFlag and AdvDiag each read a marker
+      off the outermost function, each took the other's wrapper for "not
+      installed" and wrapped again on every install (inject and synced both
+      install), and a write landing while the fix was outermost never reached
+      the diagnostic.
 - `index.js` - `installWaGateway(page)`, first in `inject()`, and
   `checkWaGateway(page, report)`, once the app has synced.
 
