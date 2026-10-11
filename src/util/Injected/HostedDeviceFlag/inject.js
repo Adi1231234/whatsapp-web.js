@@ -48,25 +48,24 @@ const InjectHostedDeviceFlag = (hostedDeviceId) => {
               })
             : record;
 
-    const wrap = (key, map) => {
-        const orig = api[key];
-        if (typeof orig !== 'function') return false;
-        if (orig.__p2dHostedFlag) return true;
-        const wrapped = function (arg) {
-            let fixed = arg;
-            try {
-                fixed = map(arg);
-            } catch (ignoredError) {
-                // never let the correction break the write itself
-            }
-            const rest = Array.prototype.slice.call(arguments, 1);
-            return orig.apply(this, [fixed].concat(rest));
-        };
-        window.WaGateway.keepShape(wrapped, orig);
-        wrapped.__p2dHostedFlag = true;
-        api[key] = wrapped;
-        return true;
-    };
+    // Once per page, beneath whatever AdvDiag puts over the same writers.
+    const wrap = (key, map) =>
+        window.WaGateway.wrap(
+            'HostedDeviceFlag',
+            api,
+            key,
+            (orig) =>
+                function (arg) {
+                    let fixed = arg;
+                    try {
+                        fixed = map(arg);
+                    } catch (ignoredError) {
+                        // never let the correction break the write itself
+                    }
+                    const rest = Array.prototype.slice.call(arguments, 1);
+                    return orig.apply(this, [fixed].concat(rest));
+                },
+        );
 
     const one = wrap('createOrReplaceDeviceRecord', flagged);
     const bulk = wrap('bulkCreateOrReplaceDeviceRecord', (records) =>

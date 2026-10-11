@@ -44,7 +44,10 @@ Verified live: a hosted contact stored unflagged, then given a newer signature
 by the server, passed the real check with the fix while the re-run threw
 #76137; the drain went 1 -> 0 and both events fired.
 
-Users are masked the way WhatsApp's `toLogString` masks them.
+Users are masked the way WhatsApp's `toLogString` masks them: the last four
+digits of each number. A phone number's device-list key is the bare number,
+with no `@`; the first mask matched only keys with one, and sent such numbers
+in full.
 
 ## Verified on a live stalled shop (2026-10-09)
 

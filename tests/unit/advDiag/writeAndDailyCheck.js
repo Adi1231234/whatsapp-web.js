@@ -41,6 +41,23 @@ describe('AdvDiag: where the bad record comes from, and how a stall ends', funct
         expect(writes[0].by).to.be.a('string');
     });
 
+    // Found in the field: a phone number's key has no `@`, and the first mask
+    // matched only keys with one - 15 numbers reached the logs in full.
+    it('masks a phone number whose key is the bare number', async function () {
+        const page = fakePage();
+        evaluateInPage(InstallHostedWriteDiag, WRITE);
+        await page.modules.WAWebApiDeviceList.createOrReplaceDeviceRecord(
+            bad('972500000932'),
+        );
+        await page.modules.WAWebApiDeviceList.createOrReplaceDeviceRecord(
+            bad('157552386044150:96@lid'),
+        );
+        const users = page.emitted
+            .filter((e) => e.event === WRITE)
+            .map((e) => e.user);
+        expect(users).to.deep.equal(['0932', '4150:96@lid']);
+    });
+
     it('reports a contact once per page, however often it is rewritten', async function () {
         const page = fakePage();
         evaluateInPage(InstallHostedWriteDiag, WRITE);
