@@ -36,6 +36,7 @@ const {
     WAL_CARRY_MAX_BYTES,
     WAL_SIGNAL_PER_TEMPLATE,
     WAL_SIGNAL_WINDOW_MS,
+    WAL_EVENT_PREFIX,
 } = require('./util/Injected/WaLoggerHook');
 const {
     InjectStorageDiag,
@@ -52,19 +53,8 @@ const {
 const {
     installWaGateway,
     checkWaGateway,
-    WA_GATEWAY_CHECK,
 } = require('./util/Injected/WaGateway');
-
-// The socket-diag events that also get their own `diag` channel entry, and at
-// what level. SOCKET_DIAG is a console line nothing can subscribe to. The
-// storage failure mode rejects initialize(), so the general diag bridge -
-// exposed in attachEventListeners - never registers; the gateway check is
-// what a consumer acts on when WhatsApp changes underneath this library.
-const SUBSCRIBABLE_DIAG_LEVELS = {
-    [STORAGE_INIT_ERROR]: 'error',
-    [STORAGE_SCHEMA_SNAPSHOT]: 'info',
-    [WA_GATEWAY_CHECK]: 'info',
-};
+const { subscribableDiagLevel } = require('./util/SubscribableDiag');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -447,6 +437,7 @@ class Client extends EventEmitter {
                 WAL_MAX_BUFFERED,
                 WAL_CARRY_KEY,
                 WAL_CARRY_MAX_BYTES,
+                WAL_EVENT_PREFIX,
             );
             await this.pupPage.evaluate(
                 InjectStorageDiag,
@@ -1344,18 +1335,15 @@ class Client extends EventEmitter {
      * Receives everything the injected diagnostics report about the socket and
      * the storage layer.
      *
-     * Almost all of it is a console line, which is what the host tails. The one
-     * exception is the storage-initialisation exception: WhatsApp is about to
-     * clear the session's credentials over it, and a console line is not
-     * something a consumer can subscribe to. It also cannot wait for the
-     * general `diag` bridge, which is exposed in attachEventListeners - in this
-     * failure mode initialize() rejects, so that never runs.
+     * Almost all of it is a console line, which is what the host tails. The
+     * few a consumer must be able to subscribe to also go on the `diag`
+     * channel; util/SubscribableDiag.js decides which, and why.
      *
      * Private function
      */
     _onSocketDiagEvent(info) {
         console.log('[wwjs-diag] SOCKET_DIAG', info);
-        const level = SUBSCRIBABLE_DIAG_LEVELS[info && info.event];
+        const level = subscribableDiagLevel(info);
         if (level) {
             this.emit('diag', level, info.event, JSON.stringify(info));
         }

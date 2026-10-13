@@ -20,7 +20,8 @@
  *   go and read the file, and it is chosen by LEVEL so an unseen failure is
  *   carried on its first occurrence without anyone having predicted its words.
  *   Rate-limited per template, because the level rule alone would also carry
- *   the routine ones.
+ *   the routine ones. The terminal ones also reach the client's `diag`
+ *   channel, where a consumer can subscribe to them (util/SubscribableDiag.js).
  *
  * Measured on a busy shop over 6.2 minutes: 0 ERROR, 0 EXPECTED_ERROR, 32 WARN,
  * 1,773 LOG, 202 DEV_XMPP. LOG is excluded from the second rule because it is
@@ -101,6 +102,9 @@ const WAL_CARRY_MAX_BYTES = 131072;
 const WAL_SIGNAL_PER_TEMPLATE = 3;
 const WAL_SIGNAL_WINDOW_MS = 600000;
 
+/** A line on `onSocketDiagEvent` is this plus its level: `WA_INTERNAL_LOG`. */
+const WAL_EVENT_PREFIX = 'WA_INTERNAL_';
+
 /** True when a line also deserves a GCP row. Pure, so testable. */
 const isWaLoggerSignal = (level, message) =>
     WAL_SIGNAL_LEVELS.indexOf(level) !== -1 || WAL_TERMINAL.test(message);
@@ -116,6 +120,7 @@ const InjectWaLoggerHook = (
     maxBuffered,
     carryKey,
     carryMaxBytes,
+    eventPrefix,
 ) => {
     const WAL = window.WaGateway.module('WALogger');
     if (!WAL) return;
@@ -328,7 +333,7 @@ const InjectWaLoggerHook = (
                     typeof window.onSocketDiagEvent === 'function'
                 ) {
                     window.onSocketDiagEvent({
-                        event: 'WA_INTERNAL_' + line.level,
+                        event: eventPrefix + line.level,
                         terminal: isTerminal,
                         msg: line.msg.slice(0, 300),
                         args: line.args,
@@ -400,5 +405,6 @@ module.exports = {
     WAL_MAX_BUFFERED,
     WAL_CARRY_KEY,
     WAL_CARRY_MAX_BYTES,
+    WAL_EVENT_PREFIX,
     isWaLoggerSignal,
 };

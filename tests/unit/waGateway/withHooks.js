@@ -42,6 +42,7 @@ async function injectPhase() {
         WaLoggerHook.WAL_MAX_BUFFERED,
         WaLoggerHook.WAL_CARRY_KEY,
         WaLoggerHook.WAL_CARRY_MAX_BYTES,
+        WaLoggerHook.WAL_EVENT_PREFIX,
     );
     await installHostedDeviceFlag(page);
     await installAdvDiag(page, 'inject', () => {});
