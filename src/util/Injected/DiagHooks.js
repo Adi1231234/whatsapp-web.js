@@ -2399,9 +2399,9 @@ exports.InjectDiagHooks = () => {
         //     funnel EVERY credential wipe passes through - all three async
         //     branches of Socket.logout, the stream-error 515/516 paths, the
         //     storage-initialization-error path, and the `device_removed`
-        //     branch. Unlike hook 1 it cannot be bypassed, and unlike the
-        //     WALogger strings below it does not break when WhatsApp reworks a
-        //     message. `reason === undefined` here with no preceding
+        //     branch. Unlike hook 1 it cannot be bypassed, and unlike WALogger's
+        //     wording (WaLoggerHook.js) it does not break when WhatsApp reworks
+        //     a message. `reason === undefined` here with no preceding
         //     LOGOUT_REASON is the signature of a server-side device removal.
         //     info, not debug: one line per logout, and it is the line that says
         //     why an account died.
@@ -2729,89 +2729,7 @@ exports.InjectDiagHooks = () => {
             },
         );
 
-        // 5) Forward WhatsApp's OWN internal logs (WALogger LOG/WARN/ERROR) for
-        //    logout/socket/stream/sync/integrity/session topics. pic2desk only
-        //    captures console.error, so these WA-internal messages (e.g.
-        //    "[socket model] ...", "[integrity-challenge] ...") were invisible.
-        //
-        //    Level is per MESSAGE, not per WALogger level. _WAL_TERMINAL matches
-        //    only the lines where WhatsApp states that a session has just ended,
-        //    and those go out at info so they reach GCP with debugLogsEnabled
-        //    off (it is off fleet-wide). Everything else stays debug.
-        //    Why it matters: "stream error due to device removed, logging out"
-        //    is a WALogger.LOG, so it only ever reached GCP on the handful of
-        //    machines that happened to have debug on - on every other machine
-        //    the reason an account died had to be inferred.
-        //    Why not raise all of _WAL_KW to info: measured over 24h on the 6
-        //    debug-enabled machines, that keyword set produced 5440 rows (2817
-        //    on one machine), almost all routine syncd/usync chatter - roughly
-        //    20k rows/day fleet-wide.
-        //    _WAL_TERMINAL was measured the same way before being trusted:
-        //    replayed over 30 days of GCP across the 10 debug-enabled machines
-        //    it matches 2 rows total, one of them the device_removed line.
-        //    It deliberately does NOT match "account_temporarily_banned" -
-        //    that fires 781 times / 30 days on machines that stay connected, so
-        //    it is not terminal, and hook 3 already reports it at info via
-        //    Cmd.onTemporaryBanFromBridge. Measure any token added here the
-        //    same way before adding it.
-        try {
-            var _WAL = window.require('WALogger');
-            var _WAL_KW =
-                /logout|socket|stream|sync|salt|integrity|session|deregister|conflict|ban|offline|resume|bootstrap|unpair|noise|companion|expire|adv|primary|identity|checkpoint|passkey|kicked/i;
-            var _WAL_TERMINAL =
-                /logging out|logged out|device removed|fatal error|failure stanza|dirty bit|identity changed|native logout failed|forced logout/i;
-            ['ERROR', 'WARN', 'LOG'].forEach(function (lvl) {
-                var orig = _WAL[lvl];
-                if (typeof orig !== 'function' || orig.__p2dWrapped) return;
-                var wrapped = function () {
-                    try {
-                        var t = arguments[0];
-                        var msg = Array.isArray(t) ? t.join('{}') : String(t);
-                        if (_WAL_KW.test(msg) || _WAL_TERMINAL.test(msg)) {
-                            var extra = [];
-                            for (
-                                var i = 1;
-                                i < arguments.length && i < 5;
-                                i++
-                            ) {
-                                try {
-                                    extra.push(safeStr(arguments[i]));
-                                } catch (ignoredError) {
-                                    extra.push('<?>');
-                                }
-                            }
-                            var st = null;
-                            try {
-                                st =
-                                    window.require('WAWebSocketModel').Socket
-                                        .state;
-                            } catch (ignoredError) {
-                                // best-effort diagnostic: never let it break the caller
-                            }
-                            safeDiagLog(
-                                _WAL_TERMINAL.test(msg) ? 'info' : 'debug',
-                                'WA_INTERNAL_' + lvl,
-                                {
-                                    msg: msg.slice(0, 300),
-                                    args: extra,
-                                    socketState: st,
-                                },
-                            );
-                        }
-                    } catch (ignoredError) {
-                        // best-effort diagnostic: never let it break the caller
-                    }
-                    return orig.apply(this, arguments);
-                };
-                wrapped.__p2dWrapped = true;
-                _WAL[lvl] = wrapped;
-            });
-        } catch (e) {
-            safeDiagLog('debug', 'HOOK_FAIL', {
-                hook: 'wa-internal-logger',
-                reason: String((e && e.message) || e),
-            });
-        }
+        // 5) WhatsApp's own logger (WALogger) is forwarded by WaLoggerHook.js.
 
         // 6) WhatsApp Stream state transitions — the connection lifecycle that
         //    precedes a logout (info/mode/displayInfo leaving NORMAL/MAIN).
@@ -2875,7 +2793,6 @@ exports.InjectDiagHooks = () => {
                 'bridge.socketLogout',
                 'Cmd.logout-family',
                 'integrity.openChallengeModal',
-                'WALogger.LOG/WARN/ERROR',
                 'Stream.change:info/mode/displayInfo',
             ],
             reasonMapSize: Object.keys(_logoutReasonName).length,

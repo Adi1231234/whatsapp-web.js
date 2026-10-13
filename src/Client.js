@@ -260,8 +260,8 @@ class Client extends EventEmitter {
             // closing" reason is lost for exactly the failure we care about.
             // Installing them here captures it. Fully defensive (modules may not
             // be loaded yet; every read is guarded) and idempotent: the shared
-            // __wwjsDiagHooked / __p2dWrapped / __p2dStreamHooked / __p2dSnapDone
-            // guards make the later block a no-op so nothing installs twice.
+            // __wwjsDiagHooked / __p2dStreamHooked / __p2dSnapDone guards make
+            // the later block a no-op so nothing installs twice.
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onSocketDiagEvent',
