@@ -9,8 +9,10 @@ const {
     WAL_MAX_BUFFERED,
     WAL_CARRY_KEY,
     WAL_CARRY_MAX_BYTES,
+    WAL_EVENT_PREFIX,
     isWaLoggerSignal,
 } = require('../../src/util/Injected/WaLoggerHook');
+const { subscribableDiagLevel } = require('../../src/util/SubscribableDiag');
 const { evaluateInPage } = require('./evaluateBoundary');
 const { installGateway } = require('./waGateway/fakeWhatsApp');
 
@@ -162,6 +164,7 @@ describe('WaLoggerHook', function () {
                 maxBuffered === undefined ? WAL_MAX_BUFFERED : maxBuffered,
                 WAL_CARRY_KEY,
                 WAL_CARRY_MAX_BYTES,
+                WAL_EVENT_PREFIX,
             );
 
         const emitAll = (page) =>
@@ -397,6 +400,32 @@ describe('WaLoggerHook', function () {
             expect(page.emitted.every((e) => e.terminal === true)).to.equal(
                 true,
             );
+        });
+
+        it('reports a terminal line in the shape the client subscribes to', async function () {
+            // A login the server refused, the reason as a substitution. Read
+            // back through JSON, which is what the binding sends.
+            const page = fakePage();
+            install(1);
+            window.require('WAWebSocketModel').Socket.state = 'CONNECTED';
+            const parts = [
+                'received failure stanza, reason: ',
+                ', logging out',
+            ];
+            page.WALogger.LOG(
+                Object.assign(parts.slice(), { raw: parts }),
+                401,
+            );
+            await settle();
+            const info = JSON.parse(JSON.stringify(page.emitted[0]));
+            expect(info).to.deep.equal({
+                event: 'WA_INTERNAL_LOG',
+                terminal: true,
+                msg: 'received failure stanza, reason: {}, logging out',
+                args: '[401]',
+                state: 'CONNECTED',
+            });
+            expect(subscribableDiagLevel(info)).to.equal('info');
         });
 
         it('caps each template separately, so a novel line is never hidden', async function () {

@@ -41,7 +41,7 @@
   },
   "src/util/Injected/DiagHooks.js": {
     "no-restricted-properties": {
-      "count": 72
+      "count": 70
     }
   },
   "src/util/Injected/MediaKeyRecovery.js": {
