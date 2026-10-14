@@ -23,12 +23,11 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
     /**
      * A wid, or a device-list key, masked to the last four digits of each
      * number in it. A phone number's key is the bare number, with no `@`.
+     * Masked here, not by `toLogString`: WhatsApp's own masking is gated on a
+     * flag, and without it that returns the whole number.
      */
     const who = (id) => {
         try {
-            if (id && typeof id.toLogString === 'function') {
-                return id.toLogString();
-            }
             return String(id).replace(/\d+(?=\d{4})/g, '');
         } catch (ignoredError) {
             return '?';
@@ -45,11 +44,17 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
         return !!d && d.isHosted !== true;
     };
 
-    /** Top frames, hosts cut to the file, so they fit a log field. */
+    /**
+     * Top frames, hosts cut to the file, so they fit a log field. Frames of
+     * this library's own injected code are left out, so another wrapper over
+     * the same function cannot push WhatsApp's frames out of the window.
+     */
     const frames = (stack, from, count) =>
         String(stack || '')
             .split('\n')
-            .slice(from, from + count)
+            .slice(from)
+            .filter((l) => !/pptr:/.test(l))
+            .slice(0, count)
             .map((l) =>
                 l
                     .trim()
@@ -60,27 +65,34 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
             .join(' | ')
             .slice(0, 400);
 
+    /**
+     * The account's phone user, then its LID, each at most once. Asked for by
+     * name: `getMeUserOrThrow` answers the LID instead once WhatsApp drops its
+     * phone-number dependencies, which would lose the phone record.
+     */
     const ownUsers = () => {
         const me = window.WaGateway.module('WAWebUserPrefsMeUser');
         if (!me) return [];
         const out = [];
-        try {
-            out.push(me.getMeUserOrThrow());
-        } catch (ignoredError) {
-            // not registered yet
-        }
-        try {
-            const lid = me.getMaybeMeLidUser && me.getMaybeMeLidUser();
-            if (lid) out.push(lid);
-        } catch (ignoredError) {
-            // no LID on this account
+        for (const get of ['getMaybeMePnUser', 'getMaybeMeLidUser']) {
+            try {
+                const user = me[get]();
+                if (user && !out.some((u) => String(u) === String(user))) {
+                    out.push(user);
+                }
+            } catch (ignoredError) {
+                // not registered yet, or no LID on this account
+            }
         }
         return out;
     };
-    const isOwnId = (id) => {
-        const user = String((id && id.user) || id).split(/[@:]/)[0];
-        return ownUsers().some((u) => u.user === user);
+    /** Tests ids against the own users read once, for a whole batch. */
+    const ownIdMatcher = () => {
+        const users = ownUsers().map((u) => u.user);
+        return (id) =>
+            users.includes(String((id && id.user) || id).split(/[@:]/)[0]);
     };
+    const isOwnId = (id) => ownIdMatcher()(id);
 
     /**
      * Where this account's own device list stands on WhatsApp's two expiry
@@ -126,6 +138,8 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
         device99,
         isBad99,
         frames,
+        ownUsers,
+        ownIdMatcher,
         isOwnId,
         ownClocks,
         logoutGate,

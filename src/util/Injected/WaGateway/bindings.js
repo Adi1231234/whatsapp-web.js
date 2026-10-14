@@ -22,7 +22,7 @@
 const BINDINGS = [
     {
         module: 'WAWebApiDeviceList',
-        why: 'device-list table: HostedDeviceFlag wraps its two writers; AdvDiag and the repair read it',
+        why: 'device-list table: HostedDeviceFlag and AdvDiag wrap its two writers; AdvDiag and the repair read it',
         exports: {
             createOrReplaceDeviceRecord: { kind: 'function' },
             bulkCreateOrReplaceDeviceRecord: { kind: 'function' },
@@ -60,10 +60,11 @@ const BINDINGS = [
     },
     {
         module: 'WAWebUserPrefsMeUser',
-        why: "the account's own phone and LID identities",
+        why: "the account's own phone and LID identities, and this device's id",
         exports: {
-            getMeUserOrThrow: { kind: 'function' },
+            getMaybeMePnUser: { kind: 'function' },
             getMaybeMeLidUser: { kind: 'function' },
+            getMaybeMeDeviceId: { kind: 'function' },
         },
     },
     {

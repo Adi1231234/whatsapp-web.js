@@ -7,6 +7,7 @@ const { InstallPreventedStallVerdict } = require('./preventedStall');
 const { InstallKeyIndexThrowDiag } = require('./keyIndexThrow');
 const { InstallHostedWriteDiag } = require('./hostedWrite');
 const { InstallDailyCheckDiag } = require('./dailyCheck');
+const { InstallOwnListDiag, ReportOwnList } = require('./ownList');
 const { HOSTED_DEVICE_ID } = require('../HostedDeviceFlag');
 
 /** Event names, as they reach the host's socket-diag channel. */
@@ -16,6 +17,7 @@ const ADV_EVENTS = {
     KEY_INDEX_THROW: 'ADV_KEY_INDEX_THROW',
     HOSTED_WRITE: 'ADV_HOSTED_WRITE_WITHOUT_FLAG',
     DAILY_CHECK: 'ADV_DAILY_CHECK',
+    OWN_DEVICES: 'ADV_OWN_DEVICES',
     // What the HostedDeviceFlag fix prevented, in WhatsApp's own words.
     FIX_PREVENTED_THROW: 'ADV_FIX_PREVENTED_THROW',
     FIX_PREVENTED_STALL: 'ADV_FIX_PREVENTED_STALL',
@@ -46,6 +48,7 @@ const HOOKS = [
         InstallDailyCheckDiag,
         [ADV_EVENTS.DAILY_CHECK, EXPECTED_TS_CLOCK_H],
     ],
+    ['ownList', InstallOwnListDiag, [ADV_EVENTS.OWN_DEVICES]],
 ];
 
 /**
@@ -65,6 +68,12 @@ async function installAdvDiag(page, phase, report) {
             .catch(() => false);
         for (const [name, fn, args] of HOOKS) {
             status[name] = await page.evaluate(fn, ...args).catch(() => false);
+        }
+        // The own list once per synced page, the baseline its writes compare to.
+        if (phase === 'synced') {
+            status.ownListReported = await page
+                .evaluate(ReportOwnList)
+                .catch(() => false);
         }
     } catch (e) {
         status.error = String((e && e.message) || e).slice(0, 200);
