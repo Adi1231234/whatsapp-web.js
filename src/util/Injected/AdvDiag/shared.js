@@ -126,6 +126,7 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
         device99,
         isBad99,
         frames,
+        ownUsers,
         isOwnId,
         ownClocks,
         logoutGate,

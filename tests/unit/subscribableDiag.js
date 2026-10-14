@@ -7,6 +7,7 @@ const {
     STORAGE_SCHEMA_SNAPSHOT,
 } = require('../../src/util/Injected/StorageDiag');
 const { WA_GATEWAY_CHECK } = require('../../src/util/Injected/WaGateway');
+const { ADV_EVENTS } = require('../../src/util/Injected/AdvDiag');
 
 // Seen in the field 5.4s before WhatsApp logged an account out, exactly as the
 // socket-diag binding delivers it.
@@ -86,6 +87,7 @@ describe('subscribable socket-diag events', function () {
             [STORAGE_INIT_ERROR, 'error'],
             [STORAGE_SCHEMA_SNAPSHOT, 'info'],
             [WA_GATEWAY_CHECK, 'info'],
+            [ADV_EVENTS.OWN_DEVICES, 'info'],
         ].forEach(([event, level]) => {
             const info = { event, problems: [] };
             expect(route(info).diag, event).to.deep.equal([

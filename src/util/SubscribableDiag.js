@@ -6,6 +6,7 @@ const {
 } = require('./Injected/StorageDiag');
 const { WA_GATEWAY_CHECK } = require('./Injected/WaGateway');
 const { WAL_EVENT_PREFIX } = require('./Injected/WaLoggerHook');
+const { ADV_EVENTS } = require('./Injected/AdvDiag');
 
 /**
  * Decides which socket-diag events also get their own `diag` channel entry,
@@ -20,6 +21,8 @@ const { WAL_EVENT_PREFIX } = require('./Injected/WaLoggerHook');
  * - The storage failure mode rejects initialize().
  * - The gateway check is what a consumer acts on when WhatsApp changes
  *   underneath this library.
+ * - The account's own device list is what a consumer keeps across a logout,
+ *   to tell afterwards how the link ended.
  * - A terminal line of WhatsApp's own logger is where WhatsApp says why it is
  *   ending the session ("received failure stanza, reason: {}, logging out"),
  *   often before the app has synced. Terminal lines are rare by definition and
@@ -30,6 +33,7 @@ const LEVEL_BY_EVENT = new Map([
     [STORAGE_INIT_ERROR, 'error'],
     [STORAGE_SCHEMA_SNAPSHOT, 'info'],
     [WA_GATEWAY_CHECK, 'info'],
+    [ADV_EVENTS.OWN_DEVICES, 'info'],
 ]);
 
 const TERMINAL_WA_LOG_LEVEL = 'info';
