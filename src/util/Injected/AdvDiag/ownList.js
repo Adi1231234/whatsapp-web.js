@@ -22,12 +22,13 @@ const InstallOwnListDiag = (eventName) => {
     if (!api || !me) return false;
     let lastWrite = null;
 
+    /** Whether a line went out: none before registration, or for no change. */
     const report = async (trigger) => {
         const users = a.ownUsers();
-        if (!users.length) return;
+        if (!users.length) return false;
         const recs = await api.bulkGetDeviceRecord(users);
         const r = recs.find((x) => x && !x.deleted);
-        if (!r) return;
+        if (!r) return false;
         const companions = r.devices
             .filter((d) => d.id !== 0)
             .sort((x, y) => x.keyIndex - y.keyIndex);
@@ -35,13 +36,14 @@ const InstallOwnListDiag = (eventName) => {
             .map((d) => d.id + ':' + d.keyIndex)
             .join(' ');
         const signature = [r.rawId, r.timestamp, devices].join('|');
-        if (trigger === 'write' && signature === lastWrite) return;
+        if (trigger === 'write' && signature === lastWrite) return false;
         lastWrite = signature;
         const meId = me.getMaybeMeDeviceId();
         const ours = companions.find((d) => d.id === meId);
         a.emit(eventName, {
             trigger: trigger,
-            // Masked like every user here; enough to tell two accounts apart.
+            // The phone user when there is one (ownUsers puts it first),
+            // masked: enough to tell two accounts apart.
             user: a.who(users[0]),
             me: meId,
             meKeyIndex: ours ? ours.keyIndex : null,
@@ -51,8 +53,9 @@ const InstallOwnListDiag = (eventName) => {
             companions: companions.length,
             devices: devices,
         });
+        return true;
     };
-    a.reportOwnList = (trigger) => report(trigger).catch(() => {});
+    a.reportOwnList = (trigger) => report(trigger).catch(() => false);
 
     const touchesOwn = (records) => {
         try {
@@ -79,9 +82,9 @@ const InstallOwnListDiag = (eventName) => {
     return one && bulk;
 };
 
-/** One line for the list as it stands, once the app has synced. */
+/** One line for the list as it stands, once the app has synced: sent or not. */
 const ReportOwnList = () =>
     !!(window.__p2dAdv && window.__p2dAdv.reportOwnList) &&
-    window.__p2dAdv.reportOwnList('sync').then(() => true);
+    window.__p2dAdv.reportOwnList('sync');
 
 module.exports = { InstallOwnListDiag, ReportOwnList };

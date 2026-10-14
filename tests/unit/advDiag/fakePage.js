@@ -66,7 +66,7 @@ function fakePage(localStorage) {
 
     const modules = {
         WAWebUserPrefsMeUser: {
-            getMeUserOrThrow: () => ME,
+            getMaybeMePnUser: () => ME,
             getMaybeMeLidUser: () => ME_LID,
         },
         WAWebSchemaPendingDeviceSync: {

@@ -62,7 +62,7 @@ const BINDINGS = [
         module: 'WAWebUserPrefsMeUser',
         why: "the account's own phone and LID identities, and this device's id",
         exports: {
-            getMeUserOrThrow: { kind: 'function' },
+            getMaybeMePnUser: { kind: 'function' },
             getMaybeMeLidUser: { kind: 'function' },
             getMaybeMeDeviceId: { kind: 'function' },
         },

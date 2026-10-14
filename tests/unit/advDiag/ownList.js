@@ -54,6 +54,27 @@ describe('AdvDiag: the own device list', function () {
         ]);
     });
 
+    // WhatsApp's toLogString masks only behind a flag; without it, it returns
+    // the whole number.
+    it('masks the account itself, whatever toLogString does', async function () {
+        const page = installed();
+        page.modules.WAWebUserPrefsMeUser.getMaybeMePnUser = () => ({
+            user: '972500001111',
+            toLogString: () => '972500001111@c.us',
+            toString: () => '972500001111@c.us',
+        });
+        await evaluateInPage(ReportOwnList);
+        expect(reports(page)[0].user).to.equal('1111@c.us');
+    });
+
+    it('says nothing, and says so, before the account is registered', async function () {
+        const page = installed();
+        page.modules.WAWebUserPrefsMeUser.getMaybeMePnUser = () => null;
+        page.modules.WAWebUserPrefsMeUser.getMaybeMeLidUser = () => null;
+        expect(await evaluateInPage(ReportOwnList)).to.equal(false);
+        expect(reports(page)).to.deep.equal([]);
+    });
+
     it('reports again only when a write changed the own list', async function () {
         const page = installed();
         await evaluateInPage(ReportOwnList);
