@@ -42,6 +42,7 @@ describe('AdvDiag: the own device list', function () {
             {
                 event: OWN,
                 trigger: 'sync',
+                user: '1111@c.us',
                 me: 27,
                 meKeyIndex: 15,
                 rawId: 322931195,

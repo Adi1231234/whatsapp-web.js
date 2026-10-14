@@ -41,6 +41,8 @@ const InstallOwnListDiag = (eventName) => {
         const ours = companions.find((d) => d.id === meId);
         a.emit(eventName, {
             trigger: trigger,
+            // Masked like every user here; enough to tell two accounts apart.
+            user: a.who(users[0]),
             me: meId,
             meKeyIndex: ours ? ours.keyIndex : null,
             rawId: r.rawId,
@@ -55,7 +57,8 @@ const InstallOwnListDiag = (eventName) => {
     const touchesOwn = (records) => {
         try {
             const list = Array.isArray(records) ? records : [records];
-            return list.some((rec) => rec && a.isOwnId(rec.id));
+            const isOwn = a.ownIdMatcher();
+            return list.some((rec) => rec && isOwn(rec.id));
         } catch (ignoredError) {
             return false;
         }

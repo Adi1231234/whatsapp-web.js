@@ -77,10 +77,13 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
         }
         return out;
     };
-    const isOwnId = (id) => {
-        const user = String((id && id.user) || id).split(/[@:]/)[0];
-        return ownUsers().some((u) => u.user === user);
+    /** Tests ids against the own users read once, for a whole batch. */
+    const ownIdMatcher = () => {
+        const users = ownUsers().map((u) => u.user);
+        return (id) =>
+            users.includes(String((id && id.user) || id).split(/[@:]/)[0]);
     };
+    const isOwnId = (id) => ownIdMatcher()(id);
 
     /**
      * Where this account's own device list stands on WhatsApp's two expiry
@@ -127,6 +130,7 @@ const InstallAdvDiagShared = (hostedDeviceId, dayS) => {
         isBad99,
         frames,
         ownUsers,
+        ownIdMatcher,
         isOwnId,
         ownClocks,
         logoutGate,
