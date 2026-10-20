@@ -3955,6 +3955,30 @@ class Client extends EventEmitter {
     }
 
     /**
+     * Whether WhatsApp still holds a message: loaded, or in its message table
+     * under this id or its PN/LID alternate. Unlike a null from getMessageById,
+     * false is the table's own answer; a page that cannot be asked throws.
+     * @param {string} messageId
+     * @returns {Promise<boolean>}
+     */
+    async messageExists(messageId) {
+        return this.pupPage.evaluate(async (messageId) => {
+            if (window.WWebJS.getLoadedMsg(messageId)) return true;
+            const key =
+                window.WaGateway.module('WAWebMsgKey').fromString(messageId);
+            const alt = window.WaGateway.module(
+                'WAWebLidMigrationUtils',
+            ).getAlternateMsgKey(key);
+            const ids = alt ? [messageId, alt.toString()] : [messageId];
+            const found =
+                await window.WaGateway.module(
+                    'WAWebDBMsgUtils',
+                ).getMsgsExistByMsgKey(ids);
+            return found.some(Boolean);
+        }, messageId);
+    }
+
+    /**
      * Gets instances of all pinned messages in a chat
      * @param {string} chatId The chat ID
      * @returns {Promise<Array<Message>>}

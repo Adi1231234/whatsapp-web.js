@@ -98,6 +98,21 @@ const BINDINGS = [
         exports: { msgFindMedia: { kind: 'function' } },
     },
     {
+        module: 'WAWebDBMsgUtils',
+        why: 'messageExists asks the message table whether it holds an id',
+        exports: { getMsgsExistByMsgKey: { kind: 'function' } },
+    },
+    {
+        module: 'WAWebMsgKey',
+        why: 'messageExists parses an id to find its PN/LID alternate',
+        exports: { fromString: { kind: 'function' } },
+    },
+    {
+        module: 'WAWebLidMigrationUtils',
+        why: 'messageExists also asks under the PN/LID alternate of an id',
+        exports: { getAlternateMsgKey: { kind: 'function' } },
+    },
+    {
         // Only read when msgFindMedia has left WAWebDBMessageFindLocal, to find
         // it again by export name; the caller copes without it.
         module: '__debug',
