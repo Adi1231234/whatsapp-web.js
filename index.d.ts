@@ -131,6 +131,9 @@ declare namespace WAWebJS {
         /** Get message by ID */
         getMessageById(messageId: string): Promise<Message>;
 
+        /** Whether WhatsApp still holds a message, loaded or in its message table (false is the table's answer; throws when the page cannot be asked) */
+        messageExists(messageId: string): Promise<boolean>;
+
         /** Gets instances of all pinned messages in a chat */
         getPinnedMessages(chatId: string): Promise<[Message] | []>;
 
