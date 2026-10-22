@@ -15,6 +15,9 @@ const {
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { LoadUtils } = require('./util/Injected/Utils');
 const { ListMediaRefsSince } = require('./util/Injected/MediaRefs');
+const {
+    installStreamedDownloadBytes,
+} = require('./util/Injected/StreamedDownloadBytes');
 const ChatFactory = require('./factories/ChatFactory');
 const ContactFactory = require('./factories/ContactFactory');
 const WebCacheFactory = require('./webCache/WebCacheFactory');
@@ -345,6 +348,7 @@ class Client extends EventEmitter {
 
                         //Load util functions (serializers, helper functions)
                         await this.pupPage.evaluate(LoadUtils);
+                        await installStreamedDownloadBytes(this.pupPage);
 
                         await this.pupPage
                             .waitForFunction(
@@ -456,6 +460,9 @@ class Client extends EventEmitter {
                         .catch((_) => _);
                 },
             );
+            // A streamed download whose body starts with a byte order mark
+            // keeps its bytes. Before the first media download.
+            await installStreamedDownloadBytes(this.pupPage);
             await this.pupPage.evaluate(() => {
                 const Socket = window.require('WAWebSocketModel').Socket;
                 const Cmd = window.require('WAWebCmd').Cmd;
