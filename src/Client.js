@@ -51,6 +51,9 @@ const {
     repairHostedDeviceFlag,
 } = require('./util/Injected/HostedDeviceFlag');
 const {
+    installStreamedDownloadBytes,
+} = require('./util/Injected/StreamedDownloadBytes');
+const {
     installWaGateway,
     checkWaGateway,
 } = require('./util/Injected/WaGateway');
@@ -452,6 +455,9 @@ class Client extends EventEmitter {
             // too, so its write hook stays outermost and still reports what
             // WhatsApp tried to store.
             await installHostedDeviceFlag(this.pupPage);
+            // A streamed download whose body starts with a byte order mark
+            // keeps its bytes. Before the first media download.
+            await installStreamedDownloadBytes(this.pupPage);
             // Device-sync stalls and the forced logout they can end in.
             await installAdvDiag(this.pupPage, 'inject', (info) =>
                 this._onSocketDiagEvent(info),
@@ -842,6 +848,7 @@ class Client extends EventEmitter {
                             // Fills any device-sync hook whose module was not
                             // loaded yet at inject(); a no-op for the rest.
                             await installHostedDeviceFlag(this.pupPage);
+                            await installStreamedDownloadBytes(this.pupPage);
                             await installAdvDiag(
                                 this.pupPage,
                                 'synced',
