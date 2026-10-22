@@ -31,6 +31,11 @@ const BINDINGS = [
         },
     },
     {
+        module: 'WAWebHttpExtendedFetch',
+        why: 'StreamedDownloadBytes wraps the fetch that streams media as text, and passes its arguments by position',
+        exports: { extendedFetch: { kind: 'function', arity: 2 } },
+    },
+    {
         module: 'WAWebHandleAdvKeyIndexResultApi',
         why: 'throws invariant #76137 on an unflagged device 99; AdvDiag reads its arguments by position',
         exports: { handleKeyIndexResultSync: { kind: 'function', arity: 9 } },
