@@ -134,6 +134,9 @@ declare namespace WAWebJS {
         /** Whether WhatsApp still holds a message, loaded or in its message table (false is the table's answer; throws when the page cannot be asked) */
         messageExists(messageId: string): Promise<boolean>;
 
+        /** The hidden HD copy of a message, if WhatsApp holds one; null otherwise */
+        getHdCopy(messageId: string): Promise<Message | null>;
+
         /** Gets instances of all pinned messages in a chat */
         getPinnedMessages(chatId: string): Promise<[Message] | []>;
 
@@ -766,8 +769,7 @@ declare namespace WAWebJS {
         browserName?: string;
         /** Object with proxy autentication requirements @default: undefined */
         proxyAuthentication?:
-            | { username: string; password: string }
-            | undefined;
+            { username: string; password: string } | undefined;
         /** Phone number pairing configuration. Refer the requestPairingCode function of Client.
          * @default
          * {
@@ -800,9 +802,7 @@ declare namespace WAWebJS {
     }
 
     export type WebCacheOptions =
-        | NoWebCacheOptions
-        | LocalWebCacheOptions
-        | RemoteWebCacheOptions;
+        NoWebCacheOptions | LocalWebCacheOptions | RemoteWebCacheOptions;
 
     /**
      * Base class which all authentication strategies extend
@@ -1220,6 +1220,10 @@ declare namespace WAWebJS {
         fromMe: boolean;
         /** Indicates if the message has media available for download */
         hasMedia: boolean;
+        /** The id of the message this one is the hidden HD copy of, or null */
+        hdCopyOf: string | null;
+        /** Whether the sender also sent an HD copy of this message, as a message of its own */
+        awaitsHd: boolean;
         /** Indicates if the message was sent as a reply to another message */
         hasQuotedMsg: boolean;
         /** Indicates whether there are reactions to the message */

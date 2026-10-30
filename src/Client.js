@@ -15,6 +15,7 @@ const {
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { LoadUtils } = require('./util/Injected/Utils');
 const { ListMediaRefsSince } = require('./util/Injected/MediaRefs');
+const { InjectHdCopies } = require('./util/Injected/HdCopies/inject');
 const {
     installStreamedDownloadBytes,
 } = require('./util/Injected/StreamedDownloadBytes');
@@ -348,6 +349,8 @@ class Client extends EventEmitter {
 
                         //Load util functions (serializers, helper functions)
                         await this.pupPage.evaluate(LoadUtils);
+                        // getMessageModel reads it on every message.
+                        await this.pupPage.evaluate(InjectHdCopies);
                         await installStreamedDownloadBytes(this.pupPage);
 
                         await this.pupPage
@@ -1942,6 +1945,21 @@ class Client extends EventEmitter {
                 .getMsgsExistByMsgKey(ids);
             return found.some(Boolean);
         }, messageId);
+    }
+
+    /**
+     * The hidden HD copy of a message, if WhatsApp holds one. A photo sent in
+     * HD arrives as the message and, a moment later, this copy; see
+     * util/Injected/HdCopies.
+     * @param {string} messageId
+     * @returns {Promise<?Message>}
+     */
+    async getHdCopy(messageId) {
+        const copyId = await this.pupPage.evaluate(
+            (id) => window.WWebJS.findHdCopyId(id),
+            messageId,
+        );
+        return copyId ? this.getMessageById(copyId) : null;
     }
 
     /**
