@@ -134,9 +134,6 @@ declare namespace WAWebJS {
         /** Whether WhatsApp still holds a message, loaded or in its message table (false is the table's answer; throws when the page cannot be asked) */
         messageExists(messageId: string): Promise<boolean>;
 
-        /** The hidden HD copy of a message, if WhatsApp holds one; null otherwise */
-        getHdCopy(messageId: string): Promise<Message | null>;
-
         /** Gets instances of all pinned messages in a chat */
         getPinnedMessages(chatId: string): Promise<[Message] | []>;
 
@@ -1220,10 +1217,12 @@ declare namespace WAWebJS {
         fromMe: boolean;
         /** Indicates if the message has media available for download */
         hasMedia: boolean;
-        /** The id of the message this one is the hidden HD copy of, or null */
+        /** The id of the message this one is a copy of, or null (also for a copy that lost the link to its parent) */
         hdCopyOf: string | null;
-        /** Whether the sender also sent an HD copy of this message, as a message of its own */
-        awaitsHd: boolean;
+        /** What kind of copy of another message's media this is: the same media at a higher quality, or the same video in another encoding; null for a message of its own */
+        hdCopyKind: 'hd' | 'alternate' | null;
+        /** The SHA-256 of the media's plaintext, base64, or null without media; two messages with the same value carry the same file */
+        fileHash: string | null;
         /** Indicates if the message was sent as a reply to another message */
         hasQuotedMsg: boolean;
         /** Indicates whether there are reactions to the message */

@@ -1948,21 +1948,6 @@ class Client extends EventEmitter {
     }
 
     /**
-     * The hidden HD copy of a message, if WhatsApp holds one. A photo sent in
-     * HD arrives as the message and, a moment later, this copy; see
-     * util/Injected/HdCopies.
-     * @param {string} messageId
-     * @returns {Promise<?Message>}
-     */
-    async getHdCopy(messageId) {
-        const copyId = await this.pupPage.evaluate(
-            (id) => window.WWebJS.findHdCopyId(id),
-            messageId,
-        );
-        return copyId ? this.getMessageById(copyId) : null;
-    }
-
-    /**
      * Gets instances of all pinned messages in a chat
      * @param {string} chatId The chat ID
      * @returns {Promise<Array<Message>>}
