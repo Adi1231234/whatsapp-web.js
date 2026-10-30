@@ -133,6 +133,23 @@ const BINDINGS = [
             Msg: { kind: 'value', members: ['get'] },
         },
     },
+    {
+        module: 'WAWebDualUploadsAssociationTypes',
+        why: "HdCopies: WhatsApp's own test for a message's hidden HD copy",
+        exports: { isDualUploadAssociationType: { kind: 'function' } },
+    },
+    {
+        module: 'WAWebPairedMediaType.flow',
+        why: 'HdCopies: the value a message carries when an HD copy follows it',
+        exports: {
+            PAIRED_MEDIA_TYPE_BY_NAME: { kind: 'value', members: ['get'] },
+        },
+    },
+    {
+        module: 'WAWebDBGetAssociatedMsgsByParentMsgKey',
+        why: "HdCopies finds a message's HD copy in the association table",
+        exports: { bulkGetMessagesByParentMsgKey: { kind: 'function' } },
+    },
 ];
 
 module.exports = { BINDINGS };

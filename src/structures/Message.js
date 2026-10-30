@@ -52,6 +52,21 @@ class Message extends Base {
          */
         this.hasMedia = Boolean(data.directPath);
 
+        /**
+         * The id of the message this one is the hidden HD copy of, or null. A
+         * photo sent in HD is two messages and WhatsApp shows one: the parent,
+         * then this copy at full quality.
+         * @type {?string}
+         */
+        this.hdCopyOf = data.hdCopyOf ?? null;
+
+        /**
+         * Whether the sender also sent an HD copy of this message, which arrives
+         * as a message of its own; `Client.getHdCopy` finds it once it has.
+         * @type {boolean}
+         */
+        this.awaitsHd = data.awaitsHd === true;
+
         // [L11] Log when image/video/document has no directPath (hasMedia=false)
         if (
             !this.hasMedia &&
