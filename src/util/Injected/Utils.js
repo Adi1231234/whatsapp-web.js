@@ -817,6 +817,8 @@ exports.LoadUtils = () => {
 
         msg.isEphemeral = message.isEphemeral;
         msg.isStatusV3 = message.isStatusV3;
+        // A photo sent in HD is two messages; see HdCopies/inject.js.
+        Object.assign(msg, window.WWebJS.hdVariantOf(message));
         msg.links = findLinks(
             message.mediaObject ? message.caption : message.body,
         ).map((link) => ({
