@@ -844,6 +844,8 @@ exports.LoadUtils = () => {
 
         msg.isEphemeral = message.isEphemeral;
         msg.isStatusV3 = message.isStatusV3;
+        // A photo sent in HD is two messages; see HdCopies/inject.js.
+        Object.assign(msg, window.WWebJS.hdVariantOf(message));
         msg.senderId =
             window.require('WAWebMsgGetters').getSender(message)?._serialized ??
             null;
@@ -1868,9 +1870,12 @@ exports.LoadUtils = () => {
             msg.mediaData.mediaStage === 'NEED_POKE' ||
             msg.mediaData.mediaStage === 'REUPLOADING'
         ) {
+            // A warning: this attempt failed, and only the caller, which may
+            // retry or fall back from an HD copy to its parent, knows whether
+            // the media was lost.
             if (window.onDiagLog)
                 window.onDiagLog(
-                    'error',
+                    'warn',
                     'resolveMediaBlob: failed',
                     JSON.stringify({
                         id: msgId,
