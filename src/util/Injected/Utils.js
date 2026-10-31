@@ -1871,8 +1871,7 @@ exports.LoadUtils = () => {
             msg.mediaData.mediaStage === 'REUPLOADING'
         ) {
             // A warning: this attempt failed, and only the caller, which may
-            // retry or fall back from an HD copy to its parent, knows whether
-            // the media was lost.
+            // retry, knows whether the media was lost.
             if (window.onDiagLog)
                 window.onDiagLog(
                     'warn',
