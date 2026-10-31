@@ -139,16 +139,21 @@ const BINDINGS = [
         exports: { isDualUploadAssociationType: { kind: 'function' } },
     },
     {
-        module: 'WAWebPairedMediaType.flow',
-        why: 'HdCopies: the value a message carries when an HD copy follows it',
+        module: 'WAWebMessageAssociation.flow',
+        why: 'HdCopies: tells an HD copy from a video in another encoding',
         exports: {
-            PAIRED_MEDIA_TYPE_BY_NAME: { kind: 'value', members: ['get'] },
+            MessageAssociationType: {
+                kind: 'value',
+                members: ['HEVC_VIDEO_DUAL_UPLOAD'],
+            },
         },
     },
     {
-        module: 'WAWebDBGetAssociatedMsgsByParentMsgKey',
-        why: "HdCopies finds a message's HD copy in the association table",
-        exports: { bulkGetMessagesByParentMsgKey: { kind: 'function' } },
+        module: 'WAWebPairedMediaType.flow',
+        why: 'HdCopies: what a copy that lost the link to its parent says it is',
+        exports: {
+            PAIRED_MEDIA_TYPE_BY_NAME: { kind: 'value', members: ['get'] },
+        },
     },
 ];
 

@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * A photo sent in HD reaches WhatsApp Web as two messages: the parent at
- * standard quality, then a hidden copy at full quality. WhatsApp shows one.
- * See README.md.
+ * A photo or video sent in HD reaches WhatsApp Web as more than one message:
+ * the parent, and a copy of the same media that WhatsApp does not show as a
+ * picture of its own. See README.md.
  *
- * A missing module answers "neither", which is the behaviour before this, and
- * the gateway's load check reports it.
+ * A missing module answers "not a copy", which is the behaviour before this,
+ * and the gateway's load check reports it.
  *
  * Runs in the page: everything it uses must be defined inside it.
  */
@@ -18,31 +18,42 @@ const InjectHdCopies = () => {
         );
         return !!types && types.isDualUploadAssociationType(type) === true;
     };
-    const sdImageParent = () =>
+    const association = (name) =>
+        window.WaGateway.module('WAWebMessageAssociation.flow')
+            ?.MessageAssociationType[name];
+    const paired = (name) =>
         window.WaGateway.module(
             'WAWebPairedMediaType.flow',
-        )?.PAIRED_MEDIA_TYPE_BY_NAME.get('SD_IMAGE_PARENT');
+        )?.PAIRED_MEDIA_TYPE_BY_NAME.get(name);
 
-    window.WWebJS.hdVariantOf = (msg) => ({
-        hdCopyOf:
-            msg.parentMsgKey != null && isDualUpload(msg.associationType)
-                ? msg.parentMsgKey.toString()
-                : null,
-        // Not `wa_web_show_hd_photo`: that only decides whether WhatsApp
-        // shows the copy, and copies arrive while it is off.
-        awaitsHd:
-            msg.pairedMediaType != null &&
-            msg.pairedMediaType === sdImageParent(),
-    });
+    // `hd`: the same media at a higher quality. `alternate`: the same video in
+    // another encoding (HEVC, AV1, streamed), at no higher quality.
+    const HD_CHILDREN = ['HD_IMAGE_CHILD', 'HD_VIDEO_CHILD'];
+    const ALTERNATE_CHILDREN = [
+        'HEVC_VIDEO_CHILD',
+        'AV1_VIDEO_CHILD',
+        'STREAMED_VIDEO_CHILD',
+    ];
+    const isOneOf = (type, names) =>
+        type != null && names.some((name) => type === paired(name));
+    const kindOfAssociation = (type) =>
+        type === association('HEVC_VIDEO_DUAL_UPLOAD') ? 'alternate' : 'hd';
+    const kindOfPaired = (type) => {
+        if (isOneOf(type, HD_CHILDREN)) return 'hd';
+        return isOneOf(type, ALTERNATE_CHILDREN) ? 'alternate' : null;
+    };
 
-    // From the association table, so a copy that came first, or before a
-    // reload, is found too.
-    window.WWebJS.findHdCopyId = async (messageId) => {
-        const rows = await window.WaGateway.module(
-            'WAWebDBGetAssociatedMsgsByParentMsgKey',
-        ).bulkGetMessagesByParentMsgKey([messageId]);
-        const row = rows.find((r) => isDualUpload(r.associationType));
-        return row ? String(row.msgKey) : null;
+    window.WWebJS.hdVariantOf = (msg) => {
+        const linked =
+            msg.parentMsgKey != null && isDualUpload(msg.associationType);
+        return {
+            hdCopyOf: linked ? msg.parentMsgKey.toString() : null,
+            // A copy can arrive without the link to its parent, shown as a
+            // message of its own; it still says it is a copy.
+            hdCopyKind: linked
+                ? kindOfAssociation(msg.associationType)
+                : kindOfPaired(msg.pairedMediaType),
+        };
     };
 };
 
