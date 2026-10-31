@@ -52,19 +52,29 @@ class Message extends Base {
         this.hasMedia = Boolean(data.directPath);
 
         /**
-         * The id of the message this one is the hidden HD copy of, or null. A
-         * photo sent in HD is two messages and WhatsApp shows one: the parent,
-         * then this copy at full quality.
+         * The id of the message this one is a copy of, or null. A photo sent
+         * in HD is two messages and WhatsApp shows one: the parent, then this
+         * copy. Null also for a copy that arrived without the link to its
+         * parent; `hdCopyKind` still says what it is.
          * @type {?string}
          */
         this.hdCopyOf = data.hdCopyOf ?? null;
 
         /**
-         * Whether the sender also sent an HD copy of this message, which arrives
-         * as a message of its own; `Client.getHdCopy` finds it once it has.
-         * @type {boolean}
+         * What kind of copy of another message's media this is, or null for a
+         * message of its own: `hd`, the same media at a higher quality, or
+         * `alternate`, the same video in another encoding.
+         * @type {?('hd'|'alternate')}
          */
-        this.awaitsHd = data.awaitsHd === true;
+        this.hdCopyKind = data.hdCopyKind ?? null;
+
+        /**
+         * The SHA-256 of the media's plaintext, base64, as WhatsApp records it,
+         * or null without media. Two messages with the same value carry the
+         * same file.
+         * @type {?string}
+         */
+        this.fileHash = data.filehash ?? null;
 
         /**
          * Message content
