@@ -14,13 +14,23 @@
  * through (see hostedWrite.js), under an owner of its own so that hook's wrap
  * is not taken for this one. The list is read back after the write resolves.
  */
-const InstallOwnListDiag = (eventName) => {
+const InstallOwnListDiag = (eventName, failedEvent) => {
     const a = window.__p2dAdv;
     if (!a) return false;
     const api = window.WaGateway.module('WAWebApiDeviceList');
     const me = window.WaGateway.module('WAWebUserPrefsMeUser');
     if (!api || !me) return false;
     let lastWrite = null;
+
+    /**
+     * This device's id, the way WhatsApp derives it: the LID device, else the
+     * phone one. Read from these two because the wrapper over them,
+     * `getMaybeMeDeviceId`, left this module in 2.3000.1053473644.
+     */
+    const meDeviceId = () => {
+        const device = me.getMaybeMeDeviceLid(false) || me.getMaybeMeDevicePn();
+        return device ? device.getDeviceId() : null;
+    };
 
     /** Whether a line went out: none before registration, or for no change. */
     const report = async (trigger) => {
@@ -38,7 +48,7 @@ const InstallOwnListDiag = (eventName) => {
         const signature = [r.rawId, r.timestamp, devices].join('|');
         if (trigger === 'write' && signature === lastWrite) return false;
         lastWrite = signature;
-        const meId = me.getMaybeMeDeviceId();
+        const meId = meDeviceId();
         const ours = companions.find((d) => d.id === meId);
         a.emit(eventName, {
             trigger: trigger,
@@ -55,7 +65,16 @@ const InstallOwnListDiag = (eventName) => {
         });
         return true;
     };
-    a.reportOwnList = (trigger) => report(trigger).catch(() => false);
+    // A failed read is said, never taken for an unchanged list.
+    a.reportOwnList = (trigger) =>
+        report(trigger).catch((err) => {
+            a.emit(failedEvent, {
+                trigger: trigger,
+                error: String((err && err.message) || err).slice(0, 200),
+                waVersion: window.Debug && window.Debug.VERSION,
+            });
+            return false;
+        });
 
     const touchesOwn = (records) => {
         try {

@@ -69,7 +69,8 @@ const BINDINGS = [
         exports: {
             getMaybeMePnUser: { kind: 'function' },
             getMaybeMeLidUser: { kind: 'function' },
-            getMaybeMeDeviceId: { kind: 'function' },
+            getMaybeMeDeviceLid: { kind: 'function' },
+            getMaybeMeDevicePn: { kind: 'function' },
         },
     },
     {
