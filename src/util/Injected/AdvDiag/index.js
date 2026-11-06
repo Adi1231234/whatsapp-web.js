@@ -18,6 +18,7 @@ const ADV_EVENTS = {
     HOSTED_WRITE: 'ADV_HOSTED_WRITE_WITHOUT_FLAG',
     DAILY_CHECK: 'ADV_DAILY_CHECK',
     OWN_DEVICES: 'ADV_OWN_DEVICES',
+    OWN_DEVICES_FAILED: 'ADV_OWN_DEVICES_FAILED',
     // What the HostedDeviceFlag fix prevented, in WhatsApp's own words.
     FIX_PREVENTED_THROW: 'ADV_FIX_PREVENTED_THROW',
     FIX_PREVENTED_STALL: 'ADV_FIX_PREVENTED_STALL',
@@ -48,7 +49,11 @@ const HOOKS = [
         InstallDailyCheckDiag,
         [ADV_EVENTS.DAILY_CHECK, EXPECTED_TS_CLOCK_H],
     ],
-    ['ownList', InstallOwnListDiag, [ADV_EVENTS.OWN_DEVICES]],
+    [
+        'ownList',
+        InstallOwnListDiag,
+        [ADV_EVENTS.OWN_DEVICES, ADV_EVENTS.OWN_DEVICES_FAILED],
+    ],
 ];
 
 /**

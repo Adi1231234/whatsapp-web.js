@@ -7,6 +7,10 @@ const {
 } = require('../../../src/util/Injected/AdvDiag/ownList');
 
 const OWN = 'ADV_OWN_DEVICES';
+const FAILED = 'ADV_OWN_DEVICES_FAILED';
+
+/** A device wid, shaped like the live one: it answers getDeviceId(). */
+const device = (id) => ({ getDeviceId: () => id });
 
 const ownList = (devices) => ({
     id: '972500001111',
@@ -18,17 +22,19 @@ const ownList = (devices) => ({
 
 const installed = () => {
     const page = fakePage();
-    page.modules.WAWebUserPrefsMeUser.getMaybeMeDeviceId = () => 27;
+    page.modules.WAWebUserPrefsMeUser.getMaybeMeDeviceLid = () => device(27);
+    page.modules.WAWebUserPrefsMeUser.getMaybeMeDevicePn = () => device(27);
     page.state.own = ownList([
         { id: 0, keyIndex: 0 },
         { id: 29, keyIndex: 17 },
         { id: 25, keyIndex: 13 },
         { id: 27, keyIndex: 15 },
     ]);
-    expect(evaluateInPage(InstallOwnListDiag, OWN)).to.equal(true);
+    expect(evaluateInPage(InstallOwnListDiag, OWN, FAILED)).to.equal(true);
     return page;
 };
 const reports = (page) => page.emitted.filter((e) => e.event === OWN);
+const failures = (page) => page.emitted.filter((e) => e.event === FAILED);
 
 describe('AdvDiag: the own device list', function () {
     afterEach(function () {
@@ -95,5 +101,25 @@ describe('AdvDiag: the own device list', function () {
             ['sync', '25:13 27:15 29:17'],
             ['write', '27:15'],
         ]);
+    });
+
+    it('takes this device from the phone identity when there is no LID one', async function () {
+        const page = installed();
+        page.modules.WAWebUserPrefsMeUser.getMaybeMeDeviceLid = () => null;
+        page.modules.WAWebUserPrefsMeUser.getMaybeMeDevicePn = () => device(25);
+        await evaluateInPage(ReportOwnList);
+        expect(reports(page).map((r) => [r.me, r.meKeyIndex])).to.deep.equal([
+            [25, 13],
+        ]);
+    });
+
+    it('says why when the list cannot be read', async function () {
+        const page = installed();
+        delete page.modules.WAWebUserPrefsMeUser.getMaybeMeDeviceLid;
+        expect(await evaluateInPage(ReportOwnList)).to.equal(false);
+        expect(reports(page)).to.deep.equal([]);
+        expect(failures(page)).to.have.length(1);
+        expect(failures(page)[0].trigger).to.equal('sync');
+        expect(failures(page)[0].error).to.match(/getMaybeMeDeviceLid/);
     });
 });
