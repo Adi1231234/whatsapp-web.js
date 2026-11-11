@@ -1,7 +1,7 @@
 {
   "src/Client.js": {
     "no-restricted-properties": {
-      "count": 159
+      "count": 158
     }
   },
   "src/structures/Channel.js": {

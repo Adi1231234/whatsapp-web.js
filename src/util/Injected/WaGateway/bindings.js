@@ -18,8 +18,8 @@
  *
  * Checked against build 2.3000.1049833609 (2026-10-09/10): every export and
  * member present, `handleKeyIndexResultSync.length === 9`. The socket,
- * stream, AuthStore and QR entries checked against build 2.3000.1054073855
- * (2026-11-11).
+ * stream, AuthStore, QR and event-bus entries checked against build
+ * 2.3000.1054073855 (2026-11-11).
  */
 const BINDINGS = [
     {
@@ -123,6 +123,14 @@ const BINDINGS = [
         module: 'WAWebEventsWaitForBbEvent',
         why: "inject waits for the socket to settle with WhatsApp's own event helper",
         exports: {},
+    },
+    {
+        // Cmd.refreshQR, which this replaced, was deleted without a trace.
+        module: 'WAWebBackendEventBus',
+        why: "an expired QR is refreshed the way WhatsApp's own reload button does it",
+        exports: {
+            BackendEventBus: { kind: 'value', members: ['triggerRefreshQR'] },
+        },
     },
     {
         module: 'WAWebCmd',

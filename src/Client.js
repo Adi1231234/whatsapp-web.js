@@ -745,24 +745,7 @@ class Client extends EventEmitter {
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onAuthAppStateChangedEvent',
-                async (state) => {
-                    console.log('[wwjs-diag] onAuthAppStateChangedEvent', {
-                        state,
-                        ts: Date.now(),
-                    });
-                    if (
-                        state == 'UNPAIRED_IDLE' &&
-                        !pairWithPhoneNumber.phoneNumber
-                    ) {
-                        console.log(
-                            '[wwjs-diag] onAuthAppStateChangedEvent refreshQR triggered',
-                        );
-                        // refresh qr code - must run in browser context, not Node.js
-                        await this.pupPage.evaluate(() => {
-                            window.require('WAWebCmd').Cmd.refreshQR();
-                        });
-                    }
-                },
+                async (state) => this._onAuthAppStateChanged(state),
             );
 
             // WhatsApp's own connection-bridge reasons for tearing the socket
@@ -1346,6 +1329,31 @@ class Client extends EventEmitter {
             if (this._injectAbort === abort) {
                 this._injectAbort = null;
             }
+        }
+    }
+
+    /**
+     * Follows the socket state. A QR that ran out of codes is refreshed the way
+     * WhatsApp's own reload button does it, unless pairing by phone number.
+     * Private function
+     */
+    async _onAuthAppStateChanged(state) {
+        console.log('[wwjs-diag] onAuthAppStateChangedEvent', {
+            state,
+            ts: Date.now(),
+        });
+        if (
+            state == 'UNPAIRED_IDLE' &&
+            !this.options.pairWithPhoneNumber.phoneNumber
+        ) {
+            console.log(
+                '[wwjs-diag] onAuthAppStateChangedEvent refreshQR triggered',
+            );
+            await this.pupPage.evaluate(() => {
+                window.WaGateway.module(
+                    'WAWebBackendEventBus',
+                ).BackendEventBus.triggerRefreshQR();
+            });
         }
     }
 
