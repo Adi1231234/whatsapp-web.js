@@ -327,17 +327,7 @@ class Client extends EventEmitter {
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onAuthAppStateChangedEvent',
-                async (state) => {
-                    if (
-                        state == 'UNPAIRED_IDLE' &&
-                        !pairWithPhoneNumber.phoneNumber
-                    ) {
-                        // refresh qr code
-                        await this.pupPage.evaluate(() => {
-                            window.require('WAWebCmd').Cmd.refreshQR();
-                        });
-                    }
-                },
+                async (state) => this._onAuthAppStateChanged(state),
             );
 
             await exposeFunctionIfAbsent(
@@ -630,6 +620,24 @@ class Client extends EventEmitter {
         this._registerFramenavigatedHandler();
 
         await this.inject();
+    }
+
+    /**
+     * Follows the socket state. A QR that ran out of codes is refreshed the way
+     * WhatsApp's own reload button does it, unless pairing by phone number.
+     * Private function
+     */
+    async _onAuthAppStateChanged(state) {
+        if (
+            state == 'UNPAIRED_IDLE' &&
+            !this.options.pairWithPhoneNumber.phoneNumber
+        ) {
+            await this.pupPage.evaluate(() => {
+                window
+                    .require('WAWebBackendEventBus')
+                    .BackendEventBus.triggerRefreshQR();
+            });
+        }
     }
 
     /**
