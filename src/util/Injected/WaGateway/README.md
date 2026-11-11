@@ -16,6 +16,16 @@ loads the build that carries it.
   `window.require`:
     - `module(name)` returns the module exactly as `window.require` does. It
       never throws: a module whose factory throws reads as missing.
+    - `whenReady(names, timeoutMs)` settles once WhatsApp's loader has every
+      named module ready, through its own `requireLazy` callback, so nothing
+      asks `require` again until it answers. `require` answers null for a
+      module that is listed but not ready (its code not loaded, or it threw),
+      and undefined for one the page never heard of. When the time runs out it
+      asks each module once, since the loader may still hold its callback in
+      its scheduler: all of them there is ready, otherwise it names each
+      missing one as `not-loaded` or `unknown`. WhatsApp sets `window.Debug` before inject's
+      modules are all ready, and its `/login/` entry never loads the socket
+      model at all (measured on 2.3000.1054073855).
     - `check()` checks every eager binding against the build the page loaded:
       the module exists, each export exists and has the declared kind, the
       argument count matches where one is declared, and each declared member is
@@ -68,6 +78,42 @@ A problem is `{ module, export?, problem, ... }` with `problem` one of
 2. Declare it in `bindings.js`: the exports you use, `arity` only if you read
    arguments by position, `members` you read off the value.
 3. Check the declaration against a live page before relying on it.
+4. If inject() cannot go on without it, add it to a list in
+   `util/AppModules.js`, which says which kind waits and which only exposes.
+
+## What inject() waits for
+
+`util/AppModules.js` sorts every module inject() reads early into three
+lists:
+
+- `REQUIRED_TO_CONNECT` (socket, its wait, Cmd, the stream) is waited for on
+  every page, and a module that never arrives stops inject with the reason.
+- `REQUIRED_FOR_QR` is waited for only when a QR is shown, so a paired session
+  never waits for the pieces of a QR.
+- `EXPOSED_WHEN_PRESENT` is never waited for. If WhatsApp renamed one, a wait
+  on it would keep every account from connecting; the load check names it
+  instead. A module that nothing reads by name, or only an optional feature
+  uses, belongs here.
+
+On WhatsApp's login entry (`/login/`) the socket model is listed but never
+loaded, so inject loads `/` once and goes on there.
+
+Known, and left as it is:
+
+- **WhatsApp keeps serving `/login/`.** inject leaves it once; landing there
+  again fails at the wait after the auth timeout (30s by default), with the URL
+  in the error, and a caller that retries pays that each time. Measured,
+  WhatsApp never sends a page there itself, and `/` after `/login/` loads the
+  app. Revisit if that error shows up with `/login/` in it: then WhatsApp
+  routes some sessions there, and the login entry needs handling of its own
+  (it draws a QR without the app behind it).
+- **An inject started by the `framenavigated` handler swallows its failure.**
+  The handler only logs it, so a navigation WhatsApp makes by itself that ends
+  in a failed inject leaves the caller with a page that never becomes ready,
+  until its own timeouts act. The client's first inject, and any page it loads
+  itself (`_openWhatsWeb`), are not affected: the handler stands aside for
+  those. Revisit if a page stays unready after `[wwjs-diag] framenavigated:inject
+END (error)`.
 
 ## What it cannot see
 
