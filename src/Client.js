@@ -13,6 +13,13 @@ const {
     MessageTypes,
 } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
+const { WhenModulesReady } = require('./util/Injected/WhenModulesReady');
+const {
+    REQUIRED_TO_CONNECT,
+    REQUIRED_FOR_QR,
+    isLoginEntry,
+    modulesUnavailable,
+} = require('./util/AppModules');
 const { LoadUtils } = require('./util/Injected/Utils');
 const { ListMediaRefsSince } = require('./util/Injected/MediaRefs');
 const { InjectHdCopies } = require('./util/Injected/HdCopies/inject');
@@ -123,6 +130,15 @@ class Client extends EventEmitter {
         this._injectAbort = abort;
 
         try {
+            // WhatsApp's login entry draws a QR without the app behind it, so
+            // nothing below can run there (see util/AppModules.js). The app at
+            // `/` serves the same QR with everything this library needs, so
+            // leave once; landing there again fails at the module wait below.
+            if (isLoginEntry(this.pupPage.url())) {
+                await this._openWhatsWeb();
+                if (abort.signal.aborted) return;
+            }
+
             const authTimeout = this.options.authTimeoutMs || 30000;
             await this.pupPage
                 .waitForFunction('window.Debug?.VERSION != undefined', {
@@ -141,6 +157,8 @@ class Client extends EventEmitter {
             const pairWithPhoneNumber = this.options.pairWithPhoneNumber;
             const version = await this.getWWebVersion();
 
+            await this._awaitModules(REQUIRED_TO_CONNECT, authTimeout, version);
+            if (abort.signal.aborted) return;
             await this.pupPage.evaluate(ExposeAuthStore);
 
             const needAuthHandle = await this.pupPage.waitForFunction(
@@ -208,6 +226,12 @@ class Client extends EventEmitter {
                         pairWithPhoneNumber.intervalMs,
                     );
                 } else {
+                    await this._awaitModules(
+                        REQUIRED_FOR_QR,
+                        authTimeout,
+                        version,
+                    );
+                    if (abort.signal.aborted) return;
                     let qrRetries = 0;
 
                     this.on(Events.LOADING_SCREEN, () => {
@@ -237,21 +261,31 @@ class Client extends EventEmitter {
                         },
                     );
 
+                    // Ready: the QR wait above covers all of these.
                     await this.pupPage.evaluate(async () => {
+                        const { waSignalStore } = window.require(
+                            'WAWebSignalStoreApi',
+                        );
+                        const { waNoiseInfo } = window.require(
+                            'WAWebUserPrefsInfoStore',
+                        );
+                        const base64 = window.require('WABase64');
+                        const multiDevice = window.require(
+                            'WAWebUserPrefsMultiDevice',
+                        );
+                        const { Conn } = window.require('WAWebConnModel');
                         const registrationInfo =
-                            await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-                        const noiseKeyPair =
-                            await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-                        const staticKeyB64 =
-                            window.AuthStore.Base64Tools.encodeB64(
-                                noiseKeyPair.staticKeyPair.pubKey,
-                            );
-                        const identityKeyB64 =
-                            window.AuthStore.Base64Tools.encodeB64(
-                                registrationInfo.identityKeyPair.pubKey,
-                            );
-                        const platform =
-                            window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
+                            await waSignalStore.getRegistrationInfo();
+                        const noiseKeyPair = await waNoiseInfo.get();
+                        const staticKeyB64 = base64.encodeB64(
+                            noiseKeyPair.staticKeyPair.pubKey,
+                        );
+                        const identityKeyB64 = base64.encodeB64(
+                            registrationInfo.identityKeyPair.pubKey,
+                        );
+                        const platform = window.require(
+                            'WAWebCompanionRegClientUtils',
+                        ).DEVICE_PLATFORM;
                         const getQR = (ref) =>
                             ref +
                             ',' +
@@ -259,9 +293,7 @@ class Client extends EventEmitter {
                             ',' +
                             identityKeyB64 +
                             ',' +
-                            window
-                                .require('WAWebUserPrefsMultiDevice')
-                                .getADVSecretKey() +
+                            multiDevice.getADVSecretKey() +
                             ',' +
                             platform;
                         const onRefChange = (_, ref) => {
@@ -269,10 +301,8 @@ class Client extends EventEmitter {
                             window.onQRChangedEvent(getQR(ref));
                         };
 
-                        window.onQRChangedEvent(
-                            getQR(window.AuthStore.Conn.ref),
-                        ); // initial qr
-                        window.AuthStore.Conn.on('change:ref', onRefChange); // future QR changes
+                        window.onQRChangedEvent(getQR(Conn.ref)); // initial qr
+                        Conn.on('change:ref', onRefChange); // future QR changes
 
                         // The synced handler subscribes too late for a scan.
                         const { Stream, StreamMode } =
@@ -288,10 +318,7 @@ class Client extends EventEmitter {
                         window
                             .require('WAWebSocketModel')
                             .Socket.on('change:hasSynced', () => {
-                                window.AuthStore.Conn.off(
-                                    'change:ref',
-                                    onRefChange,
-                                );
+                                Conn.off('change:ref', onRefChange);
                             });
                     });
                 }
@@ -596,11 +623,7 @@ class Client extends EventEmitter {
             await page.evaluateOnNewDocument(this.options.evalOnNewDoc);
         }
 
-        await page.goto(WhatsWebURL, {
-            waitUntil: 'load',
-            timeout: 0,
-            referer: 'https://whatsapp.com/',
-        });
+        await this._openWhatsWeb();
 
         // Register framenavigated BEFORE inject so that if navigation
         // interrupts inject, the handler triggers a fresh inject.
@@ -609,12 +632,55 @@ class Client extends EventEmitter {
         await this.inject();
     }
 
+    /**
+     * Waits for WhatsApp's loader to have every named module ready, since
+     * window.Debug comes before they all are: reading one too early answers
+     * null, and asking again until it answers is a poll. Throws the named
+     * reason when the time runs out first.
+     * Private function
+     */
+    async _awaitModules(names, timeoutMs, build) {
+        const modules = await this.pupPage.evaluate(
+            WhenModulesReady,
+            names,
+            timeoutMs,
+        );
+        if (!modules.ready) {
+            throw modulesUnavailable(
+                modules.missing,
+                this.pupPage.url(),
+                build,
+            );
+        }
+    }
+
+    /**
+     * Loads WhatsApp Web in the page. While it does, the framenavigated
+     * handler stands aside: the caller goes on with the page it opened, and a
+     * second inject started by the handler would replace it and swallow its
+     * failure.
+     * Private function
+     */
+    async _openWhatsWeb() {
+        this._openingWhatsWeb = true;
+        try {
+            await this.pupPage.goto(WhatsWebURL, {
+                waitUntil: 'load',
+                timeout: 0,
+                referer: 'https://whatsapp.com/',
+            });
+        } finally {
+            this._openingWhatsWeb = false;
+        }
+    }
+
     _registerFramenavigatedHandler() {
         if (this._framenavigatedRegistered) return;
         this._framenavigatedRegistered = true;
 
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.parentFrame() !== null) return;
+            if (this._openingWhatsWeb) return;
 
             const isLogout =
                 frame.url().includes('post_logout=1') || this.lastLoggedOut;
