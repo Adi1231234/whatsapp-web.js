@@ -8,6 +8,9 @@
  * - `module(name)`: the module, exactly as `window.require` returns it. A name
  *   missing from the bindings is reported once; a lazy binding is checked on
  *   its first use.
+ * - `whenReady(names, timeoutMs)`: `{ ready: true }` once WhatsApp's loader
+ *   has every named module ready, or `{ ready: false, missing }` when the
+ *   time runs out first. A timeout is an answer, not a rejection.
  * - `check()`: every eager binding against the build this page loaded, as
  *   `{ build, checked, problems }`.
  * - `keepShape(wrapper, original)`: gives a wrapper over a WhatsApp function
@@ -136,6 +139,31 @@ const InstallWaGateway = (bindings) => {
         return load(name).mod;
     };
 
+    // WhatsApp's loader calls back through `requireLazy` once every named
+    // module is ready; `require` answers null for one listed but not ready,
+    // undefined for one the page never heard of (README.md). The loader can
+    // defer that callback to its scheduler, so when the time runs out the
+    // modules themselves are asked: all of them there is still ready.
+    const whenReady = (names, timeoutMs) =>
+        new Promise((resolve) => {
+            const timeout = AbortSignal.timeout(timeoutMs);
+            const onTimeout = () => {
+                const missing = names
+                    .map((name) => ({ name, mod: load(name).mod }))
+                    .filter(({ mod }) => mod == null)
+                    .map(({ name, mod }) => ({
+                        module: name,
+                        state: mod === null ? 'not-loaded' : 'unknown',
+                    }));
+                resolve({ ready: missing.length === 0, missing });
+            };
+            timeout.addEventListener('abort', onTimeout, { once: true });
+            window.requireLazy(names, () => {
+                timeout.removeEventListener('abort', onTimeout);
+                resolve({ ready: true, missing: [] });
+            });
+        });
+
     const check = () => {
         const eager = bindings.filter((b) => !b.lazy);
         const problems = [];
@@ -178,6 +206,7 @@ const InstallWaGateway = (bindings) => {
 
     window.WaGateway = {
         module: moduleOf,
+        whenReady: whenReady,
         check: check,
         keepShape: keepShape,
         wrap: wrap,

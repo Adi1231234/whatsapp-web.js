@@ -1,7 +1,7 @@
 {
   "src/Client.js": {
     "no-restricted-properties": {
-      "count": 163
+      "count": 158
     }
   },
   "src/structures/Channel.js": {
@@ -32,11 +32,6 @@
   "src/structures/Message.js": {
     "no-restricted-properties": {
       "count": 43
-    }
-  },
-  "src/util/Injected/AuthStore/AuthStore.js": {
-    "no-restricted-properties": {
-      "count": 10
     }
   },
   "src/util/Injected/DiagHooks.js": {
