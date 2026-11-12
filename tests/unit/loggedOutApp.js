@@ -46,6 +46,17 @@ describe("inject on WhatsApp's logged-out app", function () {
             expect(events).to.deep.equal([QR('REF')]);
         });
 
+        it('waits while the bus holds no state yet', async function () {
+            const { modules, bus } = loggedOutAppIn(undefined, [
+                'OPENING',
+                'UNPAIRED',
+            ]);
+            const { client, events } = clientOn(loadPage(modules, LOGIN));
+            await client.inject();
+            expect(bus.socketState).to.equal('UNPAIRED');
+            expect(events).to.deep.equal([QR('REF')]);
+        });
+
         it('follows every new code WhatsApp draws', async function () {
             const { modules } = loggedOutAppIn('UNPAIRED');
             const { client, events } = clientOn(loadPage(modules, LOGIN));
@@ -120,6 +131,50 @@ describe("inject on WhatsApp's logged-out app", function () {
                 "WhatsApp's logged-out app cannot pair by phone number" +
                     ` on ${LOGIN} (build ${BUILD})`,
             );
+        });
+    });
+
+    describe("the client's own calls there", function () {
+        /** A client past inject on the logged-out app, its page recording what it asks for. */
+        async function onLoggedOutApp() {
+            const { modules, bus, refreshes } = loggedOutAppIn('UNPAIRED');
+            const page = loadPage(modules, LOGIN);
+            const { client } = clientOn(page);
+            await client.inject();
+            page.asked.length = 0;
+            return { client, bus, refreshes, asked: page.asked };
+        }
+
+        it('answer the socket state off the bus, never asking for the model', async function () {
+            const { client, bus, asked } = await onLoggedOutApp();
+            expect(await client.getState()).to.equal('UNPAIRED');
+            bus.triggerSetSocketState('UNPAIRED_IDLE');
+            expect(await client.getState()).to.equal('UNPAIRED_IDLE');
+            expect(asked).to.not.include('WAWebSocketModel');
+        });
+
+        it('reset the connection with a new socket and QR, as its reload button does', async function () {
+            const { client, refreshes, asked } = await onLoggedOutApp();
+            await client.resetState();
+            expect(refreshes).to.deep.equal(['triggerRefreshQR']);
+            expect(asked).to.not.include('WAWebSocketModel');
+        });
+
+        it('log out with no session on the page to end', async function () {
+            const { client, asked } = await onLoggedOutApp();
+            await client.logout();
+            expect(asked).to.not.include('WAWebSocketModel');
+        });
+
+        it('are unchanged on the app', async function () {
+            const modules = appIn('CONNECTED');
+            const { client } = clientOn(loadPage(modules));
+            await client.inject();
+            const { Socket } = modules.WAWebSocketModel;
+            expect(await client.getState()).to.equal('CONNECTED');
+            await client.resetState();
+            await client.logout();
+            expect(Socket.calls).to.deep.equal(['reconnect', 'logout']);
         });
     });
 
