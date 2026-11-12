@@ -19,7 +19,8 @@
  * Checked against build 2.3000.1049833609 (2026-10-09/10): every export and
  * member present, `handleKeyIndexResultSync.length === 9`. The socket,
  * stream, AuthStore, QR and event-bus entries checked against build
- * 2.3000.1054073855 (2026-11-11).
+ * 2.3000.1054073855 (2026-11-11); the two bootstraps and the bus's socket
+ * state against both apps of build 2.3000.1054203907 (2026-11-12).
  */
 const BINDINGS = [
     {
@@ -127,10 +128,30 @@ const BINDINGS = [
     {
         // Cmd.refreshQR, which this replaced, was deleted without a trace.
         module: 'WAWebBackendEventBus',
-        why: "an expired QR is refreshed the way WhatsApp's own reload button does it",
+        why: "an expired QR is refreshed the way WhatsApp's own reload button does it; the logged-out app keeps the socket state here only",
         exports: {
-            BackendEventBus: { kind: 'value', members: ['triggerRefreshQR'] },
+            BackendEventBus: {
+                kind: 'value',
+                members: ['triggerRefreshQR', 'socketState', 'on', 'off'],
+            },
         },
+    },
+    {
+        // Only asked whether it loaded; a page of the logged-out app never has.
+        module: 'WAWebAppBootstrap',
+        optional: true,
+        why: 'inject tells the app from the logged-out app by the bootstrap that loaded',
+        exports: {},
+    },
+    {
+        // Only asked whether it loaded, and only where the app's bootstrap
+        // did not: lazy, so the load check on a page of the app, which never
+        // has it, does not ask either.
+        module: 'WAWebLoggedOutBootstrap',
+        optional: true,
+        lazy: true,
+        why: 'inject tells the logged-out app from the app by the bootstrap that loaded',
+        exports: {},
     },
     {
         module: 'WAWebCmd',

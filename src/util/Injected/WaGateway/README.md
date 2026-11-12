@@ -23,9 +23,9 @@ loads the build that carries it.
       and undefined for one the page never heard of. When the time runs out it
       asks each module once, since the loader may still hold its callback in
       its scheduler: all of them there is ready, otherwise it names each
-      missing one as `not-loaded` or `unknown`. WhatsApp sets `window.Debug` before inject's
-      modules are all ready, and its `/login/` entry never loads the socket
-      model at all (measured on 2.3000.1054073855).
+      missing one as `not-loaded` or `unknown`. WhatsApp sets `window.Debug`
+      before inject's modules are all ready, and its logged-out app never
+      loads the socket model at all (measured on 2.3000.1054073855).
     - `check()` checks every eager binding against the build the page loaded:
       the module exists, each export exists and has the declared kind, the
       argument count matches where one is declared, and each declared member is
@@ -83,37 +83,40 @@ A problem is `{ module, export?, problem, ... }` with `problem` one of
 
 ## What inject() waits for
 
-`util/AppModules.js` sorts every module inject() reads early into three
+WhatsApp Web is two apps, told apart by the bootstrap that loaded
+(`IsLoggedOutApp` in `util/AppModules.js`): the app runs a session, and the
+logged-out app at `/login/` only links a device. WhatsApp's server sends a
+logged-out browser to the latter by a cookie, every time, so inject never
+leaves it. `util/AppModules.js` sorts every module inject() reads early into
 lists:
 
 - `REQUIRED_TO_CONNECT` (socket, its wait, Cmd, the stream) is waited for on
-  every page, and a module that never arrives stops inject with the reason.
-- `REQUIRED_FOR_QR` is waited for only when a QR is shown, so a paired session
-  never waits for the pieces of a QR.
+  every page of the app, and a module that never arrives stops inject with the
+  reason.
+- `REQUIRED_ON_LOGGED_OUT_APP` (the event bus, the socket states, the wait) is
+  its counterpart on the logged-out app, which has no socket model: the bus is
+  where the model takes its state from, and there it is the only place.
+- `REQUIRED_FOR_QR` is waited for only when a QR is shown, on either app, so a
+  paired session never waits for the pieces of a QR.
 - `EXPOSED_WHEN_PRESENT` is never waited for. If WhatsApp renamed one, a wait
   on it would keep every account from connecting; the load check names it
   instead. A module that nothing reads by name, or only an optional feature
   uses, belongs here.
 
-On WhatsApp's login entry (`/login/`) the socket model is listed but never
-loaded, so inject loads `/` once and goes on there.
+On the logged-out app inject shows the QR and refreshes it, and nothing else:
+it does not pair by phone number, and a page that settles on anything but a QR
+stops inject with the state. A scan there navigates to `/` without a word on
+the way, so the next inject reports it as a loading screen when it finds the
+session.
 
 Known, and left as it is:
 
-- **WhatsApp keeps serving `/login/`.** inject leaves it once; landing there
-  again fails at the wait after the auth timeout (30s by default), with the URL
-  in the error, and a caller that retries pays that each time. Measured,
-  WhatsApp never sends a page there itself, and `/` after `/login/` loads the
-  app. Revisit if that error shows up with `/login/` in it: then WhatsApp
-  routes some sessions there, and the login entry needs handling of its own
-  (it draws a QR without the app behind it).
 - **An inject started by the `framenavigated` handler swallows its failure.**
   The handler only logs it, so a navigation WhatsApp makes by itself that ends
   in a failed inject leaves the caller with a page that never becomes ready,
-  until its own timeouts act. The client's first inject, and any page it loads
-  itself (`_openWhatsWeb`), are not affected: the handler stands aside for
-  those. Revisit if a page stays unready after `[wwjs-diag] framenavigated:inject
-END (error)`.
+  until its own timeouts act. The client's first inject is not affected; the
+  page a scan on the logged-out app lands on is. Revisit if a page stays
+  unready after `[wwjs-diag] framenavigated:inject END (error)`.
 
 ## What it cannot see
 

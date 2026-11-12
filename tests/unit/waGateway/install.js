@@ -28,7 +28,7 @@ describe('WaGateway: what this library depends on inside WhatsApp', function () 
         const { gateway } = page(healthyModules());
         const result = gateway.check();
         expect(result.problems).to.deep.equal([]);
-        expect(result.checked).to.equal(BINDINGS.length);
+        expect(result.checked).to.equal(BINDINGS.filter((b) => !b.lazy).length);
         expect(result.build).to.equal('2.3000.1');
     });
 
