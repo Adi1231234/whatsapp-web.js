@@ -1,121 +1,51 @@
 const { expect } = require('chai');
-const Client = require('../../src/Client');
-const { WhatsWebURL } = require('../../src/util/Constants');
+const { Events } = require('../../src/util/Constants');
 const {
     REQUIRED_TO_CONNECT,
+    REQUIRED_ON_LOGGED_OUT_APP,
     REQUIRED_FOR_QR,
     EXPOSED_WHEN_PRESENT,
-    isLoginEntry,
+    IsLoggedOutApp,
 } = require('../../src/util/AppModules');
 const {
     ExposeAuthStore,
 } = require('../../src/util/Injected/AuthStore/AuthStore');
 const { evaluateInPage } = require('./evaluateBoundary');
+const {
+    APP,
+    LOGIN,
+    BUILD,
+    appIn,
+    loggedOutAppIn,
+    loadPage,
+    clientOn,
+    injectError,
+    closePage,
+    qrOf,
+} = require('./injectPage');
 
-const LOGIN = 'https://web.whatsapp.com/login/';
-const APP = 'https://web.whatsapp.com/';
-const PAST_THE_WAITS = 'past the module waits';
-const ALL = [
-    ...REQUIRED_TO_CONNECT,
-    ...REQUIRED_FOR_QR,
-    ...EXPOSED_WHEN_PRESENT,
-];
-
-/** Every module inject reads, with a socket that has settled in `state`. */
-function whatsAppIn(state) {
-    const modules = Object.fromEntries(ALL.map((name) => [name, {}]));
-    modules.WAWebSocketModel = {
-        Socket: { state, hasSynced: false, on() {}, off() {} },
-    };
-    modules.WAWebCmd = { Cmd: {} };
-    return modules;
-}
-
-/**
- * A client on a page that runs every injected function the way puppeteer
- * does, against WhatsApp's two loader calls as measured: `require` answers
- * null for a module listed but not loaded and undefined for one never heard
- * of, and `requireLazy` calls back only once every named module is there.
- * `urls` is where each load lands: the page starts on the first, and each
- * goto moves to the next. Exposing the socket-state binding, which inject
- * does once every wait is behind it, stops the run there.
- */
-function clientOn(modules, urls = [APP]) {
-    let at = 0;
-    const gotos = [];
-    global.window = {
-        Debug: { VERSION: '2.3000.9' },
-        require: (name) => modules[name],
-        requireLazy: (names, cb) => {
-            if (names.every((n) => modules[n] != null)) cb();
-        },
-    };
-    const evaluate = async (fn, ...args) =>
-        typeof fn === 'string'
-            ? new Function(`return (${fn})`)()
-            : evaluateInPage(fn, ...args);
-    const pupPage = {
-        url: () => urls[at],
-        evaluate,
-        waitForFunction: async (fn) => {
-            const value = await evaluate(fn);
-            return { jsonValue: async () => value };
-        },
-        exposeFunction: async (name, fn) => {
-            if (name === 'onAuthAppStateChangedEvent') {
-                throw new Error(PAST_THE_WAITS);
-            }
-            global.window[name] = fn;
-        },
-        goto: async (url) => {
-            gotos.push(url);
-            at = Math.min(at + 1, urls.length - 1);
-        },
-    };
-    const client = Object.create(Client.prototype);
-    Object.assign(client, {
-        pupPage,
-        options: { authTimeoutMs: 20, pairWithPhoneNumber: {} },
-        authStrategy: { onAuthenticationNeeded: async () => ({}) },
-        on() {},
-    });
-    return { client, gotos };
-}
-
-async function injectError(client) {
-    try {
-        await client.inject();
-    } catch (err) {
-        return err;
-    }
-    throw new Error('inject() resolved');
-}
-
-/** A page where WhatsApp lists the socket model but never loads it. */
+/** A page of the app where WhatsApp lists the socket model but never loads it. */
 const socketNeverLoads = () =>
-    Object.assign(whatsAppIn('CONNECTED'), { WAWebSocketModel: null });
+    Object.assign(appIn('CONNECTED'), { WAWebSocketModel: null });
 
 describe('inject: the app modules WhatsApp loads', function () {
-    afterEach(function () {
-        delete global.window;
-    });
+    afterEach(closePage);
 
     describe('waiting for them', function () {
         it('fails naming what never loaded, where and on which build', async function () {
-            const { client } = clientOn(socketNeverLoads());
+            const { client } = clientOn(loadPage(socketNeverLoads()));
             const err = await injectError(client);
             expect(err.message).to.equal(
                 'WhatsApp app modules unavailable: WAWebSocketModel (not-loaded)' +
-                    ` on ${APP} (build 2.3000.9)`,
+                    ` on ${APP} (build ${BUILD})`,
             );
             expect(global.window.AuthStore).to.equal(undefined);
         });
 
         it('connects with every module it only exposes missing', async function () {
-            const modules = whatsAppIn('CONNECTED');
+            const modules = appIn('CONNECTED');
             EXPOSED_WHEN_PRESENT.forEach((m) => delete modules[m]);
-            const err = await injectError(clientOn(modules).client);
-            expect(err.message).to.equal(PAST_THE_WAITS);
+            await clientOn(loadPage(modules)).client.inject();
             expect(global.window.AuthStore.AppState).to.equal(
                 modules.WAWebSocketModel.Socket,
             );
@@ -125,89 +55,123 @@ describe('inject: the app modules WhatsApp loads', function () {
         });
 
         it('connects a paired session without the modules of a QR', async function () {
-            const modules = whatsAppIn('CONNECTED');
+            const modules = appIn('CONNECTED');
             REQUIRED_FOR_QR.forEach((m) => delete modules[m]);
-            const err = await injectError(clientOn(modules).client);
-            expect(err.message).to.equal(PAST_THE_WAITS);
+            await clientOn(loadPage(modules)).client.inject();
+            expect(global.window._wwjsListeners).to.have.length(4);
         });
 
         it('names the QR module a pairing waited for in vain', async function () {
-            const modules = whatsAppIn('UNPAIRED');
+            const modules = appIn('UNPAIRED');
             delete modules.WABase64;
-            const err = await injectError(clientOn(modules).client);
+            const err = await injectError(clientOn(loadPage(modules)).client);
             expect(err.message).to.equal(
                 'WhatsApp app modules unavailable: WABase64 (unknown)' +
-                    ` on ${APP} (build 2.3000.9)`,
+                    ` on ${APP} (build ${BUILD})`,
+            );
+        });
+    });
+
+    describe('the QR on the app', function () {
+        it('is shown, and a scan is reported from the stream turning to SYNCING', async function () {
+            const modules = appIn('UNPAIRED');
+            const { client, events, gotos } = clientOn(loadPage(modules));
+            await client.inject();
+            const { Stream } = modules.WAWebStreamModel;
+            Stream.mode = 'SYNCING';
+            Stream.trigger('change:mode');
+            expect(events).to.deep.equal([
+                [Events.QR_RECEIVED, qrOf('REF')],
+                [Events.LOADING_SCREEN, 0, 'WhatsApp'],
+            ]);
+            expect(gotos).to.deep.equal([]);
+        });
+
+        it('listens on the socket model, never on the event bus', async function () {
+            const modules = appIn('UNPAIRED');
+            const bus = modules.WAWebBackendEventBus.BackendEventBus;
+            bus.on = () => {
+                throw new Error('the app reads its socket model');
+            };
+            await clientOn(loadPage(modules)).client.inject();
+            const { Socket } = modules.WAWebSocketModel;
+            expect(Socket.listenerCount('change:state')).to.equal(1);
+        });
+    });
+
+    describe('which app a page runs', function () {
+        /** Asks, the way inject does, with only `present` there. */
+        function ask(present) {
+            const asked = [];
+            global.window = {
+                require: (name) => {
+                    asked.push(name);
+                    return present[name];
+                },
+            };
+            return { loggedOut: evaluateInPage(IsLoggedOutApp), asked };
+        }
+
+        it('is the app where its bootstrap loaded, asking for nothing else', function () {
+            expect(ask({ WAWebAppBootstrap: {} })).to.deep.equal({
+                loggedOut: false,
+                asked: ['WAWebAppBootstrap'],
+            });
+        });
+
+        it('is the logged-out app where only that bootstrap loaded', function () {
+            expect(ask({ WAWebLoggedOutBootstrap: {} }).loggedOut).to.equal(
+                true,
             );
         });
 
-        it('leaves the login entry for the app, once', async function () {
-            const { client, gotos } = clientOn(socketNeverLoads(), [
-                LOGIN,
-                APP,
-            ]);
-            const err = await injectError(client);
-            expect(gotos).to.deep.equal([WhatsWebURL]);
-            expect(err.message).to.contain(` on ${APP} `);
+        it('is the app where neither loaded, so its wait names what is missing', function () {
+            expect(ask({}).loggedOut).to.equal(false);
+            expect(ask({ WAWebLoggedOutBootstrap: null }).loggedOut).to.equal(
+                false,
+            );
         });
 
-        it('does not leave it twice when WhatsApp sends it back there', async function () {
-            const { client, gotos } = clientOn(socketNeverLoads(), [
-                LOGIN,
-                LOGIN,
-            ]);
-            const err = await injectError(client);
-            expect(gotos).to.deep.equal([WhatsWebURL]);
-            expect(err.message).to.contain(` on ${LOGIN} `);
-        });
+        it('is told by the modules, not by the address', async function () {
+            const app = clientOn(loadPage(appIn('UNPAIRED'), LOGIN));
+            await app.client.inject();
+            expect(global.window.AuthStore).to.not.equal(undefined);
 
-        it('stays on the app page', async function () {
-            const { client, gotos } = clientOn(socketNeverLoads());
-            await injectError(client);
-            expect(gotos).to.deep.equal([]);
+            const { modules } = loggedOutAppIn('UNPAIRED');
+            const loggedOut = clientOn(loadPage(modules, APP));
+            await loggedOut.client.inject();
+            expect(global.window.AuthStore).to.equal(undefined);
+            expect(loggedOut.events).to.deep.equal([
+                [Events.QR_RECEIVED, qrOf('REF')],
+            ]);
         });
     });
 
-    describe('the framenavigated handler while the client opens WhatsApp', function () {
-        function clientWithHandler() {
-            let handler = null;
-            const injected = [];
-            const frame = { parentFrame: () => null, url: () => APP };
-            const client = Object.create(Client.prototype);
-            Object.assign(client, {
-                lastLoggedOut: false,
-                inject: async () => injected.push(frame.url()),
-                pupPage: {
-                    on: (event, fn) => (handler = fn),
-                    evaluate: async () => false,
-                    goto: async () => handler(frame),
-                },
-            });
-            Client.prototype._registerFramenavigatedHandler.call(client);
-            return { client, injected, navigate: () => handler(frame) };
-        }
-
-        it('stands aside: the caller goes on with the page it opened', async function () {
-            const { client, injected } = clientWithHandler();
-            await client._openWhatsWeb();
-            expect(injected).to.deep.equal([]);
+    describe('the lists', function () {
+        it('never put a module in two on one app', function () {
+            const app = [
+                REQUIRED_TO_CONNECT,
+                REQUIRED_FOR_QR,
+                EXPOSED_WHEN_PRESENT,
+            ].flat();
+            const loggedOut = [
+                REQUIRED_ON_LOGGED_OUT_APP,
+                REQUIRED_FOR_QR,
+            ].flat();
+            expect(app).to.have.length(new Set(app).size);
+            expect(loggedOut).to.have.length(new Set(loggedOut).size);
         });
 
-        it("injects again on WhatsApp's own navigation", async function () {
-            const { client, injected, navigate } = clientWithHandler();
-            await client._openWhatsWeb();
-            await navigate();
-            expect(injected).to.deep.equal([APP]);
-        });
-    });
-
-    describe('the three lists', function () {
-        it('never put a module in two', function () {
-            expect(ALL).to.have.length(new Set(ALL).size);
+        it('wait on the logged-out app for nothing it never loads', function () {
+            const neverLoaded = ['WAWebSocketModel', 'WAWebStreamModel'];
+            const waited = [REQUIRED_ON_LOGGED_OUT_APP, REQUIRED_FOR_QR].flat();
+            expect(waited.filter((m) => neverLoaded.includes(m))).to.deep.equal(
+                [],
+            );
         });
 
         it('place every module ExposeAuthStore reads', function () {
-            const modules = whatsAppIn('CONNECTED');
+            const modules = appIn('CONNECTED');
             const asked = new Set();
             global.window = {
                 require: (name) => {
@@ -216,32 +180,14 @@ describe('inject: the app modules WhatsApp loads', function () {
                 },
             };
             evaluateInPage(ExposeAuthStore);
-            const placed = new Set(ALL);
+            const placed = new Set(
+                [
+                    REQUIRED_TO_CONNECT,
+                    REQUIRED_FOR_QR,
+                    EXPOSED_WHEN_PRESENT,
+                ].flat(),
+            );
             expect([...asked].filter((m) => !placed.has(m))).to.deep.equal([]);
-        });
-    });
-
-    describe("isLoginEntry: WhatsApp's own login path test", function () {
-        it('knows the login entry in every form WAWebURLUtils accepts', function () {
-            expect(
-                [
-                    LOGIN,
-                    'https://web.whatsapp.com/login',
-                    'https://web.whatsapp.com/login/?next=%2F',
-                ].map(isLoginEntry),
-            ).to.deep.equal([true, true, true]);
-        });
-
-        it('takes nothing else for it', function () {
-            expect(
-                [
-                    APP,
-                    'https://web.whatsapp.com/?post_logout=1&logout_reason=0',
-                    'https://web.whatsapp.com/loginx',
-                    'data:text/html,<p>blank</p>',
-                    '',
-                ].map(isLoginEntry),
-            ).to.deep.equal([false, false, false, false, false]);
         });
     });
 });

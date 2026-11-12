@@ -16,9 +16,11 @@ const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
 const { WhenModulesReady } = require('./util/Injected/WhenModulesReady');
 const {
     REQUIRED_TO_CONNECT,
+    REQUIRED_ON_LOGGED_OUT_APP,
     REQUIRED_FOR_QR,
-    isLoginEntry,
+    IsLoggedOutApp,
     modulesUnavailable,
+    notOnLoggedOutApp,
 } = require('./util/AppModules');
 const { LoadUtils } = require('./util/Injected/Utils');
 const { ListMediaRefsSince } = require('./util/Injected/MediaRefs');
@@ -48,6 +50,14 @@ const {
 } = require('./structures');
 const NoAuth = require('./authStrategies/NoAuth');
 const { exposeFunctionIfAbsent } = require('./util/Puppeteer');
+
+// Map the resolved connection screen onto the public events.
+// QR / ERROR aren't listed: they have their own paths, emit nothing.
+const EMIT_BY_SCREEN = {
+    CONNECTED: () => [Events.READY],
+    LOADING: (percent) => [Events.LOADING_SCREEN, percent, 'WhatsApp'],
+    DISCONNECTED: (percent) => [Events.LOADING_SCREEN, percent, 'WhatsApp'],
+};
 
 /**
  * Starting point for interacting with the WhatsApp Web API
@@ -116,6 +126,8 @@ class Client extends EventEmitter {
 
         this.currentIndexHtml = null;
         this.lastLoggedOut = false;
+        // See _reportScanFromLoggedOutApp.
+        this._loggedOutAppAwaitsScan = false;
 
         Util.setFfmpegPath(this.options.ffmpegPath);
     }
@@ -130,15 +142,6 @@ class Client extends EventEmitter {
         this._injectAbort = abort;
 
         try {
-            // WhatsApp's login entry draws a QR without the app behind it, so
-            // nothing below can run there (see util/AppModules.js). The app at
-            // `/` serves the same QR with everything this library needs, so
-            // leave once; landing there again fails at the module wait below.
-            if (isLoginEntry(this.pupPage.url())) {
-                await this._openWhatsWeb();
-                if (abort.signal.aborted) return;
-            }
-
             const authTimeout = this.options.authTimeoutMs || 30000;
             await this.pupPage
                 .waitForFunction('window.Debug?.VERSION != undefined', {
@@ -157,30 +160,66 @@ class Client extends EventEmitter {
             const pairWithPhoneNumber = this.options.pairWithPhoneNumber;
             const version = await this.getWWebVersion();
 
-            await this._awaitModules(REQUIRED_TO_CONNECT, authTimeout, version);
-            if (abort.signal.aborted) return;
-            await this.pupPage.evaluate(ExposeAuthStore);
-
-            const needAuthHandle = await this.pupPage.waitForFunction(
-                () => {
-                    const state =
-                        window.require?.('WAWebSocketModel')?.Socket?.state;
-                    if (
-                        !state ||
-                        state === 'OPENING' ||
-                        state === 'UNLAUNCHED' ||
-                        state === 'PAIRING'
-                    ) {
-                        return false;
-                    }
-                    return {
-                        need: state === 'UNPAIRED' || state === 'UNPAIRED_IDLE',
-                        state,
-                    };
-                },
-                { timeout: authTimeout },
+            // Which of WhatsApp's two apps this page runs decides what there
+            // is to wait for: the logged-out one only links a device, and has
+            // neither the socket nor the stream model (util/AppModules.js).
+            const loggedOut = await this.pupPage.evaluate(IsLoggedOutApp);
+            if (loggedOut && pairWithPhoneNumber.phoneNumber) {
+                throw notOnLoggedOutApp(
+                    'cannot pair by phone number',
+                    this.pupPage.url(),
+                    version,
+                );
+            }
+            await this._awaitModules(
+                loggedOut ? REQUIRED_ON_LOGGED_OUT_APP : REQUIRED_TO_CONNECT,
+                authTimeout,
+                version,
             );
-            const needAuthentication = await needAuthHandle.jsonValue();
+            if (abort.signal.aborted) return;
+            if (!loggedOut) await this.pupPage.evaluate(ExposeAuthStore);
+
+            // The logged-out app has no socket model: its socket state is
+            // waited for on WhatsApp's event bus.
+            let needAuthentication;
+            if (loggedOut) {
+                needAuthentication =
+                    await this._awaitLoggedOutSocketState(authTimeout);
+            } else {
+                const needAuthHandle = await this.pupPage.waitForFunction(
+                    () => {
+                        const state =
+                            window.require?.('WAWebSocketModel')?.Socket?.state;
+                        if (
+                            !state ||
+                            state === 'OPENING' ||
+                            state === 'UNLAUNCHED' ||
+                            state === 'PAIRING'
+                        ) {
+                            return false;
+                        }
+                        return {
+                            need:
+                                state === 'UNPAIRED' ||
+                                state === 'UNPAIRED_IDLE',
+                            state,
+                        };
+                    },
+                    { timeout: authTimeout },
+                );
+                needAuthentication = await needAuthHandle.jsonValue();
+            }
+            this._reportScanFromLoggedOutApp(
+                loggedOut,
+                needAuthentication.need,
+            );
+            if (loggedOut && !needAuthentication.need) {
+                throw notOnLoggedOutApp(
+                    `shows no QR: its socket settled on ${needAuthentication.state}`,
+                    this.pupPage.url(),
+                    version,
+                );
+            }
 
             if (needAuthentication.need) {
                 const { failed, failureEventPayload, restart } =
@@ -262,7 +301,7 @@ class Client extends EventEmitter {
                     );
 
                     // Ready: the QR wait above covers all of these.
-                    await this.pupPage.evaluate(async () => {
+                    await this.pupPage.evaluate(async (loggedOut) => {
                         const { waSignalStore } = window.require(
                             'WAWebSignalStoreApi',
                         );
@@ -304,6 +343,10 @@ class Client extends EventEmitter {
                         window.onQRChangedEvent(getQR(Conn.ref)); // initial qr
                         Conn.on('change:ref', onRefChange); // future QR changes
 
+                        // The logged-out app has neither model below, and a
+                        // scan ends its page: the next one reports it.
+                        if (loggedOut) return;
+
                         // The synced handler subscribes too late for a scan.
                         const { Stream, StreamMode } =
                             window.require('WAWebStreamModel');
@@ -320,7 +363,7 @@ class Client extends EventEmitter {
                             .Socket.on('change:hasSynced', () => {
                                 Conn.off('change:ref', onRefChange);
                             });
-                    });
+                    }, loggedOut);
                 }
             }
 
@@ -329,6 +372,34 @@ class Client extends EventEmitter {
                 'onAuthAppStateChangedEvent',
                 async (state) => this._onAuthAppStateChanged(state),
             );
+
+            // The logged-out app is done here once an expired QR can be
+            // refreshed, which is seen on the bus: it has no socket model. It
+            // leaves the page by itself when scanned.
+            if (loggedOut) {
+                await this.pupPage.evaluate(() => {
+                    const { BackendEventBus } = window.require(
+                        'WAWebBackendEventBus',
+                    );
+                    const listeners = [
+                        [
+                            BackendEventBus,
+                            'set_socket_state',
+                            (state) => window.onAuthAppStateChangedEvent(state),
+                        ],
+                    ];
+                    // An inject again on this page replaces, as below.
+                    const previous = window._wwjsListeners || [];
+                    for (const [obj, event, handler] of previous) {
+                        obj.off(event, handler);
+                    }
+                    for (const [obj, event, handler] of listeners) {
+                        obj.on(event, handler);
+                    }
+                    window._wwjsListeners = listeners;
+                });
+                return;
+            }
 
             await exposeFunctionIfAbsent(
                 this.pupPage,
@@ -447,28 +518,10 @@ class Client extends EventEmitter {
                     this.authStrategy.afterAuthReady();
                 },
             );
-            // Map the resolved connection screen onto the public events.
-            // QR / ERROR aren't listed: they have their own paths, emit nothing.
-            const EMIT_BY_SCREEN = {
-                CONNECTED: () => [Events.READY],
-                LOADING: (percent) => [
-                    Events.LOADING_SCREEN,
-                    percent,
-                    'WhatsApp',
-                ],
-                DISCONNECTED: (percent) => [
-                    Events.LOADING_SCREEN,
-                    percent,
-                    'WhatsApp',
-                ],
-            };
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onConnectionStateEvent',
-                (screen, percent) => {
-                    const args = EMIT_BY_SCREEN[screen]?.(percent);
-                    if (args) this.emit(...args);
-                },
+                (screen, percent) => this._onConnectionState(screen, percent),
             );
             await exposeFunctionIfAbsent(
                 this.pupPage,
@@ -613,13 +666,82 @@ class Client extends EventEmitter {
             await page.evaluateOnNewDocument(this.options.evalOnNewDoc);
         }
 
-        await this._openWhatsWeb();
+        await page.goto(WhatsWebURL, {
+            waitUntil: 'load',
+            timeout: 0,
+            referer: 'https://whatsapp.com/',
+        });
 
         // Register framenavigated BEFORE inject so that if navigation
         // interrupts inject, the handler triggers a fresh inject.
         this._registerFramenavigatedHandler();
 
         await this.inject();
+    }
+
+    /**
+     * Emits the public event for a connection screen the page resolved.
+     * Private function
+     */
+    _onConnectionState(screen, percent) {
+        const args = EMIT_BY_SCREEN[screen]?.(percent);
+        if (args) this.emit(...args);
+    }
+
+    /**
+     * Reports a scan made on the logged-out app, which no page can report
+     * itself: that app navigates away once scanned, its socket state
+     * unchanged (util/AppModules.js). So the first page to hold a session
+     * after the logged-out app waited for one reports it, the way the QR
+     * block reports a scan on the app.
+     * Private function
+     */
+    _reportScanFromLoggedOutApp(loggedOut, needsQr) {
+        if (this._loggedOutAppAwaitsScan && !needsQr) {
+            this._onConnectionState('LOADING', 0);
+        }
+        this._loggedOutAppAwaitsScan = loggedOut && needsQr;
+    }
+
+    /**
+     * Waits for the logged-out app's socket to settle on WhatsApp's event
+     * bus, which announces each state as `set_socket_state`, and says whether
+     * it settled on a QR. WAWebEventsWaitForBbEvent is WhatsApp's own helper:
+     * it subscribes with .on(), resolves on the predicate, detaches on every
+     * exit path, and rejects on the AbortSignal. Returning early when the
+     * state has already settled closes the subscribe-too-late race.
+     * Private function
+     */
+    async _awaitLoggedOutSocketState(timeoutMs) {
+        return this.pupPage.evaluate(async (timeoutMs) => {
+            // Ready: the module wait covers all three.
+            const { BackendEventBus } = window.require('WAWebBackendEventBus');
+            const { SOCKET_STATE } = window.require('WAWebSocketConstants');
+            // The module is the function itself (its default export).
+            const waitForBbEvent = window.require('WAWebEventsWaitForBbEvent');
+            const TRANSIENT = [
+                SOCKET_STATE.OPENING,
+                SOCKET_STATE.UNLAUNCHED,
+                SOCKET_STATE.PAIRING,
+            ];
+            const settling = () =>
+                TRANSIENT.includes(BackendEventBus.socketState);
+            if (settling()) {
+                await waitForBbEvent(
+                    BackendEventBus,
+                    'set_socket_state',
+                    () => !settling(),
+                    AbortSignal.timeout(timeoutMs),
+                );
+            }
+            const state = BackendEventBus.socketState;
+            return {
+                need:
+                    state === SOCKET_STATE.UNPAIRED ||
+                    state === SOCKET_STATE.UNPAIRED_IDLE,
+                state,
+            };
+        }, timeoutMs);
     }
 
     /**
@@ -662,33 +784,12 @@ class Client extends EventEmitter {
         }
     }
 
-    /**
-     * Loads WhatsApp Web in the page. While it does, the framenavigated
-     * handler stands aside: the caller goes on with the page it opened, and a
-     * second inject started by the handler would replace it and swallow its
-     * failure.
-     * Private function
-     */
-    async _openWhatsWeb() {
-        this._openingWhatsWeb = true;
-        try {
-            await this.pupPage.goto(WhatsWebURL, {
-                waitUntil: 'load',
-                timeout: 0,
-                referer: 'https://whatsapp.com/',
-            });
-        } finally {
-            this._openingWhatsWeb = false;
-        }
-    }
-
     _registerFramenavigatedHandler() {
         if (this._framenavigatedRegistered) return;
         this._framenavigatedRegistered = true;
 
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.parentFrame() !== null) return;
-            if (this._openingWhatsWeb) return;
 
             const isLogout =
                 frame.url().includes('post_logout=1') || this.lastLoggedOut;
@@ -1479,6 +1580,7 @@ class Client extends EventEmitter {
     async destroy() {
         if (this._injectAbort) this._injectAbort.abort();
         this._framenavigatedRegistered = false;
+        this._loggedOutAppAwaitsScan = false;
 
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
