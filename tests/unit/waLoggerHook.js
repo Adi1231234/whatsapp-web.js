@@ -75,7 +75,9 @@ function fakePage(localStorage) {
     });
     const modules = {
         WALogger,
-        WAWebSocketModel: { Socket: { state: 'UNLAUNCHED' } },
+        WAWebBackendEventBus: {
+            BackendEventBus: { socketState: 'UNLAUNCHED' },
+        },
     };
     // The hook installs a flush timer. Stub it so a unit test cannot leave the
     // runner hanging on a live handle, and count it so a leak is visible.
@@ -320,6 +322,23 @@ describe('WaLoggerHook', function () {
             expect(line.ts).to.be.a('number');
         });
 
+        it('stamps each line off the event bus, never asking for the socket model the logged-out app lacks', async function () {
+            const page = fakePage();
+            const require = window.require;
+            const asked = [];
+            window.require = (name) => {
+                asked.push(name);
+                return name === 'WAWebSocketModel' ? null : require(name);
+            };
+            install(1);
+            window.require('WAWebBackendEventBus').BackendEventBus.socketState =
+                'UNPAIRED';
+            page.WALogger.LOG(tagged('BackendEventBus: set_socket_state {}'));
+            await settle();
+            expect(allBatched(page)[0].state).to.equal('UNPAIRED');
+            expect(asked).to.not.include('WAWebSocketModel');
+        });
+
         it('always calls the original, forwarded or not', function () {
             const page = fakePage();
             install(1);
@@ -407,7 +426,8 @@ describe('WaLoggerHook', function () {
             // back through JSON, which is what the binding sends.
             const page = fakePage();
             install(1);
-            window.require('WAWebSocketModel').Socket.state = 'CONNECTED';
+            window.require('WAWebBackendEventBus').BackendEventBus.socketState =
+                'CONNECTED';
             const parts = [
                 'received failure stanza, reason: ',
                 ', logging out',

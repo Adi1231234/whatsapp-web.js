@@ -283,7 +283,7 @@ class Client extends EventEmitter {
             // Which of WhatsApp's two apps this page runs decides what there
             // is to wait for: the logged-out one only links a device, and has
             // neither the socket nor the stream model (util/AppModules.js).
-            const loggedOut = await this.pupPage.evaluate(IsLoggedOutApp);
+            const loggedOut = await this._isLoggedOutApp();
             console.log('[wwjs-diag] inject:app', {
                 loggedOut,
                 url: _injectUrl.slice(0, 120),
@@ -556,7 +556,11 @@ class Client extends EventEmitter {
                         SOCKET_STATE.UNLAUNCHED,
                         SOCKET_STATE.PAIRING,
                     ];
-                    const settling = () => TRANSIENT.includes(socketState());
+                    // No state at all has not settled either.
+                    const settling = () => {
+                        const now = socketState();
+                        return now == null || TRANSIENT.includes(now);
+                    };
 
                     // Evidence that the event-based wait is doing real work.
                     // The pre-#151 code was waitForFunction with puppeteer's
@@ -1408,6 +1412,14 @@ class Client extends EventEmitter {
                 this._injectAbort = null;
             }
         }
+    }
+
+    /**
+     * Whether the page runs WhatsApp's logged-out app (util/AppModules.js).
+     * Private function
+     */
+    async _isLoggedOutApp() {
+        return this.pupPage.evaluate(IsLoggedOutApp);
     }
 
     /**
@@ -3573,12 +3585,15 @@ class Client extends EventEmitter {
     }
 
     /**
-     * Logs out the client, closing the current session
+     * Logs out the client, closing the current session. The logged-out app
+     * has no session to end, and no socket model to end it with.
      */
     async logout() {
-        await this.pupPage.evaluate(() => {
-            return window.require('WAWebSocketModel').Socket.logout();
-        });
+        if (!(await this._isLoggedOutApp())) {
+            await this.pupPage.evaluate(() => {
+                return window.require('WAWebSocketModel').Socket.logout();
+            });
+        }
 
         if (this.pupBrowser.process()) {
             await this.pupBrowser.close();
@@ -4332,8 +4347,13 @@ class Client extends EventEmitter {
      * @returns {WAState}
      */
     async getState() {
+        // Read where the socket model takes it from: WhatsApp's event bus,
+        // which the logged-out app has without the model.
         return await this.pupPage.evaluate(() => {
-            return window.require('WAWebSocketModel').Socket.state ?? null;
+            return (
+                window.WaGateway.module('WAWebBackendEventBus').BackendEventBus
+                    .socketState ?? null
+            );
         });
     }
 
@@ -4557,9 +4577,19 @@ class Client extends EventEmitter {
     }
 
     /**
-     * Force reset of connection state for the client
+     * Force reset of connection state for the client. The logged-out app has
+     * no socket model: it is reset the way its own reload button does it,
+     * with a new socket and a new QR.
      */
     async resetState() {
+        if (await this._isLoggedOutApp()) {
+            await this.pupPage.evaluate(() => {
+                window.WaGateway.module(
+                    'WAWebBackendEventBus',
+                ).BackendEventBus.triggerRefreshQR();
+            });
+            return;
+        }
         await this.pupPage.evaluate(() => {
             window.require('WAWebSocketModel').Socket.reconnect();
         });

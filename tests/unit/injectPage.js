@@ -125,13 +125,26 @@ function eventBus(state, script = []) {
     return { bus, refreshes };
 }
 
+/** The app's socket model, settled in `state`; `calls` records what it was told. */
+function socketModel(state) {
+    const calls = [];
+    return emitter({
+        state,
+        hasSynced: false,
+        calls,
+        logout: () => calls.push('logout'),
+        reconnect: () => calls.push('reconnect'),
+    });
+}
+
 /** The app: a socket model settled in `state`, its stream on a QR. */
 function appIn(state) {
     const modules = withQrParts(healthyModules());
-    modules.WAWebSocketModel.Socket = emitter({ state, hasSynced: false });
+    modules.WAWebSocketModel.Socket = socketModel(state);
     modules.WAWebStreamModel.Stream = emitter({ mode: 'QR' });
     modules.WAWebStreamModel.StreamMode = { SYNCING: 'SYNCING' };
     modules.WAWebCmd.Cmd = emitter();
+    modules.WAWebBackendEventBus.BackendEventBus = eventBus(state).bus;
     delete modules.WAWebLoggedOutBootstrap;
     return modules;
 }
@@ -208,9 +221,11 @@ function clientOn(page, options = {}) {
             pairWithPhoneNumber: {},
             ...options,
         },
+        pupBrowser: { process: () => null, disconnect() {} },
         authStrategy: {
             onAuthenticationNeeded: async () => ({}),
             destroy: async () => {},
+            logout: async () => {},
         },
         _reportRafStarvationRescue() {},
     });

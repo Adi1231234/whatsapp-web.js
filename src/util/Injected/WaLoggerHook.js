@@ -134,9 +134,12 @@ const InjectWaLoggerHook = (
     window.__p2dWaLogInstalled = true;
 
     const terminal = new RegExp(terminalSource, 'i');
+    // Off WhatsApp's event bus, where the socket model takes its state from.
+    // The logged-out app has the bus and not the model, and there asking for
+    // the model logs an ErrorUtils error: once per line, so every QR change.
     const socketState = () => {
-        const model = window.WaGateway.module('WAWebSocketModel');
-        return model ? String(model.Socket.state) : undefined;
+        const bus = window.WaGateway.module('WAWebBackendEventBus');
+        return bus ? String(bus.BackendEventBus.socketState) : undefined;
     };
 
     // WALogger's first argument is a tagged-template array; the substitutions

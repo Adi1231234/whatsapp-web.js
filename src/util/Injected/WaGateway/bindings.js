@@ -98,7 +98,7 @@ const BINDINGS = [
     },
     {
         module: 'WAWebSocketModel',
-        why: 'inject waits on the socket state to tell a paired session from a QR; WaLoggerHook stamps each line with it',
+        why: 'inject waits on the socket state to tell a paired session from a QR',
         exports: {
             Socket: { kind: 'value', members: ['state', 'hasSynced', 'on'] },
         },
@@ -128,7 +128,7 @@ const BINDINGS = [
     {
         // Cmd.refreshQR, which this replaced, was deleted without a trace.
         module: 'WAWebBackendEventBus',
-        why: "an expired QR is refreshed the way WhatsApp's own reload button does it; the logged-out app keeps the socket state here only",
+        why: "an expired QR is refreshed the way WhatsApp's own reload button does it; getState, WaLoggerHook's stamp and inject on the logged-out app, which has no socket model, read the socket state here, where the model takes it from",
         exports: {
             BackendEventBus: {
                 kind: 'value',
