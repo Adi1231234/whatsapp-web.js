@@ -11,6 +11,7 @@ const {
     ExposeAuthStore,
 } = require('../../src/util/Injected/AuthStore/AuthStore');
 const { evaluateInPage } = require('./evaluateBoundary');
+const { withLoaderRegistry } = require('./loaderRegistry');
 const {
     APP,
     LOGIN,
@@ -100,36 +101,44 @@ describe('inject: the app modules WhatsApp loads', function () {
     });
 
     describe('which app a page runs', function () {
-        /** Asks, the way inject does, with only `present` there. */
+        /**
+         * Asks, the way inject does, with only `present` registered. `unknown`
+         * is every module required that the page never registered: WhatsApp
+         * logs "Requiring unknown module" to the console for each.
+         */
         function ask(present) {
-            const asked = [];
+            const modules = withLoaderRegistry({ ...present });
+            const unknown = [];
             global.window = {
                 require: (name) => {
-                    asked.push(name);
-                    return present[name];
+                    if (modules[name] === undefined) unknown.push(name);
+                    return modules[name];
                 },
             };
-            return { loggedOut: evaluateInPage(IsLoggedOutApp), asked };
+            return { loggedOut: evaluateInPage(IsLoggedOutApp), unknown };
         }
 
-        it('is the app where its bootstrap loaded, asking for nothing else', function () {
+        it('is the app where its bootstrap is registered', function () {
             expect(ask({ WAWebAppBootstrap: {} })).to.deep.equal({
                 loggedOut: false,
-                asked: ['WAWebAppBootstrap'],
+                unknown: [],
             });
         });
 
-        it('is the logged-out app where only that bootstrap loaded', function () {
-            expect(ask({ WAWebLoggedOutBootstrap: {} }).loggedOut).to.equal(
-                true,
-            );
+        it("is the logged-out app where only that bootstrap is, never requiring the app's", function () {
+            expect(ask({ WAWebLoggedOutBootstrap: {} })).to.deep.equal({
+                loggedOut: true,
+                unknown: [],
+            });
         });
 
-        it('is the app where neither loaded, so its wait names what is missing', function () {
-            expect(ask({}).loggedOut).to.equal(false);
-            expect(ask({ WAWebLoggedOutBootstrap: null }).loggedOut).to.equal(
-                false,
-            );
+        it('is the app where neither is registered, so its wait names what is missing', function () {
+            expect(ask({})).to.deep.equal({ loggedOut: false, unknown: [] });
+        });
+
+        it('answers no, and never throws, where the loader has no registry', function () {
+            global.window = { require: () => undefined };
+            expect(evaluateInPage(IsLoggedOutApp)).to.equal(false);
         });
 
         it('is told by the modules, not by the address', async function () {

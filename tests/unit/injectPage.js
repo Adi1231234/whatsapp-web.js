@@ -9,6 +9,7 @@ const {
     EXPOSED_WHEN_PRESENT,
 } = require('../../src/util/AppModules');
 const { evaluateInPage } = require('./evaluateBoundary');
+const { withLoaderRegistry } = require('./loaderRegistry');
 
 const APP = 'https://web.whatsapp.com/';
 const LOGIN = 'https://web.whatsapp.com/login/';
@@ -106,7 +107,7 @@ function everyModule() {
     modules.WAWebCompanionRegClientUtils.DEVICE_PLATFORM = 'PLATFORM';
     modules.WAWebSocketConstants.SOCKET_STATE = SOCKET_STATE;
     modules.WAWebEventsWaitForBbEvent = waitForBbEvent;
-    return modules;
+    return withLoaderRegistry(modules);
 }
 
 /**

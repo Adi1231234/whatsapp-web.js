@@ -71,14 +71,22 @@ const EXPOSED_WHEN_PRESENT = [
 
 /**
  * In the page: whether it runs the logged-out app, told by the bootstrap
- * that loaded, since each app sets window.Debug from its own. The app's is
- * asked first, so a page of the app never asks for a module it does not
- * have. A page with neither is taken for the app, whose wait then names
+ * its loader registered, since each app sets window.Debug from its own.
+ * Asked of the loader's registry (`__debug.modulesMap`), never required: a
+ * page of the logged-out app has never heard of the app's bootstrap, and
+ * requiring it there logs "Requiring unknown module" on every inject, logout
+ * and reset. A page with neither is taken for the app, whose wait then names
  * what is missing.
  */
-const IsLoggedOutApp = () =>
-    window.require('WAWebAppBootstrap') == null &&
-    window.require('WAWebLoggedOutBootstrap') != null;
+const IsLoggedOutApp = () => {
+    const modules = window.require('__debug')?.modulesMap || {};
+    const registered = (name) =>
+        Object.prototype.hasOwnProperty.call(modules, name);
+    return (
+        !registered('WAWebAppBootstrap') &&
+        registered('WAWebLoggedOutBootstrap')
+    );
+};
 
 /** The one error inject() raises when required modules never arrived. */
 const modulesUnavailable = (missing, url, build) =>
