@@ -17,7 +17,10 @@
  * - `why`: who depends on it.
  *
  * Checked against build 2.3000.1049833609 (2026-10-09/10): every export and
- * member present, `handleKeyIndexResultSync.length === 9`.
+ * member present, `handleKeyIndexResultSync.length === 9`. The socket,
+ * stream, AuthStore, QR and event-bus entries checked against build
+ * 2.3000.1054073855 (2026-11-11); the two bootstraps and the bus's socket
+ * state against both apps of build 2.3000.1054203907 (2026-11-12).
  */
 const BINDINGS = [
     {
@@ -95,8 +98,135 @@ const BINDINGS = [
     },
     {
         module: 'WAWebSocketModel',
-        why: 'WaLoggerHook stamps each line with the socket state',
-        exports: { Socket: { kind: 'value', members: ['state'] } },
+        why: 'inject waits on the socket state to tell a paired session from a QR',
+        exports: {
+            Socket: { kind: 'value', members: ['state', 'hasSynced', 'on'] },
+        },
+    },
+    {
+        module: 'WAWebSocketConstants',
+        why: 'inject reads which socket states are still settling and which need a QR',
+        exports: {
+            SOCKET_STATE: {
+                kind: 'value',
+                members: [
+                    'OPENING',
+                    'UNLAUNCHED',
+                    'PAIRING',
+                    'UNPAIRED',
+                    'UNPAIRED_IDLE',
+                ],
+            },
+        },
+    },
+    {
+        // The module is the function itself, so there is no export to name.
+        module: 'WAWebEventsWaitForBbEvent',
+        why: "inject waits for the socket to settle with WhatsApp's own event helper",
+        exports: {},
+    },
+    {
+        // Cmd.refreshQR, which this replaced, was deleted without a trace.
+        module: 'WAWebBackendEventBus',
+        why: "an expired QR is refreshed the way WhatsApp's own reload button does it; getState, WaLoggerHook's stamp and inject on the logged-out app, which has no socket model, read the socket state here, where the model takes it from",
+        exports: {
+            BackendEventBus: {
+                kind: 'value',
+                members: ['triggerRefreshQR', 'socketState', 'on', 'off'],
+            },
+        },
+    },
+    {
+        // Only asked whether it is registered; a page of the logged-out app
+        // never has it.
+        module: 'WAWebAppBootstrap',
+        optional: true,
+        why: 'inject tells the app from the logged-out app by the bootstrap that loaded',
+        exports: {},
+    },
+    {
+        // Only asked whether it is registered, and only where the app's
+        // bootstrap is not: lazy, so the load check on a page of the app,
+        // which never has it, does not ask either.
+        module: 'WAWebLoggedOutBootstrap',
+        optional: true,
+        lazy: true,
+        why: 'inject tells the logged-out app from the app by the bootstrap that loaded',
+        exports: {},
+    },
+    {
+        module: 'WAWebCmd',
+        why: 'AuthStore.Cmd; inject listens on it for a logout',
+        exports: { Cmd: { kind: 'value', members: ['on'] } },
+    },
+    {
+        module: 'WAWebStreamModel',
+        why: 'the QR reports a scan from the stream mode turning to SYNCING',
+        exports: {
+            Stream: { kind: 'value', members: ['mode', 'on', 'off'] },
+            StreamMode: { kind: 'value', members: ['SYNCING'] },
+        },
+    },
+    {
+        module: 'WAWebUserPrefsMultiDevice',
+        why: "the QR's ADV secret key",
+        exports: { getADVSecretKey: { kind: 'function' } },
+    },
+    {
+        module: 'WAWebConnModel',
+        why: 'the QR: AuthStore.Conn.ref, and its change:ref event',
+        exports: { Conn: { kind: 'value', members: ['ref', 'on', 'off'] } },
+    },
+    {
+        module: 'WAWebOfflineHandler',
+        why: 'AuthStore.OfflineMessageHandler: the offline delivery progress',
+        exports: {
+            OfflineMessageHandler: {
+                kind: 'value',
+                members: ['getOfflineDeliveryProgress'],
+            },
+        },
+    },
+    {
+        module: 'WAWebAltDeviceLinkingApi',
+        why: 'AuthStore.PairingCodeLinkUtils: pairing with a phone number',
+        exports: {
+            setPairingType: { kind: 'function' },
+            initializeAltDeviceLinking: { kind: 'function' },
+            startAltLinkingFlow: { kind: 'function' },
+        },
+    },
+    {
+        module: 'WABase64',
+        why: 'AuthStore.Base64Tools: the QR keys',
+        exports: { encodeB64: { kind: 'function' } },
+    },
+    {
+        module: 'WAWebCompanionRegClientUtils',
+        why: 'AuthStore.RegistrationUtils: the QR names the platform',
+        exports: { DEVICE_PLATFORM: { kind: 'value' } },
+    },
+    {
+        // Spread into AuthStore.RegistrationUtils whole; nothing here reads
+        // an export of it by name.
+        module: 'WAWebAdvSignatureApi',
+        why: 'AuthStore.RegistrationUtils',
+        exports: {},
+    },
+    {
+        module: 'WAWebUserPrefsInfoStore',
+        why: "AuthStore.RegistrationUtils: the QR's noise key",
+        exports: { waNoiseInfo: { kind: 'value', members: ['get'] } },
+    },
+    {
+        module: 'WAWebSignalStoreApi',
+        why: "AuthStore.RegistrationUtils: the QR's identity key",
+        exports: {
+            waSignalStore: {
+                kind: 'value',
+                members: ['getRegistrationInfo'],
+            },
+        },
     },
     {
         module: 'WAWebDBMessageFindLocal',
@@ -119,11 +249,12 @@ const BINDINGS = [
         exports: { getAlternateMsgKey: { kind: 'function' } },
     },
     {
-        // Only read when msgFindMedia has left WAWebDBMessageFindLocal, to find
-        // it again by export name; the caller copes without it.
+        // The loader's registry. Read when msgFindMedia has left
+        // WAWebDBMessageFindLocal, to find it again by export name, and by
+        // registered(), which asks it for a name instead of requiring it.
         module: '__debug',
         optional: true,
-        why: 'MediaRefs finds msgFindMedia by name if its module moves',
+        why: 'MediaRefs finds msgFindMedia by name if its module moves; WaGateway.registered asks it whether a module is there',
         exports: { modulesMap: { kind: 'value' } },
     },
     {

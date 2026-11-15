@@ -13,6 +13,14 @@ const {
     MessageTypes,
 } = require('./util/Constants');
 const { ExposeAuthStore } = require('./util/Injected/AuthStore/AuthStore');
+const {
+    REQUIRED_TO_CONNECT,
+    REQUIRED_ON_LOGGED_OUT_APP,
+    REQUIRED_FOR_QR,
+    IsLoggedOutApp,
+    modulesUnavailable,
+    notOnLoggedOutApp,
+} = require('./util/AppModules');
 const { LoadUtils } = require('./util/Injected/Utils');
 const {
     InjectDiagCommon,
@@ -82,6 +90,14 @@ const {
 const NoAuth = require('./authStrategies/NoAuth');
 const { exposeFunctionIfAbsent } = require('./util/Puppeteer');
 const { rafStarvationRescue } = require('./util/RafStarvation');
+
+// Map the resolved connection screen onto the public events.
+// QR / ERROR aren't listed: they have their own paths, emit nothing.
+const EMIT_BY_SCREEN = {
+    CONNECTED: () => [Events.READY],
+    LOADING: (percent) => [Events.LOADING_SCREEN, percent, 'WhatsApp'],
+    DISCONNECTED: (percent) => [Events.LOADING_SCREEN, percent, 'WhatsApp'],
+};
 
 /**
  * Starting point for interacting with the WhatsApp Web API
@@ -158,6 +174,8 @@ class Client extends EventEmitter {
 
         this.currentIndexHtml = null;
         this.lastLoggedOut = false;
+        // See _reportScanFromLoggedOutApp.
+        this._loggedOutAppAwaitsScan = false;
 
         Util.setFfmpegPath(this.options.ffmpegPath);
     }
@@ -254,18 +272,6 @@ class Client extends EventEmitter {
             const pairWithPhoneNumber = this.options.pairWithPhoneNumber;
             const version = await this.getWWebVersion();
 
-            await this.pupPage.evaluate(ExposeAuthStore);
-
-            // [diag] Install the socket reason-capture hooks BEFORE the
-            // needAuthHandle wait below. That wait blocks for up to authTimeout
-            // (30s) while Socket.state is stuck in OPENING/PAIRING, and on a real
-            // stuck-connecting failure it TIMES OUT - so the post-authCheck hook
-            // block further down never runs, and the "why the socket keeps
-            // closing" reason is lost for exactly the failure we care about.
-            // Installing them here captures it. Fully defensive (modules may not
-            // be loaded yet; every read is guarded) and idempotent: the shared
-            // __wwjsDiagHooked / __p2dStreamHooked / __p2dSnapDone guards make
-            // the later block a no-op so nothing installs twice.
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onSocketDiagEvent',
@@ -274,147 +280,193 @@ class Client extends EventEmitter {
             // Every injected module below reaches WhatsApp through the gateway,
             // so it goes first; after the binding, so its reports have a way out.
             await installWaGateway(this.pupPage);
-            await this.pupPage.evaluate(() => {
-                const _st = () => {
+            // Which of WhatsApp's two apps this page runs decides what there
+            // is to wait for: the logged-out one only links a device, and has
+            // neither the socket nor the stream model (util/AppModules.js).
+            const loggedOut = await this._isLoggedOutApp();
+            console.log('[wwjs-diag] inject:app', {
+                loggedOut,
+                url: _injectUrl.slice(0, 120),
+                build: version,
+            });
+            if (loggedOut && pairWithPhoneNumber.phoneNumber) {
+                throw notOnLoggedOutApp(
+                    'cannot pair by phone number',
+                    this.pupPage.url(),
+                    version,
+                );
+            }
+            await this._awaitModules(
+                loggedOut ? REQUIRED_ON_LOGGED_OUT_APP : REQUIRED_TO_CONNECT,
+                authTimeout,
+                version,
+            );
+            if (abort.signal.aborted) return;
+            // The app's socket, stream and session, which the logged-out app
+            // has none of.
+            if (!loggedOut) {
+                await this.pupPage.evaluate(ExposeAuthStore);
+
+                // [diag] Install the socket reason-capture hooks BEFORE the
+                // needAuthHandle wait below. That wait blocks for up to
+                // authTimeout (30s) while Socket.state is stuck in
+                // OPENING/PAIRING, and on a real stuck-connecting failure it
+                // TIMES OUT - so the post-authCheck hook block further down
+                // never runs, and the "why the socket keeps closing" reason is
+                // lost for exactly the failure we care about. Installing them
+                // here captures it. Fully defensive (the modules they read
+                // beyond the ones waited for above may not be loaded yet; every
+                // read is guarded) and idempotent: the shared
+                // __wwjsDiagHooked / __p2dStreamHooked / __p2dSnapDone guards
+                // make the later block a no-op so nothing installs twice.
+                await this.pupPage.evaluate(() => {
+                    const _st = () => {
+                        try {
+                            return String(
+                                window.require('WAWebSocketModel').Socket.state,
+                            );
+                        } catch (ignoredError) {
+                            return undefined;
+                        }
+                    };
+                    // Bridge teardown/logout/ban/service-unavailable/force-update.
                     try {
-                        return String(
-                            window.require('WAWebSocketModel').Socket.state,
-                        );
-                    } catch (ignoredError) {
-                        return undefined;
-                    }
-                };
-                // Bridge teardown/logout/ban/service-unavailable/force-update.
-                try {
-                    const _m = window.require('WAWebSocketBridgeApi');
-                    const _b = _m && (_m.SocketBridgeApi || _m);
-                    if (_b && !_b.__wwjsDiagHooked) {
-                        const _wrap = (name) => {
-                            const orig = _b[name];
-                            if (typeof orig !== 'function') return;
-                            _b[name] = function (...args) {
-                                try {
-                                    const a = args[0];
-                                    let arg;
+                        const _m = window.require('WAWebSocketBridgeApi');
+                        const _b = _m && (_m.SocketBridgeApi || _m);
+                        if (_b && !_b.__wwjsDiagHooked) {
+                            const _wrap = (name) => {
+                                const orig = _b[name];
+                                if (typeof orig !== 'function') return;
+                                _b[name] = function (...args) {
                                     try {
-                                        arg = JSON.stringify(a).slice(0, 200);
+                                        const a = args[0];
+                                        let arg;
+                                        try {
+                                            arg = JSON.stringify(a).slice(
+                                                0,
+                                                200,
+                                            );
+                                        } catch (ignoredError) {
+                                            // best-effort diagnostic: never let it break the caller
+                                        }
+                                        window.onSocketDiagEvent({
+                                            event: name,
+                                            reason:
+                                                a && a.reason != null
+                                                    ? String(a.reason)
+                                                    : undefined,
+                                            arg,
+                                            state: _st(),
+                                        });
                                     } catch (ignoredError) {
                                         // best-effort diagnostic: never let it break the caller
                                     }
-                                    window.onSocketDiagEvent({
-                                        event: name,
-                                        reason:
-                                            a && a.reason != null
-                                                ? String(a.reason)
-                                                : undefined,
-                                        arg,
-                                        state: _st(),
-                                    });
-                                } catch (ignoredError) {
-                                    // best-effort diagnostic: never let it break the caller
-                                }
-                                return orig.apply(this, args);
+                                    return orig.apply(this, args);
+                                };
                             };
-                        };
-                        [
-                            'triggerUnexpectedLogoutModalFromBridge',
-                            'triggerTemporaryBanFromBridge',
-                            'triggerServiceUnavailableFromBridge',
-                            'forceAppUpdate',
-                            'socketLogout',
-                            'triggerLogoutFromBridge',
-                            'triggerSocketStreamDisconnectedFromBridge',
-                        ].forEach(_wrap);
-                        _b.__wwjsDiagHooked = true;
-                        console.log(
-                            '[wwjs-diag] socket bridge diag hooks installed (early)',
-                        );
+                            [
+                                'triggerUnexpectedLogoutModalFromBridge',
+                                'triggerTemporaryBanFromBridge',
+                                'triggerServiceUnavailableFromBridge',
+                                'forceAppUpdate',
+                                'socketLogout',
+                                'triggerLogoutFromBridge',
+                                'triggerSocketStreamDisconnectedFromBridge',
+                            ].forEach(_wrap);
+                            _b.__wwjsDiagHooked = true;
+                            console.log(
+                                '[wwjs-diag] socket bridge diag hooks installed (early)',
+                            );
+                        }
+                    } catch (ignoredError) {
+                        // best-effort diagnostic: never let it break the caller
                     }
-                } catch (ignoredError) {
-                    // best-effort diagnostic: never let it break the caller
-                }
-                // Stream lifecycle transitions.
-                try {
-                    const _S = window.require('WAWebStreamModel').Stream;
-                    if (_S && _S.on && !_S.__p2dStreamHooked) {
-                        _S.__p2dStreamHooked = true;
-                        [
-                            'change:info',
-                            'change:mode',
-                            'change:displayInfo',
-                        ].forEach((ev) => {
-                            _S.on(ev, () => {
-                                try {
-                                    window.onSocketDiagEvent({
-                                        event:
-                                            'STREAM_' +
-                                            ev
-                                                .replace('change:', '')
-                                                .toUpperCase(),
-                                        mode: String(_S.mode),
-                                        displayInfo: String(_S.displayInfo),
-                                        info: String(_S.info),
-                                        state: _st(),
-                                    });
-                                } catch (ignoredError) {
-                                    // best-effort diagnostic: never let it break the caller
-                                }
+                    // Stream lifecycle transitions.
+                    try {
+                        const _S = window.require('WAWebStreamModel').Stream;
+                        if (_S && _S.on && !_S.__p2dStreamHooked) {
+                            _S.__p2dStreamHooked = true;
+                            [
+                                'change:info',
+                                'change:mode',
+                                'change:displayInfo',
+                            ].forEach((ev) => {
+                                _S.on(ev, () => {
+                                    try {
+                                        window.onSocketDiagEvent({
+                                            event:
+                                                'STREAM_' +
+                                                ev
+                                                    .replace('change:', '')
+                                                    .toUpperCase(),
+                                            mode: String(_S.mode),
+                                            displayInfo: String(_S.displayInfo),
+                                            info: String(_S.info),
+                                            state: _st(),
+                                        });
+                                    } catch (ignoredError) {
+                                        // best-effort diagnostic: never let it break the caller
+                                    }
+                                });
                             });
-                        });
+                        }
+                    } catch (ignoredError) {
+                        // best-effort diagnostic: never let it break the caller
                     }
-                } catch (ignoredError) {
-                    // best-effort diagnostic: never let it break the caller
-                }
-                // One-shot registered/state snapshot (guarded so the later block
-                // does not re-emit it).
-                try {
-                    if (!window.__p2dSnapDone) {
-                        window.__p2dSnapDone = true;
-                        let _reg = null;
-                        try {
-                            const _me = window.require('WAWebUserPrefsMeUser');
-                            _reg = !!(
-                                _me.getMaybeMePnUser() ||
-                                _me.getMaybeMeLidUser()
-                            );
-                        } catch (ignoredError) {
-                            // best-effort diagnostic: never let it break the caller
+                    // One-shot registered/state snapshot (guarded so the later block
+                    // does not re-emit it).
+                    try {
+                        if (!window.__p2dSnapDone) {
+                            window.__p2dSnapDone = true;
+                            let _reg = null;
+                            try {
+                                const _me = window.require(
+                                    'WAWebUserPrefsMeUser',
+                                );
+                                _reg = !!(
+                                    _me.getMaybeMePnUser() ||
+                                    _me.getMaybeMeLidUser()
+                                );
+                            } catch (ignoredError) {
+                                // best-effort diagnostic: never let it break the caller
+                            }
+                            let _sm, _sd, _si, _rc, _hr, _stream;
+                            try {
+                                const S =
+                                    window.require('WAWebStreamModel').Stream;
+                                _sm = String(S.mode);
+                                _sd = String(S.displayInfo);
+                                _si = String(S.info);
+                                _rc = S.resumeCount;
+                                _hr = S.isHardRefresh;
+                            } catch (ignoredError) {
+                                // best-effort diagnostic: never let it break the caller
+                            }
+                            try {
+                                _stream = String(
+                                    window.require('WAWebSocketModel').Socket
+                                        .stream,
+                                );
+                            } catch (ignoredError) {
+                                // best-effort diagnostic: never let it break the caller
+                            }
+                            window.onSocketDiagEvent({
+                                event: 'SESSION_SNAPSHOT_AT_INJECT',
+                                registered: _reg,
+                                state: _st(),
+                                stream: _stream,
+                                streamMode: _sm,
+                                streamDisplayInfo: _sd,
+                                streamInfo: _si,
+                                resumeCount: _rc,
+                                isHardRefresh: _hr,
+                            });
                         }
-                        let _sm, _sd, _si, _rc, _hr, _stream;
-                        try {
-                            const S = window.require('WAWebStreamModel').Stream;
-                            _sm = String(S.mode);
-                            _sd = String(S.displayInfo);
-                            _si = String(S.info);
-                            _rc = S.resumeCount;
-                            _hr = S.isHardRefresh;
-                        } catch (ignoredError) {
-                            // best-effort diagnostic: never let it break the caller
-                        }
-                        try {
-                            _stream = String(
-                                window.require('WAWebSocketModel').Socket
-                                    .stream,
-                            );
-                        } catch (ignoredError) {
-                            // best-effort diagnostic: never let it break the caller
-                        }
-                        window.onSocketDiagEvent({
-                            event: 'SESSION_SNAPSHOT_AT_INJECT',
-                            registered: _reg,
-                            state: _st(),
-                            stream: _stream,
-                            streamMode: _sm,
-                            streamDisplayInfo: _sd,
-                            streamInfo: _si,
-                            resumeCount: _rc,
-                            isHardRefresh: _hr,
-                        });
+                    } catch (ignoredError) {
+                        // best-effort diagnostic: never let it break the caller
                     }
-                } catch (ignoredError) {
-                    // best-effort diagnostic: never let it break the caller
-                }
-            });
+                });
+            }
 
             // WhatsApp's own logger, and the storage layer it reports on. Both
             // installed here rather than after the auth wait below: that wait
@@ -450,19 +502,23 @@ class Client extends EventEmitter {
                 STORAGE_UTILS_MODULES,
                 SNAPSHOT_DB_TIMEOUT_MS,
             );
-            // Keep a hosted contact's device 99 flagged, so one record cannot
-            // stall device sync. Before the auth wait: the first drain of the
-            // pending queue runs as soon as the socket resumes. Before AdvDiag
-            // too, so its write hook stays outermost and still reports what
-            // WhatsApp tried to store.
-            await installHostedDeviceFlag(this.pupPage);
-            // A streamed download whose body starts with a byte order mark
-            // keeps its bytes. Before the first media download.
-            await installStreamedDownloadBytes(this.pupPage);
-            // Device-sync stalls and the forced logout they can end in.
-            await installAdvDiag(this.pupPage, 'inject', (info) =>
-                this._onSocketDiagEvent(info),
-            );
+            // A session's device sync and media, which the logged-out app has
+            // neither of.
+            if (!loggedOut) {
+                // Keep a hosted contact's device 99 flagged, so one record
+                // cannot stall device sync. Before the auth wait: the first
+                // drain of the pending queue runs as soon as the socket
+                // resumes. Before AdvDiag too, so its write hook stays
+                // outermost and still reports what WhatsApp tried to store.
+                await installHostedDeviceFlag(this.pupPage);
+                // A streamed download whose body starts with a byte order
+                // mark keeps its bytes. Before the first media download.
+                await installStreamedDownloadBytes(this.pupPage);
+                // Device-sync stalls and the forced logout they can end in.
+                await installAdvDiag(this.pupPage, 'inject', (info) =>
+                    this._onSocketDiagEvent(info),
+                );
+            }
 
             // Socket.state fires `change:state`, so wait on the event rather than
             // sampling. WAWebEventsWaitForBbEvent is WhatsApp's own helper: it
@@ -471,48 +527,40 @@ class Client extends EventEmitter {
             // state has already settled mirrors WAWebEventsWaitForMainStreamReadyMd
             // and closes the subscribe-too-late race.
             const needAuthentication = await this.pupPage.evaluate(
-                async (timeoutMs) => {
-                    // WAWebAppBootstrap declares WAWebDebugSetup as a dep but
-                    // not these, so `window.Debug` being populated does not
-                    // guarantee they are resolvable yet (measured only ~45ms
-                    // apart). Resolve defensively and wait for them the same way
-                    // we wait for the state itself, rather than throwing out of
-                    // the evaluate.
-                    const req = (n) => {
-                        try {
-                            return window.require?.(n) ?? null;
-                        } catch (ignoredError) {
-                            return null;
-                        }
-                    };
-                    const deadline = Date.now() + timeoutMs;
-                    let Socket, SOCKET_STATE, waitForBbEvent;
-                    for (;;) {
-                        const sm = req('WAWebSocketModel');
-                        const sc = req('WAWebSocketConstants');
-                        const wf = req('WAWebEventsWaitForBbEvent');
-                        if (sm?.Socket && sc?.SOCKET_STATE && wf) {
-                            Socket = sm.Socket;
-                            SOCKET_STATE = sc.SOCKET_STATE;
-                            waitForBbEvent = wf.default ?? wf;
-                            break;
-                        }
-                        if (Date.now() > deadline) {
-                            throw new Error(
-                                'WhatsApp socket modules unavailable',
-                            );
-                        }
-                        // Modules land during bundle evaluation, which is
-                        // macrotask-driven; yielding is enough to see them.
-                        await new Promise((r) => setTimeout(r, 0));
-                    }
+                async (timeoutMs, loggedOut) => {
+                    // Ready: the module wait above covers what each app reads.
+                    // The socket model takes its state from WhatsApp's event
+                    // bus, and the logged-out app has only the bus, which
+                    // announces each state as `set_socket_state`.
+                    const { Socket } = loggedOut
+                        ? {}
+                        : window.WaGateway.module('WAWebSocketModel');
+                    const { BackendEventBus } = loggedOut
+                        ? window.WaGateway.module('WAWebBackendEventBus')
+                        : {};
+                    const [emitter, event] = loggedOut
+                        ? [BackendEventBus, 'set_socket_state']
+                        : [Socket, 'change:state'];
+                    const socketState = () =>
+                        loggedOut ? BackendEventBus.socketState : Socket.state;
+                    const { SOCKET_STATE } = window.WaGateway.module(
+                        'WAWebSocketConstants',
+                    );
+                    // The module is the function itself (its default export).
+                    const waitForBbEvent = window.WaGateway.module(
+                        'WAWebEventsWaitForBbEvent',
+                    );
 
                     const TRANSIENT = [
                         SOCKET_STATE.OPENING,
                         SOCKET_STATE.UNLAUNCHED,
                         SOCKET_STATE.PAIRING,
                     ];
-                    const settling = () => TRANSIENT.includes(Socket.state);
+                    // No state at all has not settled either.
+                    const settling = () => {
+                        const now = socketState();
+                        return now == null || TRANSIENT.includes(now);
+                    };
 
                     // Evidence that the event-based wait is doing real work.
                     // The pre-#151 code was waitForFunction with puppeteer's
@@ -531,15 +579,15 @@ class Client extends EventEmitter {
                     rafHandle = requestAnimationFrame(tick);
 
                     const visibilityAtStart = document.visibilityState;
-                    const stateAtStart = Socket.state;
+                    const stateAtStart = socketState();
                     const waitStart = Date.now();
                     let awaited = false;
                     try {
                         if (settling()) {
                             awaited = true;
                             await waitForBbEvent(
-                                Socket,
-                                'change:state',
+                                emitter,
+                                event,
                                 () => !settling(),
                                 AbortSignal.timeout(timeoutMs),
                             );
@@ -549,13 +597,13 @@ class Client extends EventEmitter {
                         // an uncancelled callback would re-arm itself forever.
                         cancelAnimationFrame(rafHandle);
                     }
-                    const state = Socket.state;
+                    const state = socketState();
                     return {
                         need:
                             state === SOCKET_STATE.UNPAIRED ||
                             state === SOCKET_STATE.UNPAIRED_IDLE,
                         state,
-                        hasSynced: Socket.hasSynced,
+                        hasSynced: Socket?.hasSynced,
                         awaited,
                         rafTicks,
                         waitMs: Date.now() - waitStart,
@@ -565,9 +613,11 @@ class Client extends EventEmitter {
                     };
                 },
                 authTimeout,
+                loggedOut,
             );
             console.log('[wwjs-diag] inject:authCheck', {
                 ts: Date.now(),
+                loggedOut,
                 needAuthentication: needAuthentication.need,
                 appState: needAuthentication.state,
                 hasSynced: needAuthentication.hasSynced,
@@ -578,6 +628,17 @@ class Client extends EventEmitter {
             });
 
             this._reportRafStarvationRescue(needAuthentication);
+            this._reportScanFromLoggedOutApp(
+                loggedOut,
+                needAuthentication.need,
+            );
+            if (loggedOut && !needAuthentication.need) {
+                throw notOnLoggedOutApp(
+                    `shows no QR: its socket settled on ${needAuthentication.state}`,
+                    this.pupPage.url(),
+                    version,
+                );
+            }
 
             if (needAuthentication.need) {
                 const { failed, failureEventPayload, restart } =
@@ -635,6 +696,12 @@ class Client extends EventEmitter {
                         pairWithPhoneNumber.intervalMs,
                     );
                 } else {
+                    await this._awaitModules(
+                        REQUIRED_FOR_QR,
+                        authTimeout,
+                        version,
+                    );
+                    if (abort.signal.aborted) return;
                     let qrRetries = 0;
 
                     this.on(Events.LOADING_SCREEN, () => {
@@ -674,21 +741,32 @@ class Client extends EventEmitter {
                         },
                     );
 
-                    await this.pupPage.evaluate(async () => {
+                    // Ready: the QR wait above covers all of these.
+                    await this.pupPage.evaluate(async (loggedOut) => {
+                        const { waSignalStore } = window.WaGateway.module(
+                            'WAWebSignalStoreApi',
+                        );
+                        const { waNoiseInfo } = window.WaGateway.module(
+                            'WAWebUserPrefsInfoStore',
+                        );
+                        const base64 = window.WaGateway.module('WABase64');
+                        const multiDevice = window.WaGateway.module(
+                            'WAWebUserPrefsMultiDevice',
+                        );
+                        const { Conn } =
+                            window.WaGateway.module('WAWebConnModel');
                         const registrationInfo =
-                            await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-                        const noiseKeyPair =
-                            await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-                        const staticKeyB64 =
-                            window.AuthStore.Base64Tools.encodeB64(
-                                noiseKeyPair.staticKeyPair.pubKey,
-                            );
-                        const identityKeyB64 =
-                            window.AuthStore.Base64Tools.encodeB64(
-                                registrationInfo.identityKeyPair.pubKey,
-                            );
-                        const platform =
-                            window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
+                            await waSignalStore.getRegistrationInfo();
+                        const noiseKeyPair = await waNoiseInfo.get();
+                        const staticKeyB64 = base64.encodeB64(
+                            noiseKeyPair.staticKeyPair.pubKey,
+                        );
+                        const identityKeyB64 = base64.encodeB64(
+                            registrationInfo.identityKeyPair.pubKey,
+                        );
+                        const platform = window.WaGateway.module(
+                            'WAWebCompanionRegClientUtils',
+                        ).DEVICE_PLATFORM;
                         const getQR = (ref) =>
                             ref +
                             ',' +
@@ -696,9 +774,7 @@ class Client extends EventEmitter {
                             ',' +
                             identityKeyB64 +
                             ',' +
-                            window
-                                .require('WAWebUserPrefsMultiDevice')
-                                .getADVSecretKey() +
+                            multiDevice.getADVSecretKey() +
                             ',' +
                             platform;
                         const onRefChange = (_, ref) => {
@@ -706,14 +782,16 @@ class Client extends EventEmitter {
                             window.onQRChangedEvent(getQR(ref));
                         };
 
-                        window.onQRChangedEvent(
-                            getQR(window.AuthStore.Conn.ref),
-                        ); // initial qr
-                        window.AuthStore.Conn.on('change:ref', onRefChange); // future QR changes
+                        window.onQRChangedEvent(getQR(Conn.ref)); // initial qr
+                        Conn.on('change:ref', onRefChange); // future QR changes
+
+                        // The logged-out app has neither model below, and a
+                        // scan ends its page: the next one reports it.
+                        if (loggedOut) return;
 
                         // The synced handler subscribes too late for a scan.
                         const { Stream, StreamMode } =
-                            window.require('WAWebStreamModel');
+                            window.WaGateway.module('WAWebStreamModel');
                         const onScanned = () => {
                             if (Stream.mode !== StreamMode.SYNCING) return;
                             Stream.off('change:mode', onScanned);
@@ -722,40 +800,53 @@ class Client extends EventEmitter {
                         Stream.on('change:mode', onScanned);
 
                         // Remove QR listener once authentication succeeds
-                        window
-                            .require('WAWebSocketModel')
-                            .Socket.on('change:hasSynced', () => {
-                                window.AuthStore.Conn.off(
-                                    'change:ref',
-                                    onRefChange,
-                                );
-                            });
-                    });
+                        window.WaGateway.module('WAWebSocketModel').Socket.on(
+                            'change:hasSynced',
+                            () => {
+                                Conn.off('change:ref', onRefChange);
+                            },
+                        );
+                    }, loggedOut);
                 }
             }
 
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onAuthAppStateChangedEvent',
-                async (state) => {
-                    console.log('[wwjs-diag] onAuthAppStateChangedEvent', {
-                        state,
-                        ts: Date.now(),
-                    });
-                    if (
-                        state == 'UNPAIRED_IDLE' &&
-                        !pairWithPhoneNumber.phoneNumber
-                    ) {
-                        console.log(
-                            '[wwjs-diag] onAuthAppStateChangedEvent refreshQR triggered',
-                        );
-                        // refresh qr code - must run in browser context, not Node.js
-                        await this.pupPage.evaluate(() => {
-                            window.require('WAWebCmd').Cmd.refreshQR();
-                        });
-                    }
-                },
+                async (state) => this._onAuthAppStateChanged(state),
             );
+
+            // The logged-out app is done here once an expired QR can be
+            // refreshed, which is seen on the bus: it has no socket model. It
+            // leaves the page by itself when scanned.
+            if (loggedOut) {
+                await this.pupPage.evaluate(() => {
+                    const { BackendEventBus } = window.WaGateway.module(
+                        'WAWebBackendEventBus',
+                    );
+                    const listeners = [
+                        [
+                            BackendEventBus,
+                            'set_socket_state',
+                            (state) => window.onAuthAppStateChangedEvent(state),
+                        ],
+                    ];
+                    // An inject again on this page replaces, as below.
+                    const previous = window._wwjsListeners || [];
+                    for (const [obj, event, handler] of previous) {
+                        obj.off(event, handler);
+                    }
+                    for (const [obj, event, handler] of listeners) {
+                        obj.on(event, handler);
+                    }
+                    window._wwjsListeners = listeners;
+                });
+                console.log('[wwjs-diag] inject:end (logged-out app)', {
+                    ts: Date.now(),
+                    durationMs: Date.now() - _injectStart,
+                });
+                return;
+            }
 
             // WhatsApp's own connection-bridge reasons for tearing the socket
             // down / logging the client out / banning / forcing an update.
@@ -770,21 +861,6 @@ class Client extends EventEmitter {
                 async (info) => this._onSocketDiagEvent(info),
             );
 
-            // Map the resolved connection screen onto the public events.
-            // QR / ERROR aren't listed: they have their own paths, emit nothing.
-            const EMIT_BY_SCREEN = {
-                CONNECTED: () => [Events.READY],
-                LOADING: (percent) => [
-                    Events.LOADING_SCREEN,
-                    percent,
-                    'WhatsApp',
-                ],
-                DISCONNECTED: (percent) => [
-                    Events.LOADING_SCREEN,
-                    percent,
-                    'WhatsApp',
-                ],
-            };
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onAppStateHasSyncedEvent',
@@ -995,10 +1071,7 @@ class Client extends EventEmitter {
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 'onConnectionStateEvent',
-                (screen, percent) => {
-                    const args = EMIT_BY_SCREEN[screen]?.(percent);
-                    if (args) this.emit(...args);
-                },
+                (screen, percent) => this._onConnectionState(screen, percent),
             );
             await exposeFunctionIfAbsent(
                 this.pupPage,
@@ -1342,6 +1415,63 @@ class Client extends EventEmitter {
     }
 
     /**
+     * Whether the page runs WhatsApp's logged-out app (util/AppModules.js).
+     * Private function
+     */
+    async _isLoggedOutApp() {
+        return this.pupPage.evaluate(IsLoggedOutApp);
+    }
+
+    /**
+     * Emits the public event for a connection screen the page resolved.
+     * Private function
+     */
+    _onConnectionState(screen, percent) {
+        const args = EMIT_BY_SCREEN[screen]?.(percent);
+        if (args) this.emit(...args);
+    }
+
+    /**
+     * Reports a scan made on the logged-out app, which no page can report
+     * itself: that app navigates away once scanned, its socket state
+     * unchanged (util/AppModules.js). So the first page to hold a session
+     * after the logged-out app waited for one reports it, the way the QR
+     * block reports a scan on the app.
+     * Private function
+     */
+    _reportScanFromLoggedOutApp(loggedOut, needsQr) {
+        if (this._loggedOutAppAwaitsScan && !needsQr) {
+            this._onConnectionState('LOADING', 0);
+        }
+        this._loggedOutAppAwaitsScan = loggedOut && needsQr;
+    }
+
+    /**
+     * Follows the socket state. A QR that ran out of codes is refreshed the way
+     * WhatsApp's own reload button does it, unless pairing by phone number.
+     * Private function
+     */
+    async _onAuthAppStateChanged(state) {
+        console.log('[wwjs-diag] onAuthAppStateChangedEvent', {
+            state,
+            ts: Date.now(),
+        });
+        if (
+            state == 'UNPAIRED_IDLE' &&
+            !this.options.pairWithPhoneNumber.phoneNumber
+        ) {
+            console.log(
+                '[wwjs-diag] onAuthAppStateChangedEvent refreshQR triggered',
+            );
+            await this.pupPage.evaluate(() => {
+                window.WaGateway.module(
+                    'WAWebBackendEventBus',
+                ).BackendEventBus.triggerRefreshQR();
+            });
+        }
+    }
+
+    /**
      * Receives everything the injected diagnostics report about the socket and
      * the storage layer.
      *
@@ -1621,6 +1751,28 @@ class Client extends EventEmitter {
                 self._diagEvalInflight--;
             }
         };
+    }
+
+    /**
+     * Waits for WhatsApp's loader to have every named module ready, since
+     * window.Debug comes before they all are: reading one too early answers
+     * null, and asking again until it answers is a poll. Throws the named
+     * reason when the time runs out first.
+     * Private function
+     */
+    async _awaitModules(names, timeoutMs, build) {
+        const modules = await this.pupPage.evaluate(
+            (names, timeoutMs) => window.WaGateway.whenReady(names, timeoutMs),
+            names,
+            timeoutMs,
+        );
+        if (!modules.ready) {
+            throw modulesUnavailable(
+                modules.missing,
+                this.pupPage.url(),
+                build,
+            );
+        }
     }
 
     _registerFramenavigatedHandler() {
@@ -3413,6 +3565,7 @@ class Client extends EventEmitter {
     async destroy() {
         if (this._injectAbort) this._injectAbort.abort();
         this._framenavigatedRegistered = false;
+        this._loggedOutAppAwaitsScan = false;
 
         const browser = this.pupBrowser;
         const isConnected = browser?.isConnected?.();
@@ -3432,12 +3585,15 @@ class Client extends EventEmitter {
     }
 
     /**
-     * Logs out the client, closing the current session
+     * Logs out the client, closing the current session. The logged-out app
+     * has no session to end, and no socket model to end it with.
      */
     async logout() {
-        await this.pupPage.evaluate(() => {
-            return window.require('WAWebSocketModel').Socket.logout();
-        });
+        if (!(await this._isLoggedOutApp())) {
+            await this.pupPage.evaluate(() => {
+                return window.require('WAWebSocketModel').Socket.logout();
+            });
+        }
 
         if (this.pupBrowser.process()) {
             await this.pupBrowser.close();
@@ -4191,8 +4347,13 @@ class Client extends EventEmitter {
      * @returns {WAState}
      */
     async getState() {
+        // Read where the socket model takes it from: WhatsApp's event bus,
+        // which the logged-out app has without the model.
         return await this.pupPage.evaluate(() => {
-            return window.require('WAWebSocketModel').Socket.state ?? null;
+            return (
+                window.WaGateway.module('WAWebBackendEventBus').BackendEventBus
+                    .socketState ?? null
+            );
         });
     }
 
@@ -4416,9 +4577,19 @@ class Client extends EventEmitter {
     }
 
     /**
-     * Force reset of connection state for the client
+     * Force reset of connection state for the client. The logged-out app has
+     * no socket model: it is reset the way its own reload button does it,
+     * with a new socket and a new QR.
      */
     async resetState() {
+        if (await this._isLoggedOutApp()) {
+            await this.pupPage.evaluate(() => {
+                window.WaGateway.module(
+                    'WAWebBackendEventBus',
+                ).BackendEventBus.triggerRefreshQR();
+            });
+            return;
+        }
         await this.pupPage.evaluate(() => {
             window.require('WAWebSocketModel').Socket.reconnect();
         });
