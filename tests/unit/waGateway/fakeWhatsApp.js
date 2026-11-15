@@ -26,9 +26,35 @@ function moduleFor(binding) {
     return mod;
 }
 
-/** Every declared module, healthy, keyed by name. */
-const healthyModules = (bindings = BINDINGS) =>
-    Object.fromEntries(bindings.map((b) => [b.module, moduleFor(b)]));
+/**
+ * `__debug` over `modules`, read live, as the loader keeps its registry: a
+ * record per module it was told of, with `exports` and `defaultExport` once
+ * the module ran and neither before. A module the page never heard of
+ * (undefined) has no record; one listed but not ready (null) has one.
+ */
+const loaderDebugOf = (modules) => ({
+    get modulesMap() {
+        const factory = () => {};
+        const recordOf = (mod) =>
+            mod === null
+                ? { factory }
+                : { factory, exports: mod, defaultExport: {} };
+        return Object.fromEntries(
+            Object.entries(modules)
+                .filter(([, mod]) => mod !== undefined)
+                .map(([name, mod]) => [name, recordOf(mod)]),
+        );
+    },
+});
+
+/** Every declared module, healthy, keyed by name, with the loader's registry. */
+const healthyModules = (bindings = BINDINGS) => {
+    const modules = Object.fromEntries(
+        bindings.map((b) => [b.module, moduleFor(b)]),
+    );
+    if (modules.__debug) modules.__debug = loaderDebugOf(modules);
+    return modules;
+};
 
 /**
  * Installs the real gateway on whatever `global.window` the test built, so

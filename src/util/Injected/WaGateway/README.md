@@ -16,6 +16,12 @@ loads the build that carries it.
   `window.require`:
     - `module(name)` returns the module exactly as `window.require` does. It
       never throws: a module whose factory throws reads as missing.
+    - `registered(name)` says whether the page's loader has the module
+      registered, read off `require('__debug').modulesMap`, so no factory
+      runs and nothing is logged. Requiring a module the page never heard of
+      answers undefined but also writes "Requiring unknown module" to the
+      console, which is why inject tells the logged-out app from the app this
+      way: that app has never heard of `WAWebAppBootstrap`.
     - `whenReady(names, timeoutMs)` settles once WhatsApp's loader has every
       named module ready, through its own `requireLazy` callback, so nothing
       asks `require` again until it answers. `require` answers null for a

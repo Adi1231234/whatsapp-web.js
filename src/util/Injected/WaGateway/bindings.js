@@ -137,16 +137,17 @@ const BINDINGS = [
         },
     },
     {
-        // Only asked whether it loaded; a page of the logged-out app never has.
+        // Only asked whether it is registered; a page of the logged-out app
+        // never has it.
         module: 'WAWebAppBootstrap',
         optional: true,
         why: 'inject tells the app from the logged-out app by the bootstrap that loaded',
         exports: {},
     },
     {
-        // Only asked whether it loaded, and only where the app's bootstrap
-        // did not: lazy, so the load check on a page of the app, which never
-        // has it, does not ask either.
+        // Only asked whether it is registered, and only where the app's
+        // bootstrap is not: lazy, so the load check on a page of the app,
+        // which never has it, does not ask either.
         module: 'WAWebLoggedOutBootstrap',
         optional: true,
         lazy: true,
@@ -248,11 +249,12 @@ const BINDINGS = [
         exports: { getAlternateMsgKey: { kind: 'function' } },
     },
     {
-        // Only read when msgFindMedia has left WAWebDBMessageFindLocal, to find
-        // it again by export name; the caller copes without it.
+        // The loader's registry. Read when msgFindMedia has left
+        // WAWebDBMessageFindLocal, to find it again by export name, and by
+        // registered(), which asks it for a name instead of requiring it.
         module: '__debug',
         optional: true,
-        why: 'MediaRefs finds msgFindMedia by name if its module moves',
+        why: 'MediaRefs finds msgFindMedia by name if its module moves; WaGateway.registered asks it whether a module is there',
         exports: { modulesMap: { kind: 'value' } },
     },
     {

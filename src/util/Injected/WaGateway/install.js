@@ -8,6 +8,9 @@
  * - `module(name)`: the module, exactly as `window.require` returns it. A name
  *   missing from the bindings is reported once; a lazy binding is checked on
  *   its first use.
+ * - `registered(name)`: whether the page's loader has the module registered,
+ *   asked without requiring it, so a module the page never heard of logs
+ *   nothing. An undeclared name is reported as module() reports it.
  * - `whenReady(names, timeoutMs)`: `{ ready: true }` once WhatsApp's loader
  *   has every named module ready, or `{ ready: false, missing }` when the
  *   time runs out first. A timeout is an answer, not a rejection.
@@ -125,18 +128,33 @@ const InstallWaGateway = (bindings) => {
         }
     };
 
+    // A name the bindings do not declare is reported once, on its first use.
+    const bindingOf = (name) => {
+        const binding = declared.get(name);
+        if (!binding && !reported.has(name)) {
+            reported.add(name);
+            report([{ module: name, problem: 'undeclared' }]);
+        }
+        return binding;
+    };
+
     const moduleOf = (name) => {
-        if (!reported.has(name)) {
-            const binding = declared.get(name);
-            if (!binding) {
-                reported.add(name);
-                report([{ module: name, problem: 'undeclared' }]);
-            } else if (binding.lazy) {
-                reported.add(name);
-                report(inspect(binding));
-            }
+        const binding = bindingOf(name);
+        if (binding && binding.lazy && !reported.has(name)) {
+            reported.add(name);
+            report(inspect(binding));
         }
         return load(name).mod;
+    };
+
+    // Read off the loader's own registry, so no factory runs and nothing is
+    // logged: `require` of a module the page never registered writes
+    // "Requiring unknown module" to the console (README.md).
+    const registered = (name) => {
+        bindingOf(name);
+        const loader = load('__debug').mod;
+        const modules = (loader && loader.modulesMap) || {};
+        return Object.prototype.hasOwnProperty.call(modules, name);
     };
 
     // WhatsApp's loader calls back through `requireLazy` once every named
@@ -206,6 +224,7 @@ const InstallWaGateway = (bindings) => {
 
     window.WaGateway = {
         module: moduleOf,
+        registered: registered,
         whenReady: whenReady,
         check: check,
         keepShape: keepShape,
