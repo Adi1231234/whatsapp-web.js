@@ -96,6 +96,7 @@ const {
     STARTUP_PHASE_BINDING,
 } = require('./util/Injected/StartupPhases');
 const { rafStarvationRescue } = require('./util/RafStarvation');
+const { classifyEvaluateFailure } = require('./util/EvaluateFailure');
 
 // Map the resolved connection screen onto the public events.
 // QR / ERROR aren't listed: they have their own paths, emit nothing.
@@ -1724,6 +1725,30 @@ class Client extends EventEmitter {
             }
         }
 
+        // Both wrappers below report a failed call here, at the level of
+        // what failed (util/EvaluateFailure).
+        async function reportEvaluateFailure(err, args, startTs, source) {
+            const failure = classifyEvaluateFailure(err);
+            if (!failure) return;
+            const heap = await getHeapMetrics();
+            self.emit(
+                'diag',
+                failure.level,
+                'EVALUATE_CDP_ERROR',
+                JSON.stringify({
+                    inflight: self._diagEvalInflight,
+                    error: err.message,
+                    isPromiseCollected: failure.isPromiseCollected,
+                    isContextDestroyed: failure.isContextDestroyed,
+                    source,
+                    elapsed: Date.now() - startTs,
+                    heap,
+                    fnSnippet: getFnSnippet(args),
+                    ts: Date.now(),
+                }),
+            );
+        }
+
         this.pupPage.evaluate = async function (...args) {
             self._diagEvalInflight++;
             const inflight = self._diagEvalInflight;
@@ -1739,30 +1764,7 @@ class Client extends EventEmitter {
             try {
                 return await origEvaluate(...args);
             } catch (err) {
-                const isPromiseCollected = err.message?.includes(
-                    'Promise was collected',
-                );
-                const isContextDestroyed = err.message?.includes(
-                    'Execution context was destroyed',
-                );
-                if (isPromiseCollected || isContextDestroyed) {
-                    const heap = await getHeapMetrics();
-                    self.emit(
-                        'diag',
-                        'error',
-                        'EVALUATE_CDP_ERROR',
-                        JSON.stringify({
-                            inflight: self._diagEvalInflight,
-                            error: err.message,
-                            isPromiseCollected,
-                            isContextDestroyed,
-                            elapsed: Date.now() - startTs,
-                            heap,
-                            fnSnippet: getFnSnippet(args),
-                            ts: Date.now(),
-                        }),
-                    );
-                }
+                await reportEvaluateFailure(err, args, startTs);
                 throw err;
             } finally {
                 self._diagEvalInflight--;
@@ -1778,31 +1780,12 @@ class Client extends EventEmitter {
             try {
                 return await origEvaluateHandle(...args);
             } catch (err) {
-                const isPromiseCollected = err.message?.includes(
-                    'Promise was collected',
+                await reportEvaluateFailure(
+                    err,
+                    args,
+                    startTs,
+                    'evaluateHandle',
                 );
-                const isContextDestroyed = err.message?.includes(
-                    'Execution context was destroyed',
-                );
-                if (isPromiseCollected || isContextDestroyed) {
-                    const heap = await getHeapMetrics();
-                    self.emit(
-                        'diag',
-                        'error',
-                        'EVALUATE_CDP_ERROR',
-                        JSON.stringify({
-                            inflight: self._diagEvalInflight,
-                            error: err.message,
-                            isPromiseCollected,
-                            isContextDestroyed,
-                            source: 'evaluateHandle',
-                            elapsed: Date.now() - startTs,
-                            heap,
-                            fnSnippet: getFnSnippet(args),
-                            ts: Date.now(),
-                        }),
-                    );
-                }
                 throw err;
             } finally {
                 self._diagEvalInflight--;
