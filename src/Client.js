@@ -50,6 +50,7 @@ const {
 } = require('./structures');
 const NoAuth = require('./authStrategies/NoAuth');
 const { exposeFunctionIfAbsent } = require('./util/Puppeteer');
+const { claimDocument } = require('./util/DocumentClaim');
 
 // Map the resolved connection screen onto the public events.
 // QR / ERROR aren't listed: they have their own paths, emit nothing.
@@ -676,7 +677,8 @@ class Client extends EventEmitter {
         // interrupts inject, the handler triggers a fresh inject.
         this._registerFramenavigatedHandler();
 
-        await this.inject();
+        // Unless a navigation handler claimed this document first, and prepares it.
+        if ((await claimDocument(this.pupPage)) !== null) await this.inject();
     }
 
     /**
@@ -802,22 +804,25 @@ class Client extends EventEmitter {
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.parentFrame() !== null) return;
 
-            const isLogout =
-                frame.url().includes('post_logout=1') || this.lastLoggedOut;
+            // Also emitted for a same-document navigation, which WhatsApp
+            // makes right after it syncs: only a document's first claim
+            // prepares it (util/DocumentClaim).
+            let loadedFrom;
+            try {
+                loadedFrom = await claimDocument(this.pupPage);
+            } catch (ignoredError) {
+                // Gone before it answered: the next document has its own event.
+                return;
+            }
+            if (loadedFrom === null) return;
 
-            if (isLogout) {
+            if (loadedFrom.includes('post_logout=1') || this.lastLoggedOut) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
                 await this.authStrategy.logout();
                 await this.authStrategy.beforeBrowserInitialized();
                 await this.authStrategy.afterBrowserInitialized();
                 this.lastLoggedOut = false;
             }
-
-            const storeAvailable = await this.pupPage.evaluate(() => {
-                return typeof window.WWebJS !== 'undefined';
-            });
-
-            if (!isLogout && storeAvailable) return;
 
             await this.inject();
         });
