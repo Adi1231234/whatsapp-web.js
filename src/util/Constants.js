@@ -11,7 +11,9 @@ exports.DefaultOptions = {
     webVersionCache: {
         type: 'local',
     },
-    authTimeoutMs: 0,
+    // Per startup wait in inject(); 0 means no deadline, the caller ending
+    // the waits with abortStartup() instead (util/StartupWaits.js).
+    authTimeoutMs: 30000,
     qrMaxRetries: 0,
     takeoverOnConflict: false,
     takeoverTimeoutMs: 0,
@@ -69,6 +71,8 @@ exports.Events = {
     QR_RECEIVED: 'qr',
     CODE_RECEIVED: 'code',
     LOADING_SCREEN: 'loading_screen',
+    /** How far WhatsApp's own startup got: (phase, detail). See StartupPhases. */
+    STARTUP_PHASE: 'startup_phase',
     /** WhatsApp finished handing over what it held while we were away. */
     OFFLINE_DELIVERY_END: 'offline_delivery_end',
     DISCONNECTED: 'disconnected',

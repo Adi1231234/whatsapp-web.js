@@ -11,9 +11,10 @@
  * - `registered(name)`: whether the page's loader has the module registered,
  *   asked without requiring it, so a module the page never heard of logs
  *   nothing. An undeclared name is reported as module() reports it.
- * - `whenReady(names, timeoutMs)`: `{ ready: true }` once WhatsApp's loader
+ * - `whenReady(names, limit)`: `{ ready: true }` once WhatsApp's loader
  *   has every named module ready, or `{ ready: false, missing }` when the
- *   time runs out first. A timeout is an answer, not a rejection.
+ *   limit runs out first: `limit` is ms, or an AbortSignal that ends the wait.
+ *   Running out is an answer, not a rejection.
  * - `check()`: every eager binding against the build this page loaded, as
  *   `{ build, checked, problems }`.
  * - `keepShape(wrapper, original)`: gives a wrapper over a WhatsApp function
@@ -162,9 +163,12 @@ const InstallWaGateway = (bindings) => {
     // undefined for one the page never heard of (README.md). The loader can
     // defer that callback to its scheduler, so when the time runs out the
     // modules themselves are asked: all of them there is still ready.
-    const whenReady = (names, timeoutMs) =>
+    // `limit` is how long to wait in ms, or an AbortSignal that ends the wait
+    // when it aborts; a signal that never aborts waits until the loader calls.
+    const whenReady = (names, limit) =>
         new Promise((resolve) => {
-            const timeout = AbortSignal.timeout(timeoutMs);
+            const timeout =
+                typeof limit === 'number' ? AbortSignal.timeout(limit) : limit;
             const onTimeout = () => {
                 const missing = names
                     .map((name) => ({ name, mod: load(name).mod }))
@@ -175,6 +179,7 @@ const InstallWaGateway = (bindings) => {
                     }));
                 resolve({ ready: missing.length === 0, missing });
             };
+            if (timeout.aborted) return onTimeout();
             timeout.addEventListener('abort', onTimeout, { once: true });
             window.requireLazy(names, () => {
                 timeout.removeEventListener('abort', onTimeout);
