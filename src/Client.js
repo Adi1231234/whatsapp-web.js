@@ -90,6 +90,7 @@ const {
 const NoAuth = require('./authStrategies/NoAuth');
 const { exposeFunctionIfAbsent } = require('./util/Puppeteer');
 const { StartupWaits, StartupAbortedError } = require('./util/StartupWaits');
+const { claimDocument } = require('./util/DocumentClaim');
 const {
     InstallStartupPhases,
     STARTUP_PHASE_BINDING,
@@ -1639,7 +1640,8 @@ class Client extends EventEmitter {
         this._registerFramenavigatedHandler();
 
         console.log('[wwjs-diag] initialize:inject START (first call)');
-        await this.inject();
+        // Unless a navigation handler claimed this document first, and prepares it.
+        if ((await claimDocument(this.pupPage)) !== null) await this.inject();
         console.log('[wwjs-diag] initialize:inject END (first call)');
         // A destroy while inject ran cancels it quietly, and the page it ran
         // on is gone: nothing below can be set up on it, and each attempt to
@@ -1850,17 +1852,33 @@ class Client extends EventEmitter {
             if (frame.parentFrame() !== null) return;
 
             const frameUrl = frame.url();
-            const isMainFrame = frame === this.pupPage.mainFrame();
+            // Also emitted for a same-document navigation, which WhatsApp
+            // makes right after it syncs: only a document's first claim
+            // prepares it (util/DocumentClaim).
+            let loadedFrom;
+            try {
+                loadedFrom = await claimDocument(this.pupPage);
+            } catch (err) {
+                // Gone before it answered: the next document has its own event.
+                console.log('[wwjs-diag] framenavigated:claim failed', {
+                    error: String(err?.message || err),
+                    url: frameUrl.slice(0, 150),
+                });
+                return;
+            }
+            const newDocument = loadedFrom !== null;
             const isLogout =
-                frameUrl.includes('post_logout=1') || this.lastLoggedOut;
+                newDocument &&
+                (loadedFrom.includes('post_logout=1') || this.lastLoggedOut);
 
             console.log('[wwjs-diag] framenavigated', {
                 ts: Date.now(),
                 url: frameUrl.slice(0, 150),
-                isMainFrame,
+                newDocument,
                 isLogout,
                 lastLoggedOut: this.lastLoggedOut,
             });
+            if (!newDocument) return;
 
             if (isLogout) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
@@ -1870,21 +1888,9 @@ class Client extends EventEmitter {
                 this.lastLoggedOut = false;
             }
 
-            let storeAvailable = false;
-            try {
-                storeAvailable = await this.pupPage.evaluate(() => {
-                    return typeof window.WWebJS !== 'undefined';
-                });
-            } catch (ignoredError) {
-                /* page may not be ready */
-            }
-
-            if (!isLogout && storeAvailable) return;
-
             console.log('[wwjs-diag] framenavigated:inject START', {
                 ts: Date.now(),
-                url: frameUrl.slice(0, 150),
-                storeAvailable,
+                url: loadedFrom.slice(0, 150),
             });
             try {
                 await this.inject();

@@ -11,6 +11,8 @@ function clientReachingInject(duringInject) {
     EventEmitter.call(client);
     const page = {
         goto: async () => {},
+        // The claim of the first document (util/DocumentClaim): it is new.
+        evaluate: async () => 'https://web.whatsapp.com/',
         target: () => {
             throw new Error('set up on a closed page');
         },
