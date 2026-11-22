@@ -98,9 +98,20 @@ const BINDINGS = [
     },
     {
         module: 'WAWebSocketModel',
-        why: 'inject waits on the socket state to tell a paired session from a QR',
+        why: 'inject waits on the socket state to tell a paired session from a QR; StartupPhases reports each state until it settles',
         exports: {
-            Socket: { kind: 'value', members: ['state', 'hasSynced', 'on'] },
+            Socket: {
+                kind: 'value',
+                members: ['state', 'hasSynced', 'on', 'off'],
+            },
+        },
+    },
+    {
+        module: 'WAWebSchemaVersions',
+        why: "StartupPhases reports when WhatsApp's storage has its schema versions, the step a long storage job holds up",
+        exports: {
+            hasSchemaVersions: { kind: 'function' },
+            setSchemaVersions: { kind: 'function' },
         },
     },
     {

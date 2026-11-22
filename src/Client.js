@@ -89,6 +89,11 @@ const {
 } = require('./structures');
 const NoAuth = require('./authStrategies/NoAuth');
 const { exposeFunctionIfAbsent } = require('./util/Puppeteer');
+const { StartupWaits, StartupAbortedError } = require('./util/StartupWaits');
+const {
+    InstallStartupPhases,
+    STARTUP_PHASE_BINDING,
+} = require('./util/Injected/StartupPhases');
 const { rafStarvationRescue } = require('./util/RafStarvation');
 
 // Map the resolved connection screen onto the public events.
@@ -208,7 +213,12 @@ class Client extends EventEmitter {
             });
             this._hasSyncedTriggered = false;
 
-            const authTimeout = this.options.authTimeoutMs || 30000;
+            // Each startup wait below ends when WhatsApp gets there, when the
+            // caller calls abortStartup(), or after authTimeoutMs - never, when
+            // it is 0. See util/StartupWaits.js for why the caller may need that.
+            const authTimeout = this.options.authTimeoutMs;
+            this._startupWaits = this._startupWaits || new StartupWaits();
+            await this._startupWaits.begin(this.pupPage);
             // WhatsApp assigns window.Debug once, synchronously, inside
             // WAWebAppBootstrap (see WAWebDebugSetup.setupDebugGlobal) and
             // publishes no event for it. Its position relative to the page's
@@ -225,43 +235,59 @@ class Client extends EventEmitter {
             // - undefined - and wipe window.Debug. One shared waiter means one
             // accessor, restored exactly once, by the write that satisfied it.
             // Per-caller timeouts race against it and touch nothing.
-            await this.pupPage
-                .evaluate((timeoutMs) => {
-                    if (window.Debug?.VERSION != null) return;
-                    if (!window.__wwebjsDebugReady) {
-                        window.__wwebjsDebugReady = new Promise((resolve) => {
-                            let value = window.Debug;
-                            Object.defineProperty(window, 'Debug', {
-                                configurable: true,
-                                enumerable: true,
-                                get: () => value,
-                                set: (v) => {
-                                    value = v;
-                                    if (v?.VERSION == null) return;
-                                    Object.defineProperty(window, 'Debug', {
-                                        value: v,
-                                        writable: true,
-                                        configurable: true,
-                                        enumerable: true,
+            await this._startupWaits
+                .run(
+                    this.pupPage,
+                    (id, deadlineMs) => {
+                        const startup = window.__wwebjsStartup;
+                        startup.settle(id, () => {
+                            if (window.Debug?.VERSION != null) return;
+                            if (!window.__wwebjsDebugReady) {
+                                window.__wwebjsDebugReady = new Promise(
+                                    (resolve) => {
+                                        let value = window.Debug;
+                                        Object.defineProperty(window, 'Debug', {
+                                            configurable: true,
+                                            enumerable: true,
+                                            get: () => value,
+                                            set: (v) => {
+                                                value = v;
+                                                if (v?.VERSION == null) return;
+                                                Object.defineProperty(
+                                                    window,
+                                                    'Debug',
+                                                    {
+                                                        value: v,
+                                                        writable: true,
+                                                        configurable: true,
+                                                        enumerable: true,
+                                                    },
+                                                );
+                                                resolve();
+                                            },
+                                        });
+                                    },
+                                );
+                            }
+                            const signal = startup.signal(deadlineMs);
+                            return Promise.race([
+                                window.__wwebjsDebugReady,
+                                new Promise((_, reject) => {
+                                    const end = () =>
+                                        reject(new Error('auth timeout'));
+                                    if (signal.aborted) end();
+                                    signal.addEventListener('abort', end, {
+                                        once: true,
                                     });
-                                    resolve();
-                                },
-                            });
+                                }),
+                            ]);
                         });
-                    }
-                    return Promise.race([
-                        window.__wwebjsDebugReady,
-                        new Promise((_, reject) => {
-                            AbortSignal.timeout(timeoutMs).addEventListener(
-                                'abort',
-                                () => reject(new Error('auth timeout')),
-                                { once: true },
-                            );
-                        }),
-                    ]);
-                }, authTimeout)
+                    },
+                    authTimeout,
+                )
                 .catch((err) => {
                     if (abort.signal.aborted) throw err;
+                    if (err instanceof StartupAbortedError) throw err;
                     throw 'auth timeout';
                 });
             if (abort.signal.aborted) return;
@@ -302,16 +328,29 @@ class Client extends EventEmitter {
                 version,
             );
             if (abort.signal.aborted) return;
+            // From here WhatsApp reports its own startup progress: its
+            // storage, then its socket (util/Injected/StartupPhases.js).
+            this.emit(Events.STARTUP_PHASE, 'modules', null);
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                STARTUP_PHASE_BINDING,
+                async (phase, detail) =>
+                    this.emit(Events.STARTUP_PHASE, phase, detail),
+            );
+            await this.pupPage.evaluate(
+                InstallStartupPhases,
+                STARTUP_PHASE_BINDING,
+            );
             // The app's socket, stream and session, which the logged-out app
             // has none of.
             if (!loggedOut) {
                 await this.pupPage.evaluate(ExposeAuthStore);
 
                 // [diag] Install the socket reason-capture hooks BEFORE the
-                // needAuthHandle wait below. That wait blocks for up to
-                // authTimeout (30s) while Socket.state is stuck in
-                // OPENING/PAIRING, and on a real stuck-connecting failure it
-                // TIMES OUT - so the post-authCheck hook block further down
+                // needAuthHandle wait below. That wait blocks while
+                // Socket.state is stuck in OPENING/PAIRING, for authTimeout or
+                // until the caller aborts it, and on a real stuck-connecting
+                // failure it ENDS FIRST - so the post-authCheck hook block further down
                 // never runs, and the "why the socket keeps closing" reason is
                 // lost for exactly the failure we care about. Installing them
                 // here captures it. Fully defensive (the modules they read
@@ -526,92 +565,96 @@ class Client extends EventEmitter {
             // exit path, and rejects on the AbortSignal. Returning early when the
             // state has already settled mirrors WAWebEventsWaitForMainStreamReadyMd
             // and closes the subscribe-too-late race.
-            const needAuthentication = await this.pupPage.evaluate(
-                async (timeoutMs, loggedOut) => {
-                    // Ready: the module wait above covers what each app reads.
-                    // The socket model takes its state from WhatsApp's event
-                    // bus, and the logged-out app has only the bus, which
-                    // announces each state as `set_socket_state`.
-                    const { Socket } = loggedOut
-                        ? {}
-                        : window.WaGateway.module('WAWebSocketModel');
-                    const { BackendEventBus } = loggedOut
-                        ? window.WaGateway.module('WAWebBackendEventBus')
-                        : {};
-                    const [emitter, event] = loggedOut
-                        ? [BackendEventBus, 'set_socket_state']
-                        : [Socket, 'change:state'];
-                    const socketState = () =>
-                        loggedOut ? BackendEventBus.socketState : Socket.state;
-                    const { SOCKET_STATE } = window.WaGateway.module(
-                        'WAWebSocketConstants',
-                    );
-                    // The module is the function itself (its default export).
-                    const waitForBbEvent = window.WaGateway.module(
-                        'WAWebEventsWaitForBbEvent',
-                    );
+            const needAuthentication = await this._startupWaits.run(
+                this.pupPage,
+                (id, timeoutMs, loggedOut) =>
+                    window.__wwebjsStartup.settle(id, async () => {
+                        // Ready: the module wait above covers what each app reads.
+                        // The socket model takes its state from WhatsApp's event
+                        // bus, and the logged-out app has only the bus, which
+                        // announces each state as `set_socket_state`.
+                        const { Socket } = loggedOut
+                            ? {}
+                            : window.WaGateway.module('WAWebSocketModel');
+                        const { BackendEventBus } = loggedOut
+                            ? window.WaGateway.module('WAWebBackendEventBus')
+                            : {};
+                        const [emitter, event] = loggedOut
+                            ? [BackendEventBus, 'set_socket_state']
+                            : [Socket, 'change:state'];
+                        const socketState = () =>
+                            loggedOut
+                                ? BackendEventBus.socketState
+                                : Socket.state;
+                        const { SOCKET_STATE } = window.WaGateway.module(
+                            'WAWebSocketConstants',
+                        );
+                        // The module is the function itself (its default export).
+                        const waitForBbEvent = window.WaGateway.module(
+                            'WAWebEventsWaitForBbEvent',
+                        );
 
-                    const TRANSIENT = [
-                        SOCKET_STATE.OPENING,
-                        SOCKET_STATE.UNLAUNCHED,
-                        SOCKET_STATE.PAIRING,
-                    ];
-                    // No state at all has not settled either.
-                    const settling = () => {
-                        const now = socketState();
-                        return now == null || TRANSIENT.includes(now);
-                    };
+                        const TRANSIENT = [
+                            SOCKET_STATE.OPENING,
+                            SOCKET_STATE.UNLAUNCHED,
+                            SOCKET_STATE.PAIRING,
+                        ];
+                        // No state at all has not settled either.
+                        const settling = () => {
+                            const now = socketState();
+                            return now == null || TRANSIENT.includes(now);
+                        };
 
-                    // Evidence that the event-based wait is doing real work.
-                    // The pre-#151 code was waitForFunction with puppeteer's
-                    // default polling:'raf', which evaluates the predicate once
-                    // and then only from requestAnimationFrame. Counting frames
-                    // across this wait is what makes the difference observable:
-                    // zero frames over a wait that had to await means the old
-                    // code could only have hit its timeout here. Node decides
-                    // what that combination means; the page only reports facts.
-                    let rafTicks = 0;
-                    let rafHandle = null;
-                    const tick = () => {
-                        rafTicks++;
+                        // Evidence that the event-based wait is doing real work.
+                        // The pre-#151 code was waitForFunction with puppeteer's
+                        // default polling:'raf', which evaluates the predicate once
+                        // and then only from requestAnimationFrame. Counting frames
+                        // across this wait is what makes the difference observable:
+                        // zero frames over a wait that had to await means the old
+                        // code could only have hit its timeout here. Node decides
+                        // what that combination means; the page only reports facts.
+                        let rafTicks = 0;
+                        let rafHandle = null;
+                        const tick = () => {
+                            rafTicks++;
+                            rafHandle = requestAnimationFrame(tick);
+                        };
                         rafHandle = requestAnimationFrame(tick);
-                    };
-                    rafHandle = requestAnimationFrame(tick);
 
-                    const visibilityAtStart = document.visibilityState;
-                    const stateAtStart = socketState();
-                    const waitStart = Date.now();
-                    let awaited = false;
-                    try {
-                        if (settling()) {
-                            awaited = true;
-                            await waitForBbEvent(
-                                emitter,
-                                event,
-                                () => !settling(),
-                                AbortSignal.timeout(timeoutMs),
-                            );
+                        const visibilityAtStart = document.visibilityState;
+                        const stateAtStart = socketState();
+                        const waitStart = Date.now();
+                        let awaited = false;
+                        try {
+                            if (settling()) {
+                                awaited = true;
+                                await waitForBbEvent(
+                                    emitter,
+                                    event,
+                                    () => !settling(),
+                                    window.__wwebjsStartup.signal(timeoutMs),
+                                );
+                            }
+                        } finally {
+                            // Every exit path, including the timeout rejection -
+                            // an uncancelled callback would re-arm itself forever.
+                            cancelAnimationFrame(rafHandle);
                         }
-                    } finally {
-                        // Every exit path, including the timeout rejection -
-                        // an uncancelled callback would re-arm itself forever.
-                        cancelAnimationFrame(rafHandle);
-                    }
-                    const state = socketState();
-                    return {
-                        need:
-                            state === SOCKET_STATE.UNPAIRED ||
-                            state === SOCKET_STATE.UNPAIRED_IDLE,
-                        state,
-                        hasSynced: Socket?.hasSynced,
-                        awaited,
-                        rafTicks,
-                        waitMs: Date.now() - waitStart,
-                        stateAtStart,
-                        visibilityAtStart,
-                        visibilityAtEnd: document.visibilityState,
-                    };
-                },
+                        const state = socketState();
+                        return {
+                            need:
+                                state === SOCKET_STATE.UNPAIRED ||
+                                state === SOCKET_STATE.UNPAIRED_IDLE,
+                            state,
+                            hasSynced: Socket?.hasSynced,
+                            awaited,
+                            rafTicks,
+                            waitMs: Date.now() - waitStart,
+                            stateAtStart,
+                            visibilityAtStart,
+                            visibilityAtEnd: document.visibilityState,
+                        };
+                    }),
                 authTimeout,
                 loggedOut,
             );
@@ -702,11 +745,17 @@ class Client extends EventEmitter {
                         version,
                     );
                     if (abort.signal.aborted) return;
-                    let qrRetries = 0;
-
-                    this.on(Events.LOADING_SCREEN, () => {
-                        qrRetries = 0;
-                    });
+                    // The count lives on the client and one listener resets it:
+                    // a listener per inject was never removed, so every reopened
+                    // page added one, and the binding below, exposed once per
+                    // page, kept counting in the first inject's copy.
+                    this._qrRetries = 0;
+                    if (!this._qrRetriesResetOnLoading) {
+                        this._qrRetriesResetOnLoading = true;
+                        this.on(Events.LOADING_SCREEN, () => {
+                            this._qrRetries = 0;
+                        });
+                    }
 
                     await exposeFunctionIfAbsent(
                         this.pupPage,
@@ -719,7 +768,8 @@ class Client extends EventEmitter {
                              */
                             this.emit(Events.QR_RECEIVED, qr);
                             if (this.options.qrMaxRetries > 0) {
-                                qrRetries++;
+                                this._qrRetries++;
+                                const qrRetries = this._qrRetries;
                                 console.log('[wwjs-diag] onQRChangedEvent', {
                                     qrRetries,
                                     qrMaxRetries: this.options.qrMaxRetries,
@@ -1527,6 +1577,7 @@ class Client extends EventEmitter {
 
         browser = null;
         page = null;
+        this._closing = false;
 
         await this.authStrategy.beforeBrowserInitialized();
 
@@ -1590,6 +1641,10 @@ class Client extends EventEmitter {
         console.log('[wwjs-diag] initialize:inject START (first call)');
         await this.inject();
         console.log('[wwjs-diag] initialize:inject END (first call)');
+        // A destroy while inject ran cancels it quietly, and the page it ran
+        // on is gone: nothing below can be set up on it, and each attempt to
+        // would be logged as a failure.
+        if (this._closing) throw new StartupAbortedError('destroyed');
 
         // [diag:promise-collected] Monitor execution context lifecycle via CDP
         try {
@@ -1757,14 +1812,26 @@ class Client extends EventEmitter {
      * Waits for WhatsApp's loader to have every named module ready, since
      * window.Debug comes before they all are: reading one too early answers
      * null, and asking again until it answers is a poll. Throws the named
-     * reason when the time runs out first.
+     * reason when the time runs out first, and StartupAbortedError when the
+     * caller ends the wait (util/StartupWaits.js).
      * Private function
      */
     async _awaitModules(names, timeoutMs, build) {
-        const modules = await this.pupPage.evaluate(
-            (names, timeoutMs) => window.WaGateway.whenReady(names, timeoutMs),
-            names,
+        const modules = await this._startupWaits.run(
+            this.pupPage,
+            (id, deadlineMs, names) => {
+                const startup = window.__wwebjsStartup;
+                startup.settle(id, async () => {
+                    const found = await window.WaGateway.whenReady(
+                        names,
+                        startup.signal(deadlineMs),
+                    );
+                    if (startup.abortedByCaller()) throw new Error('aborted');
+                    return found;
+                });
+            },
             timeoutMs,
+            names,
         );
         if (!modules.ready) {
             throw modulesUnavailable(
@@ -3560,10 +3627,28 @@ class Client extends EventEmitter {
     }
 
     /**
+     * Ends the startup waits inject() is in, now, in the page too. inject()
+     * then rejects with a StartupAbortedError carrying `reason`, so the
+     * caller can tell its own decision from a failure. Does nothing to a
+     * client that is not starting. With `authTimeoutMs: 0` this is the only
+     * way a wait ends before WhatsApp gets there.
+     * @param {string} reason
+     */
+    async abortStartup(reason) {
+        if (!this._startupWaits) return;
+        this._startupWaits.abort(this.pupPage, reason);
+    }
+
+    /**
      * Closes the client
      */
     async destroy() {
+        this._closing = true;
         if (this._injectAbort) this._injectAbort.abort();
+        // With `authTimeoutMs: 0` a startup wait has no deadline, so a close
+        // that left one running would leave initialize() pending for good.
+        if (this._startupWaits)
+            this._startupWaits.abort(this.pupPage, 'destroyed');
         this._framenavigatedRegistered = false;
         this._loggedOutAppAwaitsScan = false;
 

@@ -92,6 +92,16 @@ describe('inject: the app modules WhatsApp loads', function () {
             expect(gotos).to.deep.equal([]);
         });
 
+        it('keeps one loading-screen listener however many times it injects', async function () {
+            // A caller that reopens a QR page injects again on the same client.
+            const modules = appIn('UNPAIRED');
+            const { client } = clientOn(loadPage(modules));
+            await client.inject();
+            await client.inject();
+            await client.inject();
+            expect(client.listenerCount(Events.LOADING_SCREEN)).to.equal(1);
+        });
+
         it('listens on the socket model, never on the event bus', async function () {
             const modules = appIn('UNPAIRED');
             const bus = modules.WAWebBackendEventBus.BackendEventBus;

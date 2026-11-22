@@ -193,8 +193,8 @@ function loadPage(modules, url = APP) {
 /**
  * A client whose page runs every injected function the way puppeteer does,
  * on whatever page `loadPage` put up last. Every public event it emits is in
- * `events` (the `diag` channel is left to the diagnostics' own tests), and
- * every navigation it asks for in `gotos`.
+ * `events` (the `diag` and `startup_phase` channels are left to their own
+ * tests), and every navigation it asks for in `gotos`.
  */
 function clientOn(page, options = {}) {
     const events = [];
@@ -203,7 +203,8 @@ function clientOn(page, options = {}) {
     EventEmitter.call(client);
     const emit = client.emit;
     client.emit = function (...args) {
-        if (args[0] !== 'diag') events.push(args);
+        if (args[0] !== 'diag' && args[0] !== 'startup_phase')
+            events.push(args);
         return emit.apply(this, args);
     };
     Object.assign(client, {

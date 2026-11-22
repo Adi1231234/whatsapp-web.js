@@ -22,7 +22,8 @@ loads the build that carries it.
       answers undefined but also writes "Requiring unknown module" to the
       console, which is why inject tells the logged-out app from the app this
       way: that app has never heard of `WAWebAppBootstrap`.
-    - `whenReady(names, timeoutMs)` settles once WhatsApp's loader has every
+    - `whenReady(names, limit)` (`limit`: ms, or an AbortSignal that ends the
+      wait) settles once WhatsApp's loader has every
       named module ready, through its own `requireLazy` callback, so nothing
       asks `require` again until it answers. `require` answers null for a
       module that is listed but not ready (its code not loaded, or it threw),

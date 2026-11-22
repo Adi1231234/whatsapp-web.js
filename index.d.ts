@@ -88,6 +88,14 @@ declare namespace WAWebJS {
             searchOptions: SearchChannelsOptions,
         ): Promise<Array<Channel> | []>;
 
+        /**
+         * Ends the startup waits inject() is in, now, in the page too.
+         * initialize() then rejects with an error named
+         * 'StartupAbortedError' carrying `reason`. With `authTimeoutMs: 0`
+         * this is the only way a wait ends before WhatsApp gets there.
+         */
+        abortStartup(reason: string): Promise<void>;
+
         /** Closes the client */
         destroy(): Promise<void>;
 
@@ -664,6 +672,16 @@ declare namespace WAWebJS {
             listener: (percent: string, message: string) => void,
         ): this;
 
+        /**
+         * Emitted as WhatsApp's own startup moves: 'modules', then
+         * 'storage-opening' / 'storage-ready', then 'socket' with each socket
+         * state as `detail` until it settles.
+         */
+        on(
+            event: 'startup_phase',
+            listener: (phase: StartupPhase, detail: string | null) => void,
+        ): this;
+
         /** Emitted when the QR code is received */
         on(
             event: 'qr',
@@ -746,10 +764,16 @@ declare namespace WAWebJS {
         os_build_number: string;
     }
 
+    /** How far WhatsApp's own startup got, as `startup_phase` reports it. */
+    export type StartupPhase =
+        'modules' | 'storage-opening' | 'storage-ready' | 'socket';
+
     /** Options for initializing the whatsapp client */
     export interface ClientOptions {
-        /** Timeout for authentication selector in puppeteer
-         * @default 0 */
+        /** How long each startup wait in inject() may take, in ms. 0 means
+         * no deadline: the wait ends when WhatsApp gets there or when
+         * abortStartup() is called.
+         * @default 30000 */
         authTimeoutMs?: number;
         /** function to be evaluated On New Document
          * @default undefined */
@@ -1085,6 +1109,7 @@ declare namespace WAWebJS {
         QR_RECEIVED = 'qr',
         CODE_RECEIVED = 'code',
         LOADING_SCREEN = 'loading_screen',
+        STARTUP_PHASE = 'startup_phase',
         OFFLINE_DELIVERY_END = 'offline_delivery_end',
         CALL = 'call',
         DISCONNECTED = 'disconnected',
